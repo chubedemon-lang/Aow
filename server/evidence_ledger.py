@@ -39,6 +39,8 @@ class EvidenceRecord:
             raise TypeError("status must be EvidenceStatus")
         if not isinstance(self.reference, str) or not _REFERENCE.fullmatch(self.reference):
             raise ValueError("reference must be a sanitized source locator")
+        if "://" in self.reference or "//" in self.reference or re.search(r"(?i)(?:token|secret|password|apikey|api_key|credential)", self.reference):
+            raise ValueError("reference must not contain endpoints or secret-like identifiers")
         if self.method not in {"apk_zip_inventory", "jadx_offline",
                                "il2cpp_offline", "synthetic_test",
                                "authorized_local_test"}:
