@@ -72,6 +72,56 @@ class Domain:
         return self.get_character(character_id)
 
 
+    def list_inventory(self, character_id):
+        """List a character's synthetic items; does not represent APK item IDs."""
+        if type(character_id) is not int or character_id < 1:
+            raise ValueError("invalid character id")
+        with self.connect() as db:
+            if db.execute("SELECT 1 FROM characters WHERE id=?", (character_id,)).fetchone() is None:
+                raise KeyError("character not found")
+            rows = db.execute(
+                "SELECT item_id, quantity FROM inventory WHERE character_id=? ORDER BY item_id",
+                (character_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def change_inventory(self, character_id, item_id, delta):
+        """Atomically grant or consume an item in the local synthetic domain."""
+        if type(character_id) is not int or character_id < 1:
+            raise ValueError("invalid character id")
+        if not isinstance(item_id, str) or not (1 <= len(item_id) <= 64) or not all(
+            c.isascii() and (c.isalnum() or c in "._-") for c in item_id
+        ):
+            raise ValueError("invalid item id")
+        if type(delta) is not int or delta == 0 or abs(delta) > 1_000_000:
+            raise ValueError("invalid quantity change")
+        with self.connect() as db:
+            # Lock before reading to prevent lost updates between concurrent requests.
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM characters WHERE id=?", (character_id,)).fetchone() is None:
+                raise KeyError("character not found")
+            row = db.execute(
+                "SELECT quantity FROM inventory WHERE character_id=? AND item_id=?",
+                (character_id, item_id),
+            ).fetchone()
+            quantity = (row["quantity"] if row is not None else 0) + delta
+            if not 0 <= quantity <= 2_147_483_647:
+                raise ValueError("insufficient quantity or overflow")
+            if quantity == 0:
+                db.execute(
+                    "DELETE FROM inventory WHERE character_id=? AND item_id=?",
+                    (character_id, item_id),
+                )
+            else:
+                db.execute(
+                    """INSERT INTO inventory(character_id, item_id, quantity) VALUES (?, ?, ?)
+                       ON CONFLICT(character_id, item_id)
+                       DO UPDATE SET quantity=excluded.quantity""",
+                    (character_id, item_id, quantity),
+                )
+            return {"item_id": item_id, "quantity": quantity}
+
+
 def make_handler(domain):
     class Handler(BaseHTTPRequestHandler):
         def respond(self, status, payload):
