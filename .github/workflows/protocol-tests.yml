@@ -1,0 +1,23 @@
+name: Protocol discovery tests
+on:
+  push:
+    branches: [main, server-protocol-discovery-tooling]
+  pull_request:
+    paths:
+      - 'tools/protocol_candidates.py'
+      - 'tests/test_protocol_candidates.py'
+      - '.github/workflows/protocol-tests.yml'
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile scanner
+        run: python -m py_compile tools/protocol_candidates.py
+      - name: Unit tests (synthetic input only)
+        run: python -m unittest discover -s tests -p 'test_protocol_candidates.py' -v
