@@ -29,6 +29,9 @@ class ProtocolEvidence:
             raise ValueError("review reference required")
 
 
+MAX_SYNTHETIC_PAYLOAD_BYTES = 1024 * 1024
+
+
 class TransportAdapter:
     """Dependency-injected codec boundary, not an APK-compatible implementation."""
 
@@ -44,22 +47,26 @@ class TransportAdapter:
         self._encode = encode
 
     @property
-    def verified(self):
-        # Having a review reference is necessary but not sufficient for real
-        # compatibility; this only indicates that a codec has been wired.
+    def configured(self):
+        # This means only that a codec and evidence metadata were supplied.
+        # It does NOT establish actual APK compatibility.
         return self._evidence is not None and self._decode is not None
 
     def receive(self, payload):
-        if not self.verified:
+        if not self.configured:
             raise UnverifiedProtocolError("no reviewed protocol codec configured")
         if not isinstance(payload, bytes):
             raise TypeError("payload must be bytes")
+        if len(payload) > MAX_SYNTHETIC_PAYLOAD_BYTES:
+            raise ValueError("payload exceeds local safety limit")
         return self._decode(payload)
 
     def send(self, message):
-        if not self.verified:
+        if not self.configured:
             raise UnverifiedProtocolError("no reviewed protocol codec configured")
         payload = self._encode(message)
         if not isinstance(payload, bytes):
             raise TypeError("codec must return bytes")
+        if len(payload) > MAX_SYNTHETIC_PAYLOAD_BYTES:
+            raise ValueError("encoded payload exceeds local safety limit")
         return payload
