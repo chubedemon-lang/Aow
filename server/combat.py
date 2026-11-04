@@ -37,8 +37,10 @@ class Battle:
     def __post_init__(self):
         if self.first.fighter_id == self.second.fighter_id:
             raise ValueError("fighters must be distinct")
-        if self.first.hp == 0 or self.second.hp == 0:
+        if self.turn == 0 and (self.first.hp == 0 or self.second.hp == 0):
             raise ValueError("battle requires living fighters")
+        if self.first.hp == 0 and self.second.hp == 0:
+            raise ValueError("both fighters cannot be defeated")
         if self.next_actor not in (self.first.fighter_id, self.second.fighter_id):
             raise ValueError("invalid next actor")
         _stat(self.turn, "turn")
@@ -59,13 +61,11 @@ class Battle:
         updated = replace(target, hp=target.hp - actual_damage)
         next_battle = replace(
             self,
-            first=self.first if not actor_is_first else attacker,
+            first=attacker if actor_is_first else updated,
             second=updated if actor_is_first else attacker,
             next_actor=target.fighter_id if updated.hp else actor_id,
             turn=self.turn + 1,
         )
-        if not actor_is_first:
-            next_battle = replace(next_battle, first=updated, second=attacker)
         event = {
             "actor_id": actor_id,
             "target_id": target.fighter_id,
