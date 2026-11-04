@@ -28,3 +28,12 @@ The `Domain` now supports:
 Tests also cover database reopen/persistence, invalid input, failed consumption, and concurrent increments.
 
 **Important:** Inventory is currently exposed through Python domain methods only, **not** HTTP routes or the APK's transport. Do not expose this mock HTTP service to the internet; it has no authentication or authorization. A verified protocol adapter must be designed before integrating a real client.
+
+## Synthetic wallet and shop domain
+
+- `credit_wallet(character_id, amount)`: operator/test-only wallet funding, integer overflow guarded.
+- `set_shop_item(item_id, price, enabled)`: operator-only synthetic catalog management.
+- `buy_item(character_id, item_id, count)`: SQLite `BEGIN IMMEDIATE` transaction debits the wallet and grants stock together. Failed purchases roll back completely.
+- Unit tests cover persistence, insufficient funds, disabled products, invalid requests and concurrent purchases without overspending.
+
+These methods are intentionally **not exposed as HTTP routes**. No client-supplied price or arbitrary wallet-credit request is accepted. Catalog items, currency and protocol are invented local test fixtures and **not AOW game data**. Real integration requires verified item IDs, economy rules, server-side authorization, session ownership and client message schemas.
