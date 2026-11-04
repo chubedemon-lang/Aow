@@ -62,7 +62,7 @@ class TransportAdapter:
         return self._decode(payload)
 
     def send(self, message):
-        if not self.verified:
+        if not self.configured:
             raise UnverifiedProtocolError("no reviewed protocol codec configured")
         payload = self._encode(message)
         if not isinstance(payload, bytes):
