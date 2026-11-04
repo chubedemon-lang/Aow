@@ -48,3 +48,17 @@ with zipfile.ZipFile(p) as z:
 ```
 
 No original APK or extracted proprietary content is committed here.
+
+## Follow-up inspection — 2026-11-04
+
+Inspected the uploaded APK directly using Python `zipfile` and `json`, without modifying or extracting its game assets. Reproducible inventory script committed as `tools/apk_inventory.py`.
+
+- `AndroidManifest.xml` begins with `03000800` (Android binary XML). Package name, launcher, SDK and permissions require a binary-AXML parser; not guessed.
+- The largest entry is `lib/arm64-v8a/libil2cpp.so` (166,150,720 bytes uncompressed); ARMv7 IL2CPP is 138,042,764 bytes.
+- Addressables providers include `GearGames.AOW.AddressablesExtensions.UniversalBundleProvider` and `UnityEngine.ResourceManagement.ResourceProviders.BundledAssetProvider`. This is evidence of an AOW-specific bundle provider, not evidence of a particular remote server.
+- Map bundle identifiers: `1_2`, `1_3`, `1_3_new`, `1_4`, `1_5`, `1_5_new`, `1_6`, `3_2`, `4_1`, `pvp_11`, `pvp_35`.
+- There are matching minimap bundles for those 11 map identifiers, plus `minimap_empty`.
+- Other named bundle groups include `built-inomniwindow`, `built-invfx`, `decorations-common`, `decorations-desert`, `decorations-jungle`, `defaultlocalgroup`.
+- `assets/aa/catalog.json` contains 912 internal IDs. No actual endpoint or IP has yet been verified.
+
+Run: `python tools/apk_inventory.py /path/to/aow.apk --output apk_inventory.json`. Keep output local until reviewed for sensitive configuration. Do not commit APK or extracted proprietary resources.
