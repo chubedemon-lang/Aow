@@ -1,0 +1,17 @@
+# Never publish proprietary APKs or extracted bundles
+*.apk
+*.aab
+*.obb
+*.bundle
+*.unity3d
+*.assets
+*.resource
+*.resS
+*.so
+*.dex
+global-metadata.dat
+apk_inventory.json
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
