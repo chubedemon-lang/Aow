@@ -50,8 +50,23 @@ class EvidenceRecord:
 
 
 def protocol_ready(records, required=("transport", "framing", "handshake", "login")):
-    """Only authorized end-to-end evidence can claim original-client readiness."""
+    """Require a complete authorized local test for ONE APK, never mixed APKs.
+
+    This checks evidence bookkeeping only, not actual APK compatibility.
+    """
+    records = tuple(records)
+    required = tuple(required)
     if not all(isinstance(record, EvidenceRecord) for record in records):
         raise TypeError("records must be EvidenceRecord instances")
-    return all(any(r.topic == topic and r.status == EvidenceStatus.VERIFIED_END_TO_END
-                   for r in records) for topic in required)
+    if not required or not all(topic in _ALLOWED_TOPICS for topic in required):
+        raise ValueError("required must contain supported topics")
+    if not records:
+        return False
+    digests = {r.apk_sha256 for r in records}
+    return any(
+        all(any(r.apk_sha256 == digest and r.topic == topic
+                and r.status == EvidenceStatus.VERIFIED_END_TO_END
+                and r.method == "authorized_local_test"
+                for r in records) for topic in required)
+        for digest in digests
+    )
