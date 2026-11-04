@@ -1,0 +1,32 @@
+name: Repository quality checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Python sources
+        run: python -m compileall -q tools tests
+      - name: Run synthetic fixture tests
+        run: python -m unittest discover -s tests -v
+      - name: Check that no APK is tracked
+        shell: bash
+        run: |
+          if git ls-files | grep -Ei '\.(apk|aab|obb)$'; then
+            echo 'Android binary detected in repository' >&2
+            exit 1
+          fi
+          echo 'No Android binaries tracked'
