@@ -1,22 +1,29 @@
-# AOW Reconstruction
+# AOW — independent server reconstruction
 
-Android game reconstruction research and independently implemented client/server project.
+**Project scope: server source only. Keep the original Android APK unchanged.**
+This repository does not rebuild Unity, modify APKs, or provide game client artifacts.
 
-## Status
-- Initial planning and APK inspection pending.
-- Original user-provided APK: `aow.apk` (~256 MB), supplied in ChatGPT conversation; **not committed**.
-- Engine, protocol, assets, server endpoints and feasibility are **not yet verified**.
-- Goal: reproduce the original experience as closely as technically and legally possible; no unsupported 100% completion claim.
+## Current reality
+- A synthetic, localhost-only Python/SQLite server prototype implements character creation, movement, and transactional inventory domain methods.
+- Offline APK inventory and network-string candidate tools are included.
+- The actual AOW protocol (transport, framing, authentication, handshake and schemas) is **not yet established**. The mock server does not connect the original APK.
+- No full game server is ready. See docs/SERVER_STATUS.md.
 
-## Workflow
-1. Inspect APK locally in an isolated environment with `aapt2`, `apkanalyzer`, `jadx`, `apktool`, `unzip` and native-library inspection.
-2. Produce `docs/APK_ANALYSIS.md` with verified findings and confidence levels.
-3. Document feature inventory and client/server boundary.
-4. Implement an independently operated server and compatible client only for authorized use.
-5. Add reproducible builds and automated tests; publish test APK as CI artifact only when functional.
+## Reproducible tests
+Run from the repository root:
+    python -m unittest discover -s tests -v
 
-## Security and rights
-Do not commit original APK, extracted proprietary assets, private keys, account credentials, or personal data. Do not scan, exploit, intercept other users, or access the publisher's infrastructure without authorization. IP addresses discovered in application configuration do not grant server access or source code.
+Run the intentionally synthetic local API:
+    python -m server.mock --db aow_mock.sqlite3 --port 8765
 
-## Codex starting point
-Read `AGENTS.md`, then complete the first issue. Make small branches and PRs with evidence and tests. Do not fabricate APK findings. Request original APK via a secure authorized handoff if not present in your working environment.
+Its HTTP endpoints are fixtures, not original AOW messages. Do not expose it publicly.
+
+## Server roadmap
+1. Analyze the user-provided authorized APK offline; verify transport, packet/codec, endpoint discovery and authentication flow.
+2. Document evidence in docs/PROTOCOL.md. Never treat candidate strings as confirmed endpoints.
+3. Implement actual protocol adapter and secure sessions.
+4. Add player initialization, world/map sync, inventory, combat, shop, missions and persistence according to verified client contracts.
+5. Verify end-to-end operation against the unchanged authorized APK; provide deployment scripts, CI and server logs.
+
+## Safety / rights
+This repository is public. Do not commit original APK, proprietary extracted assets, player data, keys, credentials or private traffic captures. Do not access official game infrastructure beyond authorized normal use.

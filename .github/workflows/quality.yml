@@ -1,0 +1,29 @@
+name: AOW server quality
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile source and tests
+        run: python -m compileall -q server tools tests
+      - name: Run all synthetic/local tests
+        run: python -m unittest discover -s tests -v
+      - name: Reject committed Android binaries and network captures
+        shell: bash
+        run: |
+          if git ls-files | grep -Ei '\.(apk|aab|obb|pcap|pcapng)$'; then
+            echo 'Forbidden binary/capture file tracked' >&2
+            exit 1
+          fi
+          echo 'No prohibited binary/capture tracked'
