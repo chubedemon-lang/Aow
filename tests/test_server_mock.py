@@ -74,5 +74,53 @@ class DomainTests(unittest.TestCase):
         self.assertEqual(self.domain.list_inventory(cid), [{"item_id": "test_item", "quantity": 40}])
 
 
+    def test_shop_purchase_debits_wallet_and_grants_item(self):
+        cid = self.domain.create_character("alice", "hero")["id"]
+        self.domain.set_shop_item("potion", 30)
+        self.assertEqual(self.domain.credit_wallet(cid, 100), 100)
+        receipt = self.domain.buy_item(cid, "potion", 2)
+        self.assertEqual(receipt, {"item_id": "potion", "quantity_purchased": 2, "total": 60, "balance": 40})
+        self.assertEqual(Domain(self.domain.database).list_inventory(cid), [{"item_id": "potion", "quantity": 2}])
+
+    def test_shop_insufficient_funds_rolls_back(self):
+        cid = self.domain.create_character("alice", "hero")["id"]
+        self.domain.set_shop_item("potion", 50)
+        self.domain.credit_wallet(cid, 10)
+        with self.assertRaises(ValueError):
+            self.domain.buy_item(cid, "potion")
+        self.assertEqual(self.domain.list_inventory(cid), [])
+        self.assertEqual(self.domain.credit_wallet(cid, 1), 11)
+
+    def test_shop_disabled_and_invalid_requests(self):
+        cid = self.domain.create_character("alice", "hero")["id"]
+        self.domain.set_shop_item("potion", 1, False)
+        self.domain.credit_wallet(cid, 10)
+        with self.assertRaises(KeyError):
+            self.domain.buy_item(cid, "potion")
+        for invalid in (True, 0, 101, 1.5):
+            with self.assertRaises(ValueError):
+                self.domain.buy_item(cid, "potion", invalid)
+        with self.assertRaises(KeyError):
+            self.domain.buy_item(999, "potion")
+        with self.assertRaises(ValueError):
+            self.domain.credit_wallet(cid, True)
+
+    def test_shop_concurrent_purchase_cannot_overspend(self):
+        cid = self.domain.create_character("alice", "hero")["id"]
+        self.domain.set_shop_item("potion", 10)
+        self.domain.credit_wallet(cid, 100)
+        def purchase(_):
+            try:
+                self.domain.buy_item(cid, "potion")
+                return True
+            except ValueError:
+                return False
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            results = list(pool.map(purchase, range(20)))
+        self.assertEqual(sum(results), 10)
+        self.assertEqual(self.domain.list_inventory(cid), [{"item_id": "potion", "quantity": 10}])
+        self.assertEqual(self.domain.credit_wallet(cid, 1), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

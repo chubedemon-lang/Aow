@@ -21,6 +21,16 @@ def initialize(conn):
             x INTEGER NOT NULL DEFAULT 0, y INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(account_id) REFERENCES accounts(id)
         );
+        CREATE TABLE IF NOT EXISTS wallets (
+            character_id INTEGER PRIMARY KEY,
+            balance INTEGER NOT NULL DEFAULT 0 CHECK(balance >= 0),
+            FOREIGN KEY(character_id) REFERENCES characters(id)
+        );
+        CREATE TABLE IF NOT EXISTS shop_catalog (
+            item_id TEXT PRIMARY KEY,
+            price INTEGER NOT NULL CHECK(price > 0),
+            enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1))
+        );
         CREATE TABLE IF NOT EXISTS inventory (
             character_id INTEGER NOT NULL, item_id TEXT NOT NULL,
             quantity INTEGER NOT NULL CHECK(quantity >= 0),
@@ -120,6 +130,86 @@ class Domain:
                     (character_id, item_id, quantity),
                 )
             return {"item_id": item_id, "quantity": quantity}
+
+
+    def credit_wallet(self, character_id, amount):
+        """Test fixture funding only; never expose as a client-controlled endpoint."""
+        if type(character_id) is not int or character_id < 1:
+            raise ValueError("invalid character id")
+        if type(amount) is not int or not 1 <= amount <= 1_000_000:
+            raise ValueError("invalid credit amount")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM characters WHERE id=?", (character_id,)).fetchone() is None:
+                raise KeyError("character not found")
+            db.execute("INSERT OR IGNORE INTO wallets(character_id, balance) VALUES (?,0)", (character_id,))
+            result = db.execute(
+                "UPDATE wallets SET balance=balance+? WHERE character_id=? AND balance<=?",
+                (amount, character_id, 2_147_483_647 - amount),
+            )
+            if result.rowcount != 1:
+                raise ValueError("wallet overflow")
+            return db.execute("SELECT balance FROM wallets WHERE character_id=?", (character_id,)).fetchone()[0]
+
+    def set_shop_item(self, item_id, price, enabled=True):
+        """Local operator configuration; no client API is provided."""
+        if not isinstance(item_id, str) or not 1 <= len(item_id) <= 64 or not all(
+            ch.isascii() and (ch.isalnum() or ch in "._-") for ch in item_id
+        ):
+            raise ValueError("invalid item id")
+        if type(price) is not int or not 1 <= price <= 1_000_000:
+            raise ValueError("invalid price")
+        if type(enabled) is not bool:
+            raise ValueError("invalid enabled flag")
+        with self.connect() as db:
+            db.execute(
+                """INSERT INTO shop_catalog(item_id, price, enabled) VALUES (?,?,?)
+                   ON CONFLICT(item_id) DO UPDATE SET price=excluded.price, enabled=excluded.enabled""",
+                (item_id, price, int(enabled)),
+            )
+
+    def buy_item(self, character_id, item_id, count=1):
+        """Synthetic shop purchase: atomically debit wallet and grant inventory."""
+        if type(character_id) is not int or character_id < 1:
+            raise ValueError("invalid character id")
+        if not isinstance(item_id, str) or not 1 <= len(item_id) <= 64 or not all(
+            ch.isascii() and (ch.isalnum() or ch in "._-") for ch in item_id
+        ):
+            raise ValueError("invalid item id")
+        if type(count) is not int or not 1 <= count <= 100:
+            raise ValueError("invalid count")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM characters WHERE id=?", (character_id,)).fetchone() is None:
+                raise KeyError("character not found")
+            catalog = db.execute(
+                "SELECT price FROM shop_catalog WHERE item_id=? AND enabled=1", (item_id,)
+            ).fetchone()
+            if catalog is None:
+                raise KeyError("item unavailable")
+            total = catalog["price"] * count
+            result = db.execute(
+                "UPDATE wallets SET balance=balance-? WHERE character_id=? AND balance>=?",
+                (total, character_id, total),
+            )
+            if result.rowcount != 1:
+                raise ValueError("insufficient funds")
+            existing = db.execute(
+                "SELECT quantity FROM inventory WHERE character_id=? AND item_id=?",
+                (character_id, item_id),
+            ).fetchone()
+            if existing is not None and existing["quantity"] > 2_147_483_647 - count:
+                raise ValueError("inventory overflow")
+            db.execute(
+                """INSERT INTO inventory(character_id,item_id,quantity) VALUES (?,?,?)
+                   ON CONFLICT(character_id,item_id)
+                   DO UPDATE SET quantity=quantity+excluded.quantity""",
+                (character_id, item_id, count),
+            )
+            balance = db.execute(
+                "SELECT balance FROM wallets WHERE character_id=?", (character_id,)
+            ).fetchone()["balance"]
+            return {"item_id": item_id, "quantity_purchased": count, "total": total, "balance": balance}
 
 
 def make_handler(domain):
