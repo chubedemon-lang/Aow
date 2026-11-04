@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import re
+from urllib.parse import urlsplit, urlunsplit
 import zipfile
 from collections import Counter
 
@@ -14,13 +15,30 @@ MAX_ENTRY = 32 * 1024 * 1024
 MAX_RESULTS = 100
 
 def scan_bytes(data):
+    """Collect conservative hints, excluding credential-bearing URL components."""
     candidates = []
-    for pattern, kind in ((URL, "url"), (HOST, "host")):
-        for match in pattern.finditer(data):
-            raw = match.group().decode("ascii", "ignore").rstrip(".,;)")
-            if SENSITIVE.search(raw):
+    url_spans = []
+    for match in URL.finditer(data):
+        raw = match.group().decode("ascii", "ignore").rstrip(".,;)")
+        url_spans.append(match.span())
+        try:
+            parsed = urlsplit(raw)
+            # Never emit URL userinfo, query strings or fragments.
+            if parsed.username or parsed.password or SENSITIVE.search(raw):
                 continue
-            candidates.append((kind, raw))
+            host = parsed.hostname or ""
+            if not host or not re.fullmatch(r"[A-Za-z0-9.-]+", host):
+                continue
+            netloc = host + ((":" + str(parsed.port)) if parsed.port else "")
+            candidates.append(("url", urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))))
+        except ValueError:
+            continue
+    for match in HOST.finditer(data):
+        if any(start <= match.start() < end for start, end in url_spans):
+            continue
+        raw = match.group().decode("ascii", "ignore")
+        if not SENSITIVE.search(raw):
+            candidates.append(("host", raw))
     return candidates
 
 def inspect(apk):
