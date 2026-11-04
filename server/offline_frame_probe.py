@@ -1,0 +1,78 @@
+"""Bounded, explicitly configured synthetic length-frame decoder.
+
+NOT an AOW protocol implementation. Do not infer the wire format from this
+module: all parameters must come from independently verified offline evidence.
+"""
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class FrameSpec:
+    length_bytes: int
+    byteorder: str
+    includes_header: bool = False
+    max_payload: int = 1024 * 1024
+
+    def __post_init__(self):
+        if type(self.length_bytes) is not int or self.length_bytes not in (1, 2, 4):
+            raise ValueError("length_bytes must be 1, 2, or 4")
+        if self.byteorder not in ("big", "little"):
+            raise ValueError("byteorder must be big or little")
+        if type(self.includes_header) is not bool:
+            raise ValueError("includes_header must be bool")
+        if type(self.max_payload) is not int or not (1 <= self.max_payload <= 16 * 1024 * 1024):
+            raise ValueError("invalid max_payload")
+
+
+class FrameDecodeError(ValueError):
+    """Malformed or oversized frame."""
+
+
+class LengthFrameDecoder:
+    """Incremental decoder: handles fragmentation and multiple frames per feed."""
+
+    def __init__(self, spec: FrameSpec):
+        if not isinstance(spec, FrameSpec):
+            raise TypeError("spec must be FrameSpec")
+        self.spec = spec
+        self._pending = bytearray()
+        self._failed = False
+
+    @property
+    def pending_bytes(self):
+        return len(self._pending)
+
+    def feed(self, chunk):
+        if self._failed:
+            raise FrameDecodeError("decoder failed; create a new instance")
+        if not isinstance(chunk, bytes):
+            raise TypeError("chunk must be bytes")
+        # A complete frame may be followed by another frame in one feed.
+        self._pending.extend(chunk)
+        frames = []
+        header = self.spec.length_bytes
+        while len(self._pending) >= header:
+            declared = int.from_bytes(self._pending[:header], self.spec.byteorder)
+            payload_size = declared - header if self.spec.includes_header else declared
+            if payload_size < 0 or payload_size > self.spec.max_payload:
+                self._pending.clear()
+                self._failed = True
+                raise FrameDecodeError("invalid declared frame size")
+            total = header + payload_size
+            if len(self._pending) < total:
+                break
+            frames.append(bytes(self._pending[header:total]))
+            del self._pending[:total]
+        # A partial frame cannot exceed its validated maximum, plus header.
+        if len(self._pending) > self.spec.max_payload + header:
+            self._pending.clear()
+            self._failed = True
+            raise FrameDecodeError("buffer exceeded maximum")
+        return frames
+
+    def finish(self):
+        """Reject truncated streams instead of silently dropping bytes."""
+        if self._failed:
+            raise FrameDecodeError("decoder failed")
+        if self._pending:
+            raise FrameDecodeError("truncated final frame")
