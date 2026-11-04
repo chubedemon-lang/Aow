@@ -27,6 +27,15 @@ class CombatTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             finished.attack(1)
 
+    def test_second_actor_can_win_and_terminal_state_is_stable(self):
+        start = Battle(Fighter(1, 4, 1, 0), Fighter(2, 8, 9, 0), 2)
+        finished, event = start.attack(2)
+        self.assertEqual((finished.first.hp, finished.second.hp), (0, 8))
+        self.assertEqual((event["winner_id"], event["target_hp"]), (2, 0))
+        self.assertEqual(start.first.hp, 4)
+        with self.assertRaises(ValueError):
+            finished.attack(2)
+
     def test_reject_invalid_stats_and_turns(self):
         for value in (True, -1, 1_000_001, 1.5):
             with self.assertRaises(ValueError):
