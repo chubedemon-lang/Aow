@@ -42,6 +42,24 @@ class EvidenceLedgerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.record(method="live_server_capture")
 
+    def test_cannot_combine_evidence_from_different_apks(self):
+        topics = ("transport", "framing", "handshake", "login")
+        records = [self.record(topic, EvidenceStatus.VERIFIED_END_TO_END,
+                               "authorized_local_test") for topic in topics[:-1]]
+        records.append(EvidenceRecord("b" * 64, "login",
+                                      EvidenceStatus.VERIFIED_END_TO_END,
+                                      "local/test:1", "authorized_local_test"))
+        self.assertFalse(protocol_ready(records))
+        records.append(self.record("login", EvidenceStatus.VERIFIED_END_TO_END,
+                                   "authorized_local_test"))
+        self.assertTrue(protocol_ready(records))
+
+    def test_empty_or_unsupported_required_topics_fail_closed(self):
+        with self.assertRaises(ValueError):
+            protocol_ready([], required=())
+        with self.assertRaises(ValueError):
+            protocol_ready([], required=("unverified_topic",))
+
     def test_reject_non_record_input(self):
         with self.assertRaises(TypeError):
             protocol_ready([{"topic": "login"}])
