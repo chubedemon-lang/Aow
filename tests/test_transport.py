@@ -25,11 +25,28 @@ class TransportTests(unittest.TestCase):
         evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "test-only")
         adapter = TransportAdapter(evidence, decode=lambda raw: raw.decode("ascii"),
                                    encode=lambda msg: msg.encode("ascii"))
-        self.assertTrue(adapter.verified)
+        self.assertTrue(adapter.configured)
         self.assertEqual(adapter.receive(b"ping"), "ping")
         self.assertEqual(adapter.send("pong"), b"pong")
         with self.assertRaises(TypeError):
             adapter.receive("not bytes")
+
+    def test_payload_size_boundaries(self):
+        evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "test-only")
+        adapter = TransportAdapter(evidence, decode=lambda raw: raw, encode=lambda msg: msg)
+        from server.transport import MAX_SYNTHETIC_PAYLOAD_BYTES
+        valid = b"x" * MAX_SYNTHETIC_PAYLOAD_BYTES
+        self.assertEqual(adapter.receive(valid), valid)
+        self.assertEqual(adapter.send(valid), valid)
+        with self.assertRaises(ValueError):
+            adapter.receive(valid + b"x")
+        with self.assertRaises(ValueError):
+            adapter.send(valid + b"x")
+
+    def test_configured_is_not_apk_compatibility(self):
+        self.assertFalse(TransportAdapter().configured)
+        evidence = ProtocolEvidence("a" * 64, "synthetic test", "test-only")
+        self.assertFalse(TransportAdapter(evidence).configured)
 
     def test_reject_non_bytes_encoded_output(self):
         evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "test-only")
