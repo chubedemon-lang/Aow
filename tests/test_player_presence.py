@@ -36,7 +36,7 @@ class PresenceTests(unittest.TestCase):
 
     def test_duplicate_session_cannot_bind(self):
         self.registry.bind(self.s)
-        with self.assertRaises(SessionTransitionError):
+        with self.assertRaises(PresenceError):
             self.registry.bind(self.s)
 
     def test_map_requires_world(self):
