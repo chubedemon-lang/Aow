@@ -36,6 +36,13 @@ class CatalogValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exceeds size limit"):
             self.inspect_catalog(b" " * (module.MAX_CATALOG_BYTES + 1))
 
+    def test_binary_manifest_magic_detection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            apk = pathlib.Path(tmp) / "fixture.apk"
+            with zipfile.ZipFile(apk, "w") as archive:
+                archive.writestr("AndroidManifest.xml", bytes.fromhex("03000800") + b"synthetic")
+            self.assertTrue(module.analyze(apk)["android_manifest_binary_axml"])
+
     def test_valid_catalog(self):
         result = self.inspect_catalog(b'{"m_InternalIds":["a"],"m_ProviderIds":["provider"]}')
         self.assertEqual(result["addressables_internal_ids"], 1)
