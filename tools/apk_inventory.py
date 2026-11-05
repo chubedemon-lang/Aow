@@ -38,6 +38,8 @@ def analyze(path):
                 raise ValueError("Addressables catalog must be a JSON object")
             if not isinstance(catalog.get("m_InternalIds", []), list) or not isinstance(catalog.get("m_ProviderIds", []), list):
                 raise ValueError("Addressables catalog fields must be lists")
+            if any(not isinstance(value, str) for field in ("m_InternalIds", "m_ProviderIds") for value in catalog.get(field, [])):
+                raise ValueError("Addressables catalog ID entries must be strings")
         maps = [n for n in bundles if "/built-inmaps_" in n]
         minimaps = [n for n in bundles if "/built-inminimaps_" in n]
         native = sorted(n for n in names if n.startswith("lib/") and len(n.split("/")) == 3 and n.split("/")[1] and n.split("/")[2].endswith(".so"))
