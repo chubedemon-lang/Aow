@@ -62,6 +62,16 @@ class QuestTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             QuestBook(True)
 
+    def test_malformed_entries_raise_value_error_not_attribute_error(self):
+        for entries in ((None,), ("invalid",), (object(),), (Quest(8, "walk", 1),)):
+            with self.subTest(entries=entries), self.assertRaises(ValueError):
+                QuestBook(1, entries)
+
+    def test_duplicate_entries_rejected(self):
+        entry = QuestProgress(self.quest)
+        with self.assertRaises(ValueError):
+            QuestBook(1, (entry, entry))
+
     def test_multiple_quests_independent(self):
         book = self.book.add(Quest(8, "walk", 2))
         updated = book.advance(8, "walk")
