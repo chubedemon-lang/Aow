@@ -43,6 +43,19 @@ class CatalogValidationTests(unittest.TestCase):
                 archive.writestr("AndroidManifest.xml", bytes.fromhex("03000800") + b"synthetic")
             self.assertTrue(module.analyze(apk)["android_manifest_binary_axml"])
 
+    def test_non_string_internal_id_rejected(self):
+        with self.assertRaisesRegex(ValueError, "ID entries must be strings"):
+            self.inspect_catalog(b'{"m_InternalIds":["ok",42]}')
+
+    def test_non_string_provider_id_rejected(self):
+        with self.assertRaisesRegex(ValueError, "ID entries must be strings"):
+            self.inspect_catalog(b'{"m_ProviderIds":[null]}')
+
+    def test_empty_id_lists_are_valid(self):
+        result = self.inspect_catalog(b'{"m_InternalIds":[],"m_ProviderIds":[]}')
+        self.assertEqual(result["addressables_internal_ids"], 0)
+        self.assertEqual(result["addressables_provider_ids"], [])
+
     def test_valid_catalog(self):
         result = self.inspect_catalog(b'{"m_InternalIds":["a"],"m_ProviderIds":["provider"]}')
         self.assertEqual(result["addressables_internal_ids"], 1)
