@@ -47,5 +47,40 @@ class InventoryTests(unittest.TestCase):
             self.assertIsNone(result["unity_metadata_bytes"])
 
 
+    def test_noncanonical_dex_and_library_paths_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            apk = pathlib.Path(d) / "synthetic.apk"
+            with zipfile.ZipFile(apk, "w") as z:
+                z.writestr("AndroidManifest.xml", b"mock")
+                for name in ("classes.dex", "classes2.dex", "classes0.dex",
+                             "classesfake.dex", "classes3.dex.bak", "nested/classes4.dex"):
+                    z.writestr(name, b"fake")
+                z.writestr("lib/arm64-v8a/libunity.so", b"mock")
+                z.writestr("lib/arm64-v8a/nested/libil2cpp.so", b"mock")
+            report = module.analyze(apk)
+            self.assertEqual(report["dex_count"], 2)
+            self.assertEqual(report["native_library_count"], 1)
+            self.assertFalse(report["unity_il2cpp"])
+
+    def test_duplicate_zip_names_rejected(self):
+        import warnings
+        with tempfile.TemporaryDirectory() as d:
+            apk = pathlib.Path(d) / "synthetic.apk"
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                with zipfile.ZipFile(apk, "w") as z:
+                    z.writestr("AndroidManifest.xml", b"first")
+                    z.writestr("AndroidManifest.xml", b"second")
+            with self.assertRaisesRegex(ValueError, "duplicate ZIP"):
+                module.analyze(apk)
+
+    def test_missing_manifest_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            apk = pathlib.Path(d) / "synthetic.apk"
+            with zipfile.ZipFile(apk, "w") as z:
+                z.writestr("classes.dex", b"fake")
+            with self.assertRaisesRegex(ValueError, "missing AndroidManifest"):
+                module.analyze(apk)
+
 if __name__ == "__main__":
     unittest.main()
