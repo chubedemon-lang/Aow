@@ -1,59 +1,67 @@
-"""Regression tests for invented offline combat rules only."""
+"""Additional adversarial regressions for existing synthetic combat domain."""
 import unittest
 
-from server.synthetic_combat import CombatError, Fighter, SyntheticBattle
+from server.combat import Battle, Fighter, MAX_STAT
 
 
-class CombatTests(unittest.TestCase):
-    def setUp(self):
-        self.battle = SyntheticBattle(Fighter("a", 10, 5, 1), Fighter("b", 8, 3, 2))
+class CombatBoundaryTests(unittest.TestCase):
+    def fighters(self):
+        return Fighter(1, 10, 5, 0), Fighter(2, 8, 3, 2)
 
-    def test_turn_and_damage(self):
-        self.assertEqual(self.battle.attack("a", "b")["remaining_hp"], 5)
-        self.assertEqual(self.battle.snapshot()["turn"], "b")
+    def test_attacks_are_immutable(self):
+        a, b = self.fighters()
+        original = Battle(a, b, 1)
+        updated, event = original.attack(1)
+        self.assertEqual(original.second.hp, 8)
+        self.assertEqual(updated.second.hp, 5)
+        self.assertEqual(event["target_id"], 2)
+        self.assertEqual(updated.next_actor, 2)
 
-    def test_wrong_turn_has_no_effect(self):
-        before = self.battle.snapshot()
-        with self.assertRaises(CombatError):
-            self.battle.attack("b", "a")
-        self.assertEqual(self.battle.snapshot(), before)
+    def test_wrong_actor_no_mutation(self):
+        a, b = self.fighters()
+        battle = Battle(a, b, 1)
+        with self.assertRaises(ValueError):
+            battle.attack(2)
+        self.assertEqual(battle.turn, 0)
 
-    def test_invalid_target_has_no_effect(self):
-        for target in ("a", "missing"):
-            with self.assertRaises(CombatError):
-                self.battle.attack("a", target)
-        self.assertEqual(self.battle.snapshot()["hp"]["b"], 8)
+    def test_bool_actor_rejected(self):
+        a, b = self.fighters()
+        with self.assertRaises(ValueError):
+            Battle(a, b, 1).attack(True)
 
-    def test_defense_minimum_damage(self):
-        b = SyntheticBattle(Fighter("a", 3, 0, 0), Fighter("b", 3, 0, 100))
-        self.assertEqual(b.attack("a", "b")["damage"], 1)
+    def test_minimum_damage(self):
+        battle = Battle(Fighter(1, 2, 0, 0), Fighter(2, 3, 0, 99), 1)
+        after, event = battle.attack(1)
+        self.assertEqual(event["damage"], 1)
+        self.assertEqual(after.second.hp, 2)
 
-    def test_kill_and_no_actions_after(self):
-        self.battle.attack("a", "b")
-        self.battle.attack("b", "a")
-        self.battle.attack("a", "b")
-        self.battle.attack("b", "a")
-        result = self.battle.attack("a", "b")
-        self.assertEqual(result["winner"], "a")
-        self.assertEqual(result["remaining_hp"], 0)
-        with self.assertRaises(CombatError):
-            self.battle.attack("b", "a")
+    def test_overkill_reports_actual_damage(self):
+        battle = Battle(Fighter(1, 3, 100, 0), Fighter(2, 2, 0, 0), 1)
+        after, event = battle.attack(1)
+        self.assertEqual(event["damage"], 2)
+        self.assertEqual(event["winner_id"], 1)
+        with self.assertRaises(ValueError):
+            after.attack(1)
 
     def test_invalid_stats(self):
-        for stats in ((0, 1, 0), (1, -1, 0), (1, 1, -1), (True, 1, 0)):
-            with self.subTest(stats=stats), self.assertRaises(CombatError):
-                Fighter("a", *stats)
-        with self.assertRaises(CombatError):
-            Fighter("", 1, 1, 1)
+        for value in (-1, True, 1.5, MAX_STAT + 1):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                Fighter(1, value, 1, 1)
 
-    def test_duplicate_players(self):
-        with self.assertRaises(CombatError):
-            SyntheticBattle(Fighter("a", 1, 1, 0), Fighter("a", 1, 1, 0))
+    def test_duplicate_fighters(self):
+        a, _ = self.fighters()
+        with self.assertRaises(ValueError):
+            Battle(a, a, 1)
 
-    def test_snapshot_is_copy(self):
-        state = self.battle.snapshot()
-        state["hp"]["a"] = -10
-        self.assertEqual(self.battle.snapshot()["hp"]["a"], 10)
+    def test_initial_dead_fighter_rejected(self):
+        with self.assertRaises(ValueError):
+            Battle(Fighter(1, 0, 1, 1), Fighter(2, 1, 1, 1), 1)
+
+    def test_turn_limit(self):
+        a, b = self.fighters()
+        battle = Battle(a, b, 1, turn=MAX_STAT)
+        with self.assertRaises(ValueError):
+            battle.attack(1)
 
 
 if __name__ == "__main__":
