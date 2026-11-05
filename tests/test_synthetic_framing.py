@@ -20,7 +20,7 @@ class SyntheticFramingTests(unittest.TestCase):
     def test_oversize_declared_length_rejected(self):
         codec = LengthPrefixedFrames(max_payload=3)
         with self.assertRaises(FrameError):
-            codec.feed(b"\\x00\\x00\\x00\\x04")
+            codec.feed(bytes([0, 0, 0, 4]))
         self.assertEqual(codec.feed(codec.encode(b"ok")), [b"ok"])
 
     def test_oversize_encode_rejected(self):
@@ -39,7 +39,7 @@ class SyntheticFramingTests(unittest.TestCase):
 
     def test_reset_discards_partial_frame(self):
         codec = LengthPrefixedFrames()
-        codec.feed(b"\\x00\\x00")
+        codec.feed(bytes([0, 0]))
         codec.reset()
         self.assertEqual(codec.feed(codec.encode(b"ok")), [b"ok"])
 
