@@ -61,9 +61,11 @@ class QuestBook:
         _positive(self.player_id, "player_id")
         if type(self.entries) is not tuple or len(self.entries) > 256:
             raise ValueError("invalid quest entries")
+        if any(type(entry) is not QuestProgress for entry in self.entries):
+            raise ValueError("invalid quest entries")
         ids = [entry.quest.quest_id for entry in self.entries]
-        if any(type(entry) is not QuestProgress for entry in self.entries) or len(set(ids)) != len(ids):
-            raise ValueError("duplicate or invalid quest entries")
+        if len(set(ids)) != len(ids):
+            raise ValueError("duplicate quest entries")
 
     def add(self, quest):
         if type(quest) is not Quest or len(self.entries) >= 256:
