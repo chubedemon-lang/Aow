@@ -17,6 +17,8 @@ def analyze(path):
         if any(item.flag_bits & 1 for item in entries):
             raise ValueError('encrypted ZIP entries are not supported')
         names = [item.filename for item in entries]
+        if any(n.startswith('/') or '\\' in n or any(part in ('..', '.') for part in n.split('/')) for n in names):
+            raise ValueError('unsafe ZIP entry path')
         if len(names) != len(set(names)):
             raise ValueError('duplicate ZIP entries')
         if 'AndroidManifest.xml' not in names:
