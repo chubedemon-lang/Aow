@@ -20,8 +20,10 @@ def inspect_apk(path):
         entries = archive.infolist()
         if len(entries) > MAX_ENTRIES:
             raise ValueError("too many ZIP entries")
+        if any(item.flag_bits & 0x1 for item in entries):
+            raise ValueError("encrypted ZIP entries are not supported")
         names = {item.filename for item in entries}
-        dex = sorted(name for name in names if name.startswith("classes") and name.endswith(".dex"))
+        dex = sorted(name for name in names if name == "classes.dex" or (name.startswith("classes") and name.endswith(".dex") and name[7:-4].isdigit() and int(name[7:-4]) >= 2))
         abi = sorted({name.split("/")[1] for name in names
                       if name.startswith("lib/") and name.endswith(".so") and len(name.split("/")) == 3})
         metadata_name = "assets/bin/Data/Managed/Metadata/global-metadata.dat"
