@@ -26,7 +26,7 @@ def analyze(path):
         catalog = json.loads(z.read("assets/aa/catalog.json")) if "assets/aa/catalog.json" in names else {}
         maps = [n for n in bundles if "/built-inmaps_" in n]
         minimaps = [n for n in bundles if "/built-inminimaps_" in n]
-        native = sorted(n for n in names if n.startswith("lib/") and n.endswith(".so"))
+        native = sorted(n for n in names if n.startswith("lib/") and len(n.split("/")) == 3 and n.split("/")[1] and n.split("/")[2].endswith(".so"))
         return {
             "file_size_bytes": p.stat().st_size, "sha256": sha256,
             "zip_entries": len(names), "zip_crc_first_failure": z.testzip(),
