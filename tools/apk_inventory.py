@@ -2,6 +2,8 @@
 """Read-only APK structural inventory; stdlib only. Does not extract game assets."""
 import argparse, hashlib, json, pathlib, re, zipfile
 
+MAX_CATALOG_BYTES = 8 * 1024 * 1024
+
 DEX_NAME = re.compile(r'classes(?:[2-9]|[1-9][0-9]+)?\.dex\Z')
 
 def analyze(path):
@@ -23,7 +25,18 @@ def analyze(path):
         abis = sorted({n.split("/")[1] for n in names if n.startswith("lib/") and len(n.split("/")) == 3 and n.endswith(".so")})
         dex = sorted(n for n in names if DEX_NAME.fullmatch(n))
         manifest = z.read("AndroidManifest.xml")
-        catalog = json.loads(z.read("assets/aa/catalog.json")) if "assets/aa/catalog.json" in names else {}
+        catalog = {}
+        if "assets/aa/catalog.json" in names:
+            if z.getinfo("assets/aa/catalog.json").file_size > MAX_CATALOG_BYTES:
+                raise ValueError("Addressables catalog exceeds size limit")
+            try:
+                catalog = json.loads(z.read("assets/aa/catalog.json"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("invalid Addressables catalog JSON") from exc
+            if not isinstance(catalog, dict):
+                raise ValueError("Addressables catalog must be a JSON object")
+            if not isinstance(catalog.get("m_InternalIds", []), list) or not isinstance(catalog.get("m_ProviderIds", []), list):
+                raise ValueError("Addressables catalog fields must be lists")
         maps = [n for n in bundles if "/built-inmaps_" in n]
         minimaps = [n for n in bundles if "/built-inminimaps_" in n]
         native = sorted(n for n in names if n.startswith("lib/") and len(n.split("/")) == 3 and n.split("/")[1] and n.split("/")[2].endswith(".so"))
