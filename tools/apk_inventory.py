@@ -1,21 +1,32 @@
 #!/usr/bin/env python3
 """Read-only APK structural inventory; stdlib only. Does not extract game assets."""
-import argparse, collections, hashlib, json, pathlib, zipfile
+import argparse, hashlib, json, pathlib, re, zipfile
+
+DEX_NAME = re.compile(r'classes(?:[2-9]|[1-9][0-9]+)?\.dex\Z')
 
 def analyze(path):
     p = pathlib.Path(path)
     with p.open("rb") as f:
         sha256 = hashlib.file_digest(f, "sha256").hexdigest()
     with zipfile.ZipFile(p) as z:
-        names = z.namelist()
+        entries = z.infolist()
+        if len(entries) > 100000:
+            raise ValueError('too many ZIP entries')
+        if any(item.flag_bits & 1 for item in entries):
+            raise ValueError('encrypted ZIP entries are not supported')
+        names = [item.filename for item in entries]
+        if len(names) != len(set(names)):
+            raise ValueError('duplicate ZIP entries')
+        if 'AndroidManifest.xml' not in names:
+            raise ValueError('missing AndroidManifest.xml')
         bundles = sorted(n for n in names if n.endswith(".bundle"))
-        abis = sorted({n.split("/")[1] for n in names if n.startswith("lib/") and n.endswith(".so")})
-        dex = sorted(n for n in names if n.startswith("classes") and n.endswith(".dex"))
+        abis = sorted({n.split("/")[1] for n in names if n.startswith("lib/") and len(n.split("/")) == 3 and n.endswith(".so")})
+        dex = sorted(n for n in names if DEX_NAME.fullmatch(n))
         manifest = z.read("AndroidManifest.xml")
         catalog = json.loads(z.read("assets/aa/catalog.json")) if "assets/aa/catalog.json" in names else {}
         maps = [n for n in bundles if "/built-inmaps_" in n]
         minimaps = [n for n in bundles if "/built-inminimaps_" in n]
-        native = sorted(n for n in names if n.startswith("lib/") and n.endswith(".so"))
+        native = sorted(n for n in names if n.startswith("lib/") and len(n.split("/")) == 3 and n.split("/")[1] and n.split("/")[2].endswith(".so"))
         return {
             "file_size_bytes": p.stat().st_size, "sha256": sha256,
             "zip_entries": len(names), "zip_crc_first_failure": z.testzip(),
