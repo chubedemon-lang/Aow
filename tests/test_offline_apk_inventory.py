@@ -38,5 +38,22 @@ class OfflineInventoryTests(unittest.TestCase):
             self.assertIsNone(result["il2cpp_metadata"]["version"])
 
 
+    def test_only_valid_multidex_names_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic.apk"
+            with zipfile.ZipFile(path, "w") as archive:
+                for name in ("classes.dex", "classes2.dex", "classes0.dex",
+                             "classesfake.dex", "classes3.dex.bak", "classes-1.dex"):
+                    archive.writestr(name, b"fake")
+            self.assertEqual(inspect_apk(path)["dex_count"], 2)
+
+    def test_invalid_zip_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid.apk"
+            path.write_bytes(b"not a ZIP")
+            with self.assertRaises(zipfile.BadZipFile):
+                inspect_apk(path)
+
+
 if __name__ == "__main__":
     unittest.main()
