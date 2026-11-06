@@ -15,6 +15,8 @@ class MapOccupancy:
         self.registry = registry
         self.capacity_per_map = capacity_per_map
         self._members = {}
+        self._join_serial = 0
+        self._join_epochs = {}
 
     def join(self, connection_id, map_id):
         session = self.registry.get(connection_id)
@@ -27,6 +29,8 @@ class MapOccupancy:
             raise ValueError("map capacity exceeded")
         session.join_map(map_id)
         self._members.setdefault(map_id, set()).add(connection_id)
+        self._join_serial += 1
+        self._join_epochs[connection_id] = self._join_serial
 
     def leave(self, connection_id):
         session = self.registry.get(connection_id)
@@ -37,6 +41,7 @@ class MapOccupancy:
         self._discard(connection_id, map_id)
 
     def _discard(self, connection_id, map_id):
+        self._join_epochs.pop(connection_id, None)
         members = self._members.get(map_id)
         if members is not None:
             members.discard(connection_id)
@@ -51,6 +56,10 @@ class MapOccupancy:
             self._discard(connection_id, map_id)
         return closed
 
+    def join_epoch(self, connection_id):
+        """Local occupancy incarnation; never an APK protocol field."""
+        return self._join_epochs.get(connection_id)
+
     def members(self, map_id):
         if type(map_id) is not int or not 0 <= map_id <= 2**31 - 1:
             raise ValueError("invalid map identifier")
@@ -59,3 +68,4 @@ class MapOccupancy:
     def close_all(self):
         self.registry.close_all()
         self._members.clear()
+        self._join_epochs.clear()
