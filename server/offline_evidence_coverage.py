@@ -2,8 +2,6 @@
 
 No packet bytes, endpoint values, or inferred AOW protocol details are used.
 """
-from collections import Counter
-
 from server.offline_protocol_evidence import ALLOWED_KINDS, validate_manifest
 
 
