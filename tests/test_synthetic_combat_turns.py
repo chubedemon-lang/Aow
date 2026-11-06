@@ -10,9 +10,11 @@ class SyntheticCombatTests(unittest.TestCase):
     def test_turns_and_lethal_finish(self):
         self.assertEqual(self.b.attack("a", "b", 1)["target_hp"], 5)
         self.assertEqual(self.b.attack("b", "a", 2)["target_hp"], 8)
-        self.assertEqual(self.b.attack("a", "b", 3)["winner"], "a")
+        self.assertIsNone(self.b.attack("a", "b", 3)["winner"])
+        self.assertEqual(self.b.attack("b", "a", 4)["target_hp"], 6)
+        self.assertEqual(self.b.attack("a", "b", 5)["winner"], "a")
         with self.assertRaises(CombatError):
-            self.b.attack("b", "a", 4)
+            self.b.attack("b", "a", 6)
 
     def test_replay_rejected_without_mutation(self):
         self.b.attack("a", "b", 10)
