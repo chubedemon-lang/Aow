@@ -60,6 +60,25 @@ class MapOccupancy:
         """Local occupancy incarnation; never an APK protocol field."""
         return self._join_epochs.get(connection_id)
 
+    def prune(self):
+        """Reconcile occupancy after sessions closed outside MapOccupancy.
+
+        This is local defensive cleanup, not an APK network operation.
+        Returns the number of stale membership entries removed.
+        """
+        removed = 0
+        for map_id, members in tuple(self._members.items()):
+            for connection_id in tuple(members):
+                try:
+                    snap = self.registry.get(connection_id).snapshot
+                    valid = snap.phase is Phase.IN_MAP and snap.map_id == map_id
+                except RegistryError:
+                    valid = False
+                if not valid:
+                    self._discard(connection_id, map_id)
+                    removed += 1
+        return removed
+
     def members(self, map_id):
         if type(map_id) is not int or not 0 <= map_id <= 2**31 - 1:
             raise ValueError("invalid map identifier")
