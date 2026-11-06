@@ -29,12 +29,12 @@ class SyntheticFrameTests(unittest.TestCase):
     def test_oversized_header_rejected_without_body(self):
         decoder = SyntheticFrameDecoder(max_payload=4)
         with self.assertRaises(FrameError):
-            decoder.feed(b"\\x00\\x05")
+            decoder.feed(bytes([0, 5]))
         self.assertEqual(decoder.buffered_bytes, 0)
 
     def test_zero_length_rejected(self):
         with self.assertRaises(FrameError):
-            SyntheticFrameDecoder().feed(b"\\x00\\x00")
+            SyntheticFrameDecoder().feed(bytes([0, 0]))
 
     def test_encode_limits(self):
         with self.assertRaises(FrameError):
