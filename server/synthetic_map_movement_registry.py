@@ -31,6 +31,9 @@ class MapMovementRegistry:
                     and old.map_id == map_id and not old.closed):
                 raise MovementError("actor already spawned")
         actor = MovementState(map_id, start, max_step)
+        previous = self._actors.get(connection_id)
+        if previous is not None:
+            previous.close()
         self._actors[connection_id] = actor
         self._actor_epochs[connection_id] = epoch
         return actor.position
