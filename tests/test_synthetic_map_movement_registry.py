@@ -46,6 +46,46 @@ class MapMovementRegistryTests(unittest.TestCase):
         self.movement.spawn("a", Position(7, 7), 5)
         self.assertEqual(self.movement.position("a"), Position(7, 7))
 
+    def test_same_map_rejoin_rejects_stale_actor(self):
+        self.movement.spawn("a", Position(0, 0), 5)
+        old = self.movement._actors["a"]
+        first_epoch = self.maps.join_epoch("a")
+        self.maps.leave("a")
+        self.assertIsNone(self.maps.join_epoch("a"))
+        self.maps.join("a", 1)
+        self.assertNotEqual(first_epoch, self.maps.join_epoch("a"))
+        self.assertIsNone(self.movement.position("a"))
+        with self.assertRaises(MovementError):
+            self.movement.move("a", 1, Position(1, 0))
+        self.movement.spawn("a", Position(9, 9), 2)
+        self.assertTrue(old.closed)
+        self.assertEqual(self.movement.position("a"), Position(9, 9))
+
+    def test_same_map_rejoin_prune_removes_stale_actor(self):
+        self.movement.spawn("a", Position(0, 0), 5)
+        self.maps.leave("a")
+        self.maps.join("a", 1)
+        self.movement.prune()
+        self.assertFalse(self.movement._actors)
+        self.movement.spawn("a", Position(4, 4), 2)
+
+    def test_reused_connection_id_cannot_reuse_old_actor(self):
+        self.movement.spawn("a", Position(0, 0), 5)
+        self.maps.disconnect("a")
+        self.sessions.open("a")
+        self.sessions.authenticate("a", "fresh")
+        self.sessions.select_character("a", "fresh")
+        self.maps.join("a", 1)
+        with self.assertRaises(MovementError):
+            self.movement.move("a", 1, Position(1, 0))
+        self.movement.spawn("a", Position(2, 2), 3)
+
+    def test_failed_join_does_not_change_epoch(self):
+        first_epoch = self.maps.join_epoch("a")
+        with self.assertRaises(ValueError):
+            self.maps.join("a", -1)
+        self.assertEqual(self.maps.join_epoch("a"), first_epoch)
+
     def test_disconnect_prune_and_reuse(self):
         self.movement.spawn("a", Position(0, 0), 5)
         self.maps.disconnect("a")
