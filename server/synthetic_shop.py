@@ -63,6 +63,8 @@ class SyntheticShop:
         self._player(player_id)
         if type(quantity) is not int or not 1 <= quantity <= self.max_purchase_quantity:
             raise ShopError("invalid purchase quantity")
+        if not isinstance(offer_id, str) or not offer_id.strip():
+            raise ShopError("invalid offer id")
         if offer_id not in self.offers:
             raise ShopError("unknown offer")
         offer = self.offers[offer_id]
