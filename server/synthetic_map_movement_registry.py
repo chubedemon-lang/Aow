@@ -59,6 +59,13 @@ class MapMovementRegistry:
         if actor is not None:
             actor.close()
 
+    def disconnect(self, connection_id):
+        """Close actor, map membership and session together (local-only)."""
+        # Validate first: invalid IDs must not mutate any registry state.
+        session = self.maps.registry.get(connection_id)
+        self.clear(connection_id)
+        return self.maps.disconnect(connection_id)
+
     def prune(self):
         """Discard actors after leave/disconnect, including direct registry closes."""
         self.maps.prune()
