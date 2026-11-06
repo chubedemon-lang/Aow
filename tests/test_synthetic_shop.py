@@ -48,6 +48,15 @@ class SyntheticShopTests(unittest.TestCase):
             self.shop.purchase("alice", "weapon")
         self.assertEqual(self.shop.balance("alice"), 93)
 
+    def test_unhashable_and_blank_offer_ids_are_rejected(self):
+        self.shop.credit("alice", 100)
+        for offer_id in ([], {}, None, "", "  ", True):
+            with self.subTest(offer_id=offer_id):
+                with self.assertRaises(ShopError):
+                    self.shop.purchase("alice", offer_id)
+        self.assertEqual(self.shop.balance("alice"), 100)
+        self.assertEqual(self.inventory.snapshot("alice"), {})
+
     def test_unknown_offer_is_rejected(self):
         self.shop.credit("alice", 100)
         with self.assertRaises(ShopError):
