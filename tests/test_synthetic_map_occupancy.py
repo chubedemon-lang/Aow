@@ -62,6 +62,35 @@ class MapOccupancyTests(unittest.TestCase):
         self.assertFalse(self.maps.members(7))
         self.assertFalse(self.maps.members(8))
 
+    def test_join_reclaims_slot_after_external_close(self):
+        self.maps.join("a", 7)
+        self.registry.close("a")
+        self.maps.join("b", 7)
+        self.assertEqual(self.maps.members(7), frozenset({"b"}))
+        self.assertIsNone(self.maps.join_epoch("a"))
+        self.assertIsNotNone(self.maps.join_epoch("b"))
+
+    def test_join_reclaims_slot_after_external_leave(self):
+        self.maps.join("a", 7)
+        self.registry.get("a").leave_map()
+        self.maps.join("b", 7)
+        self.assertEqual(self.maps.members(7), frozenset({"b"}))
+
+    def test_live_occupant_still_blocks_capacity(self):
+        self.maps.join("a", 7)
+        before = self.maps.join_epoch("a")
+        with self.assertRaises(ValueError):
+            self.maps.join("b", 7)
+        self.assertEqual(self.maps.join_epoch("a"), before)
+        self.assertEqual(self.maps.members(7), frozenset({"a"}))
+
+    def test_invalid_join_does_not_prune_stale_members(self):
+        self.maps.join("a", 7)
+        self.registry.close("a")
+        with self.assertRaises(SessionError):
+            self.maps.join("b", -1)
+        self.assertEqual(self.maps.members(7), frozenset({"a"}))
+
     def test_constructor_validation(self):
         with self.assertRaises(TypeError):
             MapOccupancy(None)

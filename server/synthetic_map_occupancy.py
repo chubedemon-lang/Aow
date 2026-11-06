@@ -24,6 +24,9 @@ class MapOccupancy:
             raise SessionError("map join not allowed")
         if type(map_id) is not int or not 0 <= map_id <= 2**31 - 1:
             raise SessionError("invalid map identifier")
+        # Reconcile externally closed sessions before applying map capacity.
+        # A stale connection must never reserve a slot indefinitely.
+        self.prune()
         members = self._members.get(map_id, set())
         if len(members) >= self.capacity_per_map:
             raise ValueError("map capacity exceeded")
