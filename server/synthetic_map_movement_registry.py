@@ -59,6 +59,16 @@ class MapMovementRegistry:
         if actor is not None:
             actor.close()
 
+    def leave_map(self, connection_id):
+        """Leave current synthetic map and invalidate its movement actor.
+
+        Validate membership before mutation, so an invalid leave does not
+        close a live actor. This is not an APK protocol operation.
+        """
+        self._map_id(connection_id)
+        self.maps.leave(connection_id)
+        self.clear(connection_id)
+
     def disconnect(self, connection_id):
         """Close actor, map membership and session together (local-only)."""
         # Validate first: invalid IDs must not mutate any registry state.
