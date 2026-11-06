@@ -61,6 +61,7 @@ class MapMovementRegistry:
 
     def prune(self):
         """Discard actors after leave/disconnect, including direct registry closes."""
+        self.maps.prune()
         for key, actor in tuple(self._actors.items()):
             try:
                 if (self._map_id(key) != actor.map_id
