@@ -34,9 +34,11 @@ class SessionMovement:
 
     def spawn(self, session, start, max_step):
         snapshot = session.snapshot
+        # Revoke any previous actor even when this spawn request is invalid.
+        # Otherwise a closed or departed session can retain a live actor.
+        self.sync(session)
         if snapshot.state is not SessionState.IN_MAP:
             raise MovementError("session is not in a map")
-        self.sync(session)
         if self._actor is not None:
             raise MovementError("actor already spawned")
         # MovementState uses integer map IDs; the session lifecycle uses
