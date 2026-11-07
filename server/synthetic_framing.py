@@ -17,9 +17,12 @@ class LengthPrefixedFrames:
     A zero-length payload is permitted. Each instance owns a single stream.
     """
 
-    def __init__(self, max_payload: int = 1_048_576):
+    def __init__(self, max_payload: int = 1_048_576, max_chunk_bytes: int = 1_048_576):
         if not isinstance(max_payload, int) or isinstance(max_payload, bool) or not 1 <= max_payload <= 0xFFFFFFFF:
             raise ValueError("max_payload must be an integer between 1 and 2**32-1")
+        if type(max_chunk_bytes) is not int or max_chunk_bytes < 1:
+            raise ValueError("max_chunk_bytes must be a positive integer")
+        self.max_chunk_bytes = max_chunk_bytes
         self.max_payload = max_payload
         self._buffer = bytearray()
 
@@ -33,6 +36,9 @@ class LengthPrefixedFrames:
     def feed(self, chunk: bytes) -> list[bytes]:
         if not isinstance(chunk, bytes):
             raise TypeError("chunk must be bytes")
+        if len(chunk) > self.max_chunk_bytes:
+            self._buffer.clear()
+            raise FrameError("synthetic input chunk exceeds configured limit")
         self._buffer.extend(chunk)
         frames: list[bytes] = []
         offset = 0
