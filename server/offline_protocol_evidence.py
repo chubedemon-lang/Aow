@@ -12,6 +12,7 @@ ALLOWED_KINDS = frozenset({
     "player", "map", "movement", "inventory", "shop", "combat", "quest"
 })
 ALLOWED_STATUS = frozenset({"unverified", "verified", "rejected"})
+MAX_MANIFEST_RECORDS = 4096
 FIELDS = frozenset({
     "id", "kind", "status", "artifact_sha256", "method",
     "reproduction", "test_reference", "notes"
@@ -60,6 +61,8 @@ def validate_manifest(records):
     """Validate metadata-only manifest; reject duplicate evidence identifiers."""
     if not isinstance(records, list):
         raise EvidenceError("manifest must be a list")
+    if len(records) > MAX_MANIFEST_RECORDS:
+        raise EvidenceError("manifest exceeds maximum record count")
     seen = set()
     output = []
     for record in records:
