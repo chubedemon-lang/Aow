@@ -1,75 +1,72 @@
-"""Independent in-memory inventory model; NOT an observed AOW wire contract.
-
-No item IDs, stack limits or currencies are inferred from the original APK.
-"""
-from collections import defaultdict
-
+"""Session-scoped synthetic inventory; not an AOW protocol contract."""
+from dataclasses import dataclass
+from server.synthetic_session_lifecycle import SessionState
 
 class InventoryError(ValueError):
     pass
 
+@dataclass(frozen=True)
+class Stack:
+    item_id: str
+    quantity: int
 
-class Inventory:
-    def __init__(self, capacity=20, max_stack=99):
-        if type(capacity) is not int or capacity <= 0:
+class SessionInventory:
+    def __init__(self, capacity=32, max_stack=999):
+        if type(capacity) is not int or not 1 <= capacity <= 256:
             raise InventoryError("invalid capacity")
-        if type(max_stack) is not int or max_stack <= 0:
+        if type(max_stack) is not int or not 1 <= max_stack <= 1_000_000:
             raise InventoryError("invalid stack limit")
-        self.capacity = capacity
-        self.max_stack = max_stack
-        self._items = {}
+        self.capacity, self.max_stack = capacity, max_stack
+        self._session = self._epoch = self._items = None
 
-    @staticmethod
-    def _validate(item_id, quantity):
-        if type(item_id) is not int or item_id <= 0:
+    @property
+    def items(self):
+        return None if self._items is None else tuple(
+            Stack(k, v) for k, v in sorted(self._items.items()))
+
+    def sync(self, session):
+        snapshot = session.snapshot
+        if (session is not self._session or snapshot is not self._epoch
+                or snapshot.state not in (SessionState.CHARACTER_READY, SessionState.IN_MAP)):
+            self._session = self._epoch = self._items = None
+        return self.items
+
+    def initialize(self, session):
+        self.sync(session)
+        if session.snapshot.state is not SessionState.CHARACTER_READY:
+            raise InventoryError("character not ready")
+        if self._items is not None:
+            raise InventoryError("already initialized")
+        self._session, self._epoch, self._items = session, session.snapshot, {}
+        return self.items
+
+    def _check(self, session, item_id, quantity):
+        self.sync(session)
+        if self._items is None:
+            raise InventoryError("inventory not initialized")
+        if (not isinstance(item_id, str) or not 1 <= len(item_id) <= 128
+                or not all(c.isascii() and (c.isalnum() or c in "_-") for c in item_id)):
             raise InventoryError("invalid item id")
-        if type(quantity) is not int or quantity <= 0:
+        if type(quantity) is not int or not 1 <= quantity <= self.max_stack:
             raise InventoryError("invalid quantity")
 
-    def snapshot(self):
-        return dict(self._items)
-
-    def count(self, item_id):
-        if type(item_id) is not int or item_id <= 0:
-            raise InventoryError("invalid item id")
-        return self._items.get(item_id, 0)
-
-    def apply(self, changes):
-        """Atomically apply signed quantities; reject overflow/underflow.
-
-        Changes must be a list of (item_id, signed_delta) pairs. Repeated IDs
-        are aggregated before validation, so input order cannot affect results.
-        """
-        if not isinstance(changes, (list, tuple)):
-            raise InventoryError("changes must be a sequence")
-        totals = defaultdict(int)
-        for entry in changes:
-            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
-                raise InventoryError("invalid change")
-            item_id, delta = entry
-            if type(item_id) is not int or item_id <= 0:
-                raise InventoryError("invalid item id")
-            if type(delta) is not int or delta == 0:
-                raise InventoryError("invalid delta")
-            totals[item_id] += delta
-        candidate = self._items.copy()
-        for item_id, delta in totals.items():
-            updated = candidate.get(item_id, 0) + delta
-            if updated < 0 or updated > self.max_stack:
-                raise InventoryError("stack limit or insufficient items")
-            if updated == 0:
-                candidate.pop(item_id, None)
-            else:
-                candidate[item_id] = updated
-        if len(candidate) > self.capacity:
+    def add(self, session, item_id, quantity):
+        self._check(session, item_id, quantity)
+        previous = self._items.get(item_id, 0)
+        if previous + quantity > self.max_stack:
+            raise InventoryError("stack overflow")
+        if previous == 0 and len(self._items) >= self.capacity:
             raise InventoryError("inventory full")
-        self._items = candidate
-        return self.snapshot()
+        self._items[item_id] = previous + quantity
+        return self.items
 
-    def add(self, item_id, quantity):
-        self._validate(item_id, quantity)
-        return self.apply([(item_id, quantity)])
-
-    def remove(self, item_id, quantity):
-        self._validate(item_id, quantity)
-        return self.apply([(item_id, -quantity)])
+    def remove(self, session, item_id, quantity):
+        self._check(session, item_id, quantity)
+        previous = self._items.get(item_id, 0)
+        if previous < quantity:
+            raise InventoryError("insufficient items")
+        if previous == quantity:
+            del self._items[item_id]
+        else:
+            self._items[item_id] = previous - quantity
+        return self.items
