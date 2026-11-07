@@ -11,10 +11,13 @@ class FrameError(ValueError):
 
 
 class SyntheticFrameDecoder:
-    def __init__(self, max_payload=4096):
+    def __init__(self, max_payload=4096, max_chunk_bytes=1048576):
         if type(max_payload) is not int or not 1 <= max_payload <= 65535:
             raise ValueError("max_payload must be 1..65535")
+        if type(max_chunk_bytes) is not int or max_chunk_bytes < 1:
+            raise ValueError("max_chunk_bytes must be a positive integer")
         self.max_payload = max_payload
+        self.max_chunk_bytes = max_chunk_bytes
         self._buffer = bytearray()
 
     @property
@@ -24,11 +27,14 @@ class SyntheticFrameDecoder:
     def feed(self, data):
         """Return complete payloads; retain partial bytes for the next feed.
 
-        Reject oversized declared lengths immediately, even before the payload
-        arrives. On any invalid length, clear buffered data and fail closed.
+        Limit each incoming chunk before copying it into the internal buffer.
+        Reject invalid lengths immediately and clear buffered data on failure.
         """
         if not isinstance(data, bytes):
             raise TypeError("data must be immutable bytes")
+        if len(data) > self.max_chunk_bytes:
+            self._buffer.clear()
+            raise FrameError("synthetic input chunk exceeds configured limit")
         self._buffer.extend(data)
         frames = []
         while len(self._buffer) >= 2:
