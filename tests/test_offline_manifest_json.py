@@ -28,6 +28,10 @@ class OfflineManifestJsonTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "duplicate JSON object key"):
             load_manifest_json(b'[{"id":"a","id":"b"}]')
 
+    def test_nested_duplicate_key_preserves_error(self):
+        with self.assertRaisesRegex(EvidenceError, "duplicate JSON object key"):
+            load_manifest_json(b'[{"metadata":{"kind":"a","kind":"b"}}]')
+
     def test_nonfinite_constant(self):
         with self.assertRaises(EvidenceError):
             load_manifest_json(b'[NaN]')
