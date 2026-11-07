@@ -41,6 +41,8 @@ def load_manifest_json(payload):
             text, object_pairs_hook=_unique_object_pairs,
             parse_constant=_reject_constant,
         )
+    except EvidenceError:
+        raise
     except (ValueError, TypeError, RecursionError) as exc:
         raise EvidenceError("invalid manifest JSON") from exc
     return validate_manifest(records)
