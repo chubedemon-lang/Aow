@@ -1,6 +1,6 @@
 """Synthetic inventory regression tests; no AOW APK assumptions."""
 import unittest
-from server.synthetic_inventory import InventoryError, SessionInventory, Stack
+from server.synthetic_session_inventory import InventoryError, SessionInventory, Stack
 from server.synthetic_session_lifecycle import SyntheticSession
 
 def ready():
