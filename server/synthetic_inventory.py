@@ -1,75 +1,28 @@
-"""Independent in-memory inventory model; NOT an observed AOW wire contract.
-
-No item IDs, stack limits or currencies are inferred from the original APK.
-"""
-from collections import defaultdict
-
-
-class InventoryError(ValueError):
-    pass
-
-
+"""Synthetic inventory only; no AOW protocol assumptions."""
 class Inventory:
-    def __init__(self, capacity=20, max_stack=99):
-        if type(capacity) is not int or capacity <= 0:
-            raise InventoryError("invalid capacity")
-        if type(max_stack) is not int or max_stack <= 0:
-            raise InventoryError("invalid stack limit")
-        self.capacity = capacity
-        self.max_stack = max_stack
-        self._items = {}
+    def __init__(self, capacity=100):
+        if type(capacity) is not int or not 1 <= capacity <= 10000:
+            raise ValueError("capacity")
+        self.capacity, self.stacks, self.revision = capacity, {}, 0
 
-    @staticmethod
-    def _validate(item_id, quantity):
-        if type(item_id) is not int or item_id <= 0:
-            raise InventoryError("invalid item id")
-        if type(quantity) is not int or quantity <= 0:
-            raise InventoryError("invalid quantity")
-
-    def snapshot(self):
-        return dict(self._items)
-
-    def count(self, item_id):
-        if type(item_id) is not int or item_id <= 0:
-            raise InventoryError("invalid item id")
-        return self._items.get(item_id, 0)
-
-    def apply(self, changes):
-        """Atomically apply signed quantities; reject overflow/underflow.
-
-        Changes must be a list of (item_id, signed_delta) pairs. Repeated IDs
-        are aggregated before validation, so input order cannot affect results.
-        """
-        if not isinstance(changes, (list, tuple)):
-            raise InventoryError("changes must be a sequence")
-        totals = defaultdict(int)
-        for entry in changes:
-            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
-                raise InventoryError("invalid change")
-            item_id, delta = entry
-            if type(item_id) is not int or item_id <= 0:
-                raise InventoryError("invalid item id")
-            if type(delta) is not int or delta == 0:
-                raise InventoryError("invalid delta")
-            totals[item_id] += delta
-        candidate = self._items.copy()
-        for item_id, delta in totals.items():
-            updated = candidate.get(item_id, 0) + delta
-            if updated < 0 or updated > self.max_stack:
-                raise InventoryError("stack limit or insufficient items")
-            if updated == 0:
-                candidate.pop(item_id, None)
+    def apply(self, changes, revision):
+        if type(revision) is not int or revision != self.revision:
+            raise ValueError("revision")
+        if not isinstance(changes, dict) or not changes:
+            raise ValueError("changes")
+        updated = self.stacks.copy()
+        for key, delta in changes.items():
+            if not isinstance(key, str) or not 1 <= len(key) <= 128 or type(delta) is not int or delta == 0:
+                raise ValueError("delta")
+            count = updated.get(key, 0) + delta
+            if not 0 <= count <= 2147483647:
+                raise ValueError("quantity")
+            if count:
+                updated[key] = count
             else:
-                candidate[item_id] = updated
-        if len(candidate) > self.capacity:
-            raise InventoryError("inventory full")
-        self._items = candidate
-        return self.snapshot()
-
-    def add(self, item_id, quantity):
-        self._validate(item_id, quantity)
-        return self.apply([(item_id, quantity)])
-
-    def remove(self, item_id, quantity):
-        self._validate(item_id, quantity)
-        return self.apply([(item_id, -quantity)])
+                updated.pop(key, None)
+        if len(updated) > self.capacity:
+            raise ValueError("capacity")
+        self.stacks = updated
+        self.revision += 1
+        return self.revision
