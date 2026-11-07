@@ -16,6 +16,7 @@ class SessionMovement:
     def __init__(self):
         self._actor = None
         self._map = None
+        self._snapshot = None
 
     @property
     def actor(self):
@@ -23,11 +24,12 @@ class SessionMovement:
 
     def sync(self, session):
         snapshot = session.snapshot
-        if snapshot.state is not SessionState.IN_MAP or snapshot.map_id != self._map:
+        if snapshot.state is not SessionState.IN_MAP or snapshot.map_id != self._map or snapshot is not self._snapshot:
             if self._actor is not None:
                 self._actor.close()
             self._actor = None
             self._map = None
+            self._snapshot = None
         return self._actor
 
     def spawn(self, session, start, max_step):
@@ -43,11 +45,12 @@ class SessionMovement:
         actor = MovementState(0, start, max_step)
         self._actor = actor
         self._map = snapshot.map_id
+        self._snapshot = snapshot
         return actor
 
     def move(self, session, tick, target):
         snapshot = session.snapshot
-        if snapshot.state is not SessionState.IN_MAP or snapshot.map_id != self._map:
+        if snapshot.state is not SessionState.IN_MAP or snapshot.map_id != self._map or snapshot is not self._snapshot:
             self.sync(session)
             raise MovementError("session map is not active")
         if self._actor is None:
