@@ -1,78 +1,72 @@
-"""Synthetic inventory regression tests; no AOW APK assumptions."""
 import unittest
-from server.synthetic_inventory import InventoryError, SessionInventory, Stack
-from server.synthetic_session_lifecycle import SyntheticSession
 
-def ready():
-    s = SyntheticSession()
-    s.authenticate()
-    s.select_character("hero")
-    return s
+from server.synthetic_inventory import Inventory, InventoryError
+
 
 class InventoryTests(unittest.TestCase):
-    def test_add_remove_and_sorted_snapshots(self):
-        s, inv = ready(), SessionInventory()
-        self.assertEqual(inv.initialize(s), ())
-        inv.add(s, "b", 3)
-        snapshot = inv.add(s, "a", 2)
-        self.assertEqual(snapshot, (Stack("a", 2), Stack("b", 3)))
-        inv.remove(s, "b", 3)
-        self.assertEqual(inv.items, (Stack("a", 2),))
-        self.assertEqual(snapshot[1].quantity, 3)
+    def test_add_remove_snapshot(self):
+        inv = Inventory(capacity=2, max_stack=10)
+        inv.add(101, 5)
+        old = inv.snapshot()
+        inv.remove(101, 2)
+        self.assertEqual(old, {101: 5})
+        self.assertEqual(inv.snapshot(), {101: 3})
+        inv.remove(101, 3)
+        self.assertEqual(inv.snapshot(), {})
 
-    def test_capacity_and_overflow_are_atomic(self):
-        s, inv = ready(), SessionInventory(capacity=1, max_stack=5)
-        inv.initialize(s)
-        inv.add(s, "a", 4)
-        for item, count in (("a", 2), ("b", 1)):
+    def test_insufficient_items_preserves_state(self):
+        inv = Inventory()
+        inv.add(1, 2)
+        with self.assertRaises(InventoryError):
+            inv.remove(1, 3)
+        self.assertEqual(inv.count(1), 2)
+
+    def test_stack_overflow_preserves_state(self):
+        inv = Inventory(max_stack=3)
+        inv.add(1, 3)
+        with self.assertRaises(InventoryError):
+            inv.add(1, 1)
+        self.assertEqual(inv.snapshot(), {1: 3})
+
+    def test_capacity_failure_is_atomic(self):
+        inv = Inventory(capacity=1)
+        inv.add(1, 1)
+        with self.assertRaises(InventoryError):
+            inv.apply([(1, -1), (2, 1), (3, 1)])
+        self.assertEqual(inv.snapshot(), {1: 1})
+
+    def test_exchange_atomic(self):
+        inv = Inventory(capacity=1)
+        inv.add(1, 2)
+        self.assertEqual(inv.apply([(1, -2), (2, 1)]), {2: 1})
+
+    def test_duplicate_deltas_aggregate(self):
+        inv = Inventory(max_stack=5)
+        inv.apply([(1, 3), (1, 2)])
+        self.assertEqual(inv.count(1), 5)
+        with self.assertRaises(InventoryError):
+            inv.apply([(1, -2), (1, 3)])
+        self.assertEqual(inv.count(1), 5)
+
+    def test_reject_invalid_input(self):
+        inv = Inventory()
+        for changes in (None, {}, [(True, 1)], [(1, True)], [(1, 0)],
+                        [(0, 1)], [(1, 1, 2)], ["bad"], [(1, 1), (2, 0)]):
             with self.assertRaises(InventoryError):
-                inv.add(s, item, count)
-            self.assertEqual(inv.items, (Stack("a", 4),))
+                inv.apply(changes)
+        self.assertEqual(inv.snapshot(), {})
 
-    def test_invalid_types_and_underflow_are_atomic(self):
-        s, inv = ready(), SessionInventory()
-        inv.initialize(s)
-        inv.add(s, "a", 3)
-        for item, count in (("a", True), ("a", -1), ("a", 4),
-                            ("bad/id", 1), ("a", 1.5)):
+    def test_invalid_configuration(self):
+        for kwargs in ({"capacity": 0}, {"capacity": True},
+                       {"max_stack": 0}, {"max_stack": False}):
             with self.assertRaises(InventoryError):
-                inv.remove(s, item, count)
-            self.assertEqual(inv.items, (Stack("a", 3),))
+                Inventory(**kwargs)
 
-    def test_session_close_revokes_on_rejected_operation(self):
-        s, inv = ready(), SessionInventory()
-        inv.initialize(s)
-        inv.add(s, "a", 1)
-        s.close()
-        with self.assertRaises(InventoryError):
-            inv.add(s, "a", 1)
-        self.assertIsNone(inv.items)
+    def test_instances_isolated(self):
+        first, second = Inventory(), Inventory()
+        first.add(1, 1)
+        self.assertEqual(second.snapshot(), {})
 
-    def test_map_epoch_revokes_inventory(self):
-        s, inv = ready(), SessionInventory()
-        inv.initialize(s)
-        s.join_map("map_a")
-        with self.assertRaises(InventoryError):
-            inv.remove(s, "a", 1)
-        self.assertIsNone(inv.items)
-
-    def test_cross_session_isolation(self):
-        a, b, inv = ready(), ready(), SessionInventory()
-        inv.initialize(a)
-        inv.add(a, "a", 1)
-        with self.assertRaises(InventoryError):
-            inv.add(b, "a", 1)
-        self.assertIsNone(inv.items)
-        self.assertEqual(inv.initialize(b), ())
-
-    def test_constructor_limits_and_duplicate_init(self):
-        for cap, stack in ((0, 10), (True, 10), (1, 0), (1, True)):
-            with self.assertRaises(InventoryError):
-                SessionInventory(cap, stack)
-        s, inv = ready(), SessionInventory()
-        inv.initialize(s)
-        with self.assertRaises(InventoryError):
-            inv.initialize(s)
 
 if __name__ == "__main__":
     unittest.main()
