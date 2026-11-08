@@ -23,14 +23,14 @@ class RegistryMovementGate:
             raise RegistryMovementError("session not in requested map")
         if any(type(value) is not int or abs(value) > self.limit for value in (x, y)):
             raise RegistryMovementError("invalid coordinates")
-        self._positions[id(session)] = (map_id, x, y)
+        self._positions[id(session)] = (snapshot, x, y)
         return (x, y)
 
     def position(self, registry, connection_id):
         session = registry.get(connection_id)
         snapshot = session.snapshot
         record = self._positions.get(id(session))
-        if snapshot.phase is not Phase.IN_MAP or record is None or record[0] != snapshot.map_id:
+        if snapshot.phase is not Phase.IN_MAP or record is None or record[0] is not snapshot:
             self._positions.pop(id(session), None)
             return None
         return record[1:]
