@@ -59,6 +59,25 @@ class SessionRegistry:
             raise RegistryError("character already active")
         session.select_character(character_id)
 
+
+    def transfer_connection(self, old_connection_id, new_connection_id, *, verified=False):
+        """Atomically rebind a local connection after external verification.
+
+        This does not authenticate the new connection or represent an AOW
+        reconnect packet. Caller must independently verify the handoff.
+        """
+        if verified is not True:
+            raise RegistryError("external verification required")
+        old_key = self._key(old_connection_id)
+        new_key = self._key(new_connection_id)
+        if old_key not in self._sessions:
+            raise RegistryError("unknown source connection")
+        if new_key in self._sessions:
+            raise RegistryError("target connection already registered")
+        session = self._sessions.pop(old_key)
+        self._sessions[new_key] = session
+        return session
+
     def close(self, connection_id):
         key = self._key(connection_id)
         session = self._sessions.pop(key, None)
