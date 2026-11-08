@@ -45,6 +45,7 @@ class SessionRegistry:
         # Validate the transition before changing any shared registry state.
         if session.snapshot.phase is not Phase.NEW:
             raise SessionError("authentication not allowed")
+        account_id = Session._identifier(account_id)
         if any(other is not session and other.snapshot.account_id == account_id
                for other in self._sessions.values()):
             raise RegistryError("account already active")
@@ -54,6 +55,7 @@ class SessionRegistry:
         session = self.get(connection_id)
         if session.snapshot.phase is not Phase.AUTHENTICATED:
             raise SessionError("character selection not allowed")
+        character_id = Session._identifier(character_id)
         if any(other is not session and other.snapshot.character_id == character_id
                for other in self._sessions.values()):
             raise RegistryError("character already active")
