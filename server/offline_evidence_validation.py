@@ -46,7 +46,7 @@ def validate_record(record):
         if value != value.strip() or not value.strip():
             raise EvidenceError("invalid whitespace in " + field)
         # Keep public metadata free of URLs, network locations and credential hints.
-        if re.search(r"(?i)(?:https?://|www\\.|\\b(?:token|password|secret|apikey|api_key)\\s*[:=]|\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b|@)", value):
+        if re.search(r"(?i)(?:https?://|www\.|\b(?:token|password|secret|apikey|api_key)\s*[:=]|\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b|@)", value):
             raise EvidenceError("sensitive locator in " + field)
     if type(record["verified"]) is not bool:
         raise EvidenceError("verified must be boolean")
