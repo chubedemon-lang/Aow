@@ -41,7 +41,7 @@ class SessionShop:
         wallet.sync(session)
         inventory.sync(session)
         if (type(quantity) is not int or quantity <= 0
-                or item_id not in self._prices):
+                or not isinstance(item_id, str) or item_id not in self._prices):
             raise ShopError("invalid purchase")
         if wallet.balance is None or inventory.items is None:
             raise ShopError("uninitialized resources")
