@@ -52,5 +52,27 @@ class EvidenceValidationTests(unittest.TestCase):
                     validate_record({**self.valid, field: value})
 
 
+    def test_rejects_sensitive_locations_and_credential_hints(self):
+        examples = (
+            "https://example.org/trace",
+            "www.example.org",
+            "192.168.1.20",
+            "token=sample",
+            "password: sample",
+            "api_key=sample",
+            "person@example.org",
+            " trailing ",
+        )
+        for field in ("source", "observation"):
+            for value in examples:
+                with self.subTest(field=field, value=value):
+                    with self.assertRaises(EvidenceError):
+                        validate_record({**self.valid, field: value})
+
+    def test_rejects_whitespace_only_even_if_unverified(self):
+        for field in ("source", "observation"):
+            with self.subTest(field=field), self.assertRaises(EvidenceError):
+                validate_record({**self.valid, field: "   ", "verified": False})
+
 if __name__ == "__main__":
     unittest.main()
