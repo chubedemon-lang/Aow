@@ -24,8 +24,7 @@ class MapCombatGateTests(unittest.TestCase):
         self.assertEqual(self.av.vitals.hp, 100)
 
     def test_cross_map_rejected_unchanged(self):
-        self.b.leave_map()
-        self.b.join_map("other")
+        self.b, self.bv = ready("b", "other")
         with self.assertRaises(CombatGateError):
             apply_hit(self.a, self.b, self.bv, 5)
         self.assertEqual(self.bv.vitals.hp, 100)
