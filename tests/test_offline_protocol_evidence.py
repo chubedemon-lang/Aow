@@ -53,6 +53,12 @@ class EvidenceManifestTests(unittest.TestCase):
         with self.assertRaises(EvidenceError):
             validate_record(sample(notes="unsafe\\nmetadata".replace("\\n", "\n")))
 
+    def test_rejects_invisible_unicode_metadata(self):
+        for invisible in ("\u200b", "\u202e", "\u2060"):
+            with self.subTest(invisible=repr(invisible)):
+                with self.assertRaises(EvidenceError):
+                    validate_record(sample(notes="safe" + invisible + "text"))
+
     def test_manifest_does_not_mutate_input(self):
         original = sample(notes="  local-only  ")
         result = validate_manifest([original])

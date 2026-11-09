@@ -36,7 +36,7 @@ def validate_record(record):
         value = record[key]
         if not isinstance(value, str) or not value.strip() or len(value) > 512:
             raise EvidenceError("invalid metadata field: " + key)
-        if any(ord(c) < 32 or ord(c) == 127 for c in value):
+        if not value.isprintable():
             raise EvidenceError("control character in metadata")
         result[key] = value.strip()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", result["id"]):
