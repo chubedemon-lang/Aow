@@ -62,6 +62,51 @@ class InventoryTests(unittest.TestCase):
             with self.assertRaises(InventoryError):
                 Inventory(**kwargs)
 
+    def test_reject_unbounded_batch_without_mutation(self):
+        inv = Inventory()
+        inv.add(1, 2)
+        with self.assertRaises(InventoryError):
+            inv.apply([(1, 1)] * 4097)
+        self.assertEqual(inv.snapshot(), {1: 2})
+
+    def test_reject_extreme_identifiers_and_deltas(self):
+        inv = Inventory()
+        for changes in ([(2**31, 1)], [(1, 2**31)], [(1, -(2**31))]):
+            with self.assertRaises(InventoryError):
+                inv.apply(changes)
+        self.assertEqual(inv.snapshot(), {})
+
+    def test_reject_excessive_configuration(self):
+        for kwargs in ({"capacity": 4097}, {"max_stack": 2**31}):
+            with self.assertRaises(InventoryError):
+                Inventory(**kwargs)
+
+    def test_maximum_allowed_identifiers_and_stack(self):
+        inv = Inventory(capacity=1, max_stack=2**31 - 1)
+        self.assertEqual(inv.add(2**31 - 1, 2**31 - 1),
+                         {2**31 - 1: 2**31 - 1})
+        with self.assertRaises(InventoryError):
+            inv.add(2**31 - 1, 1)
+        self.assertEqual(inv.count(2**31 - 1), 2**31 - 1)
+
+    def test_repeated_deltas_cancel_atomically(self):
+        inv = Inventory(capacity=1, max_stack=2)
+        inv.add(1, 2)
+        self.assertEqual(inv.apply([(1, 2), (1, -2)]), {1: 2})
+        with self.assertRaises(InventoryError):
+            inv.apply([(1, -2), (2, 1), (3, 1)])
+        self.assertEqual(inv.snapshot(), {1: 2})
+
+    def test_reject_non_integer_quantities_without_mutation(self):
+        inv = Inventory()
+        inv.add(1, 1)
+        for quantity in (True, False, 1.0, "1", None):
+            with self.assertRaises(InventoryError):
+                inv.add(1, quantity)
+            with self.assertRaises(InventoryError):
+                inv.remove(1, quantity)
+        self.assertEqual(inv.snapshot(), {1: 1})
+
     def test_instances_isolated(self):
         first, second = Inventory(), Inventory()
         first.add(1, 1)
