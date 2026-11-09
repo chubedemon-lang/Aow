@@ -33,17 +33,22 @@ class SyntheticSession:
         if self.phase is not expected:
             raise SessionError(f"expected {expected.name}, got {self.phase.name}")
 
+    @staticmethod
+    def _validate_identifier(value: str, label: str) -> None:
+        """Bound synthetic identifiers and reject control characters."""
+        if (type(value) is not str or not value.strip() or len(value) > 128
+                or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)):
+            raise SessionError(f"{label} must be a nonempty printable string (max 128)")
+
     def authenticate(self, account_id: str) -> None:
         self._require(Phase.CONNECTED)
-        if not isinstance(account_id, str) or not account_id.strip():
-            raise SessionError("account_id must be a nonempty string")
+        self._validate_identifier(account_id, "account_id")
         self.account_id = account_id
         self.phase = Phase.AUTHENTICATED
 
     def select_player(self, player_id: str) -> None:
         self._require(Phase.AUTHENTICATED)
-        if not isinstance(player_id, str) or not player_id.strip():
-            raise SessionError("player_id must be a nonempty string")
+        self._validate_identifier(player_id, "player_id")
         self.player_id = player_id
         self.phase = Phase.PLAYER_SELECTED
 
