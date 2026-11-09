@@ -62,6 +62,25 @@ class InventoryTests(unittest.TestCase):
             with self.assertRaises(InventoryError):
                 Inventory(**kwargs)
 
+    def test_reject_unbounded_batch_without_mutation(self):
+        inv = Inventory()
+        inv.add(1, 2)
+        with self.assertRaises(InventoryError):
+            inv.apply([(1, 1)] * 4097)
+        self.assertEqual(inv.snapshot(), {1: 2})
+
+    def test_reject_extreme_identifiers_and_deltas(self):
+        inv = Inventory()
+        for changes in ([(2**31, 1)], [(1, 2**31)], [(1, -(2**31))]):
+            with self.assertRaises(InventoryError):
+                inv.apply(changes)
+        self.assertEqual(inv.snapshot(), {})
+
+    def test_reject_excessive_configuration(self):
+        for kwargs in ({"capacity": 4097}, {"max_stack": 2**31}):
+            with self.assertRaises(InventoryError):
+                Inventory(**kwargs)
+
     def test_instances_isolated(self):
         first, second = Inventory(), Inventory()
         first.add(1, 1)
