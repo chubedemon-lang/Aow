@@ -24,6 +24,7 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(summary["verified_domains"], [])
         self.assertEqual(summary["verified_records"], 0)
         self.assertEqual(summary["total_records"], 0)
+        self.assertIs(summary["compatibility_confirmed"], False)
 
     def test_unverified_is_not_counted_as_verified(self):
         summary = evidence_coverage([record("sample1")])
@@ -39,6 +40,20 @@ class CoverageTests(unittest.TestCase):
         summary = evidence_coverage([record("sample3", status="verified")])
         self.assertEqual(summary["verified_domains"], ["framing"])
         self.assertEqual(summary["verified_records"], 1)
+        self.assertIs(summary["compatibility_confirmed"], False)
+
+    def test_mixed_statuses_never_claim_compatibility(self):
+        entries = [
+            record("verified-frame", kind="framing", status="verified"),
+            record("verified-login", kind="login", status="verified"),
+            record("pending", kind="login", status="unverified"),
+            record("rejected-map", kind="map", status="rejected"),
+        ]
+        summary = evidence_coverage(entries)
+        self.assertEqual(summary["total_records"], 4)
+        self.assertEqual(summary["verified_records"], 2)
+        self.assertEqual(summary["verified_domains"], ["framing", "login"])
+        self.assertIs(summary["compatibility_confirmed"], False)
 
     def test_duplicate_ids_rejected(self):
         with self.assertRaises(EvidenceError):
