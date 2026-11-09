@@ -42,6 +42,20 @@ class SyntheticSessionTests(unittest.TestCase):
                 s.select_player(value)
         self.assertEqual(s.phase, Phase.AUTHENTICATED)
 
+    def test_identifier_boundaries_and_controls(self):
+        s = SyntheticSession()
+        for value in ("a" * 129, "name\nline", "name\x00", "name\x7f", "zero\u200bwidth"):
+            with self.subTest(value=repr(value)), self.assertRaises(SessionError):
+                s.authenticate(value)
+            self.assertEqual(s.phase, Phase.CONNECTED)
+        s.authenticate("a" * 128)
+        for value in ("p" * 129, "hero\r", "hero\t", "hero\x7f", "hidden\u202econtrol"):
+            with self.subTest(value=repr(value)), self.assertRaises(SessionError):
+                s.select_player(value)
+            self.assertEqual(s.phase, Phase.AUTHENTICATED)
+        s.select_player("p" * 128)
+        self.assertEqual(s.phase, Phase.PLAYER_SELECTED)
+
     def test_invalid_map_does_not_mutate_state(self):
         s = SyntheticSession()
         s.authenticate("one")
