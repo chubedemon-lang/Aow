@@ -37,7 +37,7 @@ class SyntheticSession:
     def _validate_identifier(value: str, label: str) -> None:
         """Bound synthetic identifiers and reject control characters."""
         if (type(value) is not str or not value.strip() or len(value) > 128
-                or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)):
+                or not value.isprintable()):
             raise SessionError(f"{label} must be a nonempty printable string (max 128)")
 
     def authenticate(self, account_id: str) -> None:
