@@ -44,12 +44,12 @@ class SyntheticSessionTests(unittest.TestCase):
 
     def test_identifier_boundaries_and_controls(self):
         s = SyntheticSession()
-        for value in ("a" * 129, "name\\nline", "name\\x00", "name\\x7f"):
+        for value in ("a" * 129, "name\nline", "name\x00", "name\x7f"):
             with self.subTest(value=repr(value)), self.assertRaises(SessionError):
                 s.authenticate(value)
             self.assertEqual(s.phase, Phase.CONNECTED)
         s.authenticate("a" * 128)
-        for value in ("p" * 129, "hero\\r", "hero\\t", "hero\\x7f"):
+        for value in ("p" * 129, "hero\r", "hero\t", "hero\x7f"):
             with self.subTest(value=repr(value)), self.assertRaises(SessionError):
                 s.select_player(value)
             self.assertEqual(s.phase, Phase.AUTHENTICATED)
