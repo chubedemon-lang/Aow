@@ -18,6 +18,7 @@ def evidence_coverage(records):
             kind for kind, statuses in counts.items() if statuses["verified"] > 0
         ),
         "total_records": len(validated),
+        "compatibility_confirmed": False,  # Metadata cannot prove wire compatibility.
         "verified_records": sum(
             statuses["verified"] for statuses in counts.values()
         ),
