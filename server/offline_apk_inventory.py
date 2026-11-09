@@ -6,6 +6,7 @@ contents, URLs, credentials or packet formats are emitted.
 from collections import Counter
 from dataclasses import dataclass
 import hashlib
+import stat
 from pathlib import Path
 import zipfile
 
@@ -47,6 +48,10 @@ def inventory_apk(path):
             total = 0
             counts = Counter()
             for member in members:
+                # Unix ZIP metadata can encode symlinks even when the entry name
+                # looks like an ordinary file. Refuse these ambiguous inputs.
+                if member.create_system == 3 and stat.S_IFMT(member.external_attr >> 16) == stat.S_IFLNK:
+                    raise ApkInventoryError("symlink archive member")
                 if member.is_dir():
                     continue
                 if member.flag_bits & 0x1:
