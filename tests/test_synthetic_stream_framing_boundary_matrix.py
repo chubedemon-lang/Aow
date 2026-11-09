@@ -39,8 +39,12 @@ class FramingBoundaryMatrixTests(unittest.TestCase):
                     decoder = FixtureFrameDecoder(4)
                     if cut < 4:
                         self.assertEqual(decoder.feed(wire[:cut]), [])
-                    with self.assertRaises(FixtureFrameError):
-                        decoder.feed(wire[cut:])
+                        with self.assertRaises(FixtureFrameError):
+                            decoder.feed(wire[cut:])
+                    else:
+                        # A complete invalid header must fail immediately.
+                        with self.assertRaises(FixtureFrameError):
+                            decoder.feed(wire)
                     self.assertEqual(decoder.buffered_bytes, 0)
                     with self.assertRaises(FixtureFrameError):
                         decoder.feed(b"")
