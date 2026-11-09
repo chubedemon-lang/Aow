@@ -1,9 +1,11 @@
-"""In-memory synthetic player lease registry; not an AOW protocol implementation.
+"""Thread-safe in-memory synthetic player lease registry.
 
-Prevents two local fixture connections from claiming the same player at once.
-No persistence, wire format, or real APK identity semantics are assumed.
+This protects local fixture ownership only. It is not an AOW protocol or
+identity implementation and provides no persistence across processes.
 """
 from __future__ import annotations
+
+from threading import RLock
 
 
 class PlayerLeaseError(ValueError):
@@ -17,6 +19,7 @@ class PlayerLeaseRegistry:
         self._max_players = max_players
         self._owners: dict[str, str] = {}
         self._players_by_connection: dict[str, str] = {}
+        self._lock = RLock()
 
     @staticmethod
     def _identifier(value: str) -> None:
@@ -24,29 +27,33 @@ class PlayerLeaseRegistry:
             raise PlayerLeaseError("invalid fixture identifier")
 
     def acquire(self, connection_id: str, player_id: str) -> None:
-        self._identifier(connection_id)
-        self._identifier(player_id)
-        if connection_id in self._players_by_connection:
-            raise PlayerLeaseError("connection already owns a player")
-        if player_id in self._owners:
-            raise PlayerLeaseError("player already leased")
-        if len(self._owners) >= self._max_players:
-            raise PlayerLeaseError("registry full")
-        self._owners[player_id] = connection_id
-        self._players_by_connection[connection_id] = player_id
+        with self._lock:
+            self._identifier(connection_id)
+            self._identifier(player_id)
+            if connection_id in self._players_by_connection:
+                raise PlayerLeaseError("connection already owns a player")
+            if player_id in self._owners:
+                raise PlayerLeaseError("player already leased")
+            if len(self._owners) >= self._max_players:
+                raise PlayerLeaseError("registry full")
+            self._owners[player_id] = connection_id
+            self._players_by_connection[connection_id] = player_id
 
     def release(self, connection_id: str) -> bool:
-        self._identifier(connection_id)
-        player_id = self._players_by_connection.pop(connection_id, None)
-        if player_id is None:
-            return False
-        del self._owners[player_id]
-        return True
+        with self._lock:
+            self._identifier(connection_id)
+            player_id = self._players_by_connection.pop(connection_id, None)
+            if player_id is None:
+                return False
+            del self._owners[player_id]
+            return True
 
     def owner_of(self, player_id: str) -> str | None:
-        self._identifier(player_id)
-        return self._owners.get(player_id)
+        with self._lock:
+            self._identifier(player_id)
+            return self._owners.get(player_id)
 
     @property
     def active_count(self) -> int:
-        return len(self._owners)
+        with self._lock:
+            return len(self._owners)
