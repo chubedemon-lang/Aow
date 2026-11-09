@@ -49,5 +49,29 @@ class FixtureFramingTests(unittest.TestCase):
                 FixtureFrameDecoder(limit)
 
 
+    def test_large_coalesced_read_does_not_retain_all_frames(self):
+        decoder = FixtureFrameDecoder(max_payload=8)
+        wire = encode_fixture_frame(b"abc", 8) * 10000
+        self.assertEqual(decoder.feed(wire), [b"abc"] * 10000)
+        self.assertEqual(decoder.buffered_bytes, 0)
+
+    def test_coalesced_read_with_partial_final_frame(self):
+        decoder = FixtureFrameDecoder(max_payload=8)
+        first = encode_fixture_frame(b"a", 8)
+        second = encode_fixture_frame(b"xyz", 8)
+        self.assertEqual(decoder.feed(first * 100 + second[:5]), [b"a"] * 100)
+        self.assertEqual(decoder.buffered_bytes, 5)
+        self.assertEqual(decoder.feed(second[5:]), [b"xyz"])
+        self.assertEqual(decoder.buffered_bytes, 0)
+
+    def test_valid_frame_followed_by_invalid_header_fails_closed(self):
+        decoder = FixtureFrameDecoder(max_payload=8)
+        with self.assertRaises(FixtureFrameError):
+            decoder.feed(encode_fixture_frame(b"ok", 8) + (9).to_bytes(4, "big"))
+        self.assertEqual(decoder.buffered_bytes, 0)
+        with self.assertRaises(FixtureFrameError):
+            decoder.feed(encode_fixture_frame(b"x", 8))
+
+
 if __name__ == "__main__":
     unittest.main()
