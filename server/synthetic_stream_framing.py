@@ -22,18 +22,29 @@ class FixtureFrameDecoder:
             raise FixtureFrameError("decoder failed; create a new decoder")
         if type(chunk) is not bytes:
             raise FixtureFrameError("chunk must be bytes")
-        self._buffer.extend(chunk)
+        # Consume one frame at a time: a coalesced network read must not
+        # cause the retained buffer to grow with the entire read size.
         frames = []
-        while len(self._buffer) >= 4:
+        offset = 0
+        while offset < len(chunk):
+            if len(self._buffer) < 4:
+                take = min(4 - len(self._buffer), len(chunk) - offset)
+                self._buffer.extend(chunk[offset:offset + take])
+                offset += take
+                if len(self._buffer) < 4:
+                    break
             size = int.from_bytes(self._buffer[:4], "big")
             if size == 0 or size > self.max_payload:
                 self._buffer.clear()
                 self._failed = True
                 raise FixtureFrameError("invalid frame size")
-            if len(self._buffer) < 4 + size:
-                break
-            frames.append(bytes(self._buffer[4:4 + size]))
-            del self._buffer[:4 + size]
+            remaining = 4 + size - len(self._buffer)
+            take = min(remaining, len(chunk) - offset)
+            self._buffer.extend(chunk[offset:offset + take])
+            offset += take
+            if len(self._buffer) == 4 + size:
+                frames.append(bytes(self._buffer[4:]))
+                self._buffer.clear()
         return frames
 
     @property
