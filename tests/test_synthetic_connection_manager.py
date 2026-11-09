@@ -12,8 +12,8 @@ class ConnectionManagerTests(unittest.TestCase):
 
     def authenticated(self, connection_id):
         gate = self.manager.open(connection_id)
-        gate.challenge(b"nonce")
-        gate.acknowledge(b"nonce")
+        gate.challenge(b"nonce-123456")
+        gate.acknowledge(b"nonce-123456")
         gate.authenticate("account-" + connection_id)
         return gate
 
@@ -34,8 +34,8 @@ class ConnectionManagerTests(unittest.TestCase):
         with self.assertRaises(SessionError):
             self.manager.select_player("first", "player")
         self.assertEqual(self.manager.leases.active_count, 0)
-        gate.challenge(b"nonce")
-        gate.acknowledge(b"nonce")
+        gate.challenge(b"nonce-123456")
+        gate.acknowledge(b"nonce-123456")
         with self.assertRaises(SessionError):
             self.manager.select_player("first", "player")
         self.assertEqual(self.manager.leases.active_count, 0)
@@ -69,8 +69,8 @@ class ConnectionManagerTests(unittest.TestCase):
         manager = SyntheticConnectionManager(max_players=1)
         for conn in ("one", "two"):
             gate = manager.open(conn)
-            gate.challenge(b"nonce")
-            gate.acknowledge(b"nonce")
+            gate.challenge(b"nonce-123456")
+            gate.acknowledge(b"nonce-123456")
             gate.authenticate(conn)
         manager.select_player("one", "p1")
         with self.assertRaises(PlayerLeaseError):
