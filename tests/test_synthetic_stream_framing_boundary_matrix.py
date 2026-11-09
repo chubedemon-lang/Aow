@@ -45,6 +45,30 @@ class FramingBoundaryMatrixTests(unittest.TestCase):
                     with self.assertRaises(FixtureFrameError):
                         decoder.feed(b"")
 
+    def test_invalid_input_types_do_not_corrupt_partial_frame(self):
+        decoder = FixtureFrameDecoder(4)
+        wire = encode_fixture_frame(b"abcd", 4)
+        self.assertEqual(decoder.feed(wire[:5]), [])
+        for invalid in (None, "abc", bytearray(b"x"), memoryview(b"x"), 123):
+            with self.subTest(invalid_type=type(invalid).__name__):
+                with self.assertRaises(FixtureFrameError):
+                    decoder.feed(invalid)
+                self.assertEqual(decoder.buffered_bytes, 5)
+        self.assertEqual(decoder.feed(wire[5:]), [b"abcd"])
+        self.assertEqual(decoder.buffered_bytes, 0)
+
+    def test_encoder_rejects_invalid_payloads_and_limits(self):
+        for invalid_limit in (0, -1, 1048577, True, 1.5, "4"):
+            with self.subTest(limit=invalid_limit):
+                with self.assertRaises(FixtureFrameError):
+                    encode_fixture_frame(b"a", invalid_limit)
+                with self.assertRaises(FixtureFrameError):
+                    FixtureFrameDecoder(invalid_limit)
+        for invalid_payload in (b"", b"abcde", "a", bytearray(b"a"), None):
+            with self.subTest(payload=repr(invalid_payload)):
+                with self.assertRaises(FixtureFrameError):
+                    encode_fixture_frame(invalid_payload, 4)
+
 
 if __name__ == "__main__":
     unittest.main()
