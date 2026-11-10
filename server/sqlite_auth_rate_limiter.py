@@ -15,6 +15,7 @@ import time
 _MAX_WINDOW_SECONDS = 86_400
 _MAX_LOCKOUT_SECONDS = 86_400
 _MAX_ATTEMPTS = 10_000
+_MAX_BUCKETS = 1_000_000
 _MAX_PRINCIPAL_BYTES = 256
 _INVALID_PRINCIPAL = b"\x00invalid-principal"
 
@@ -39,6 +40,7 @@ class SqliteAuthRateLimiter:
         max_attempts: int = 8,
         window_seconds: int = 60,
         lockout_seconds: int = 60,
+        max_buckets: int = 10_000,
         clock=None,
     ):
         if not isinstance(connection, sqlite3.Connection):
@@ -53,12 +55,15 @@ class SqliteAuthRateLimiter:
             raise ValueError("invalid authentication rate-limit window")
         if type(lockout_seconds) is not int or not 1 <= lockout_seconds <= _MAX_LOCKOUT_SECONDS:
             raise ValueError("invalid authentication lockout duration")
+        if type(max_buckets) is not int or not 1 <= max_buckets <= _MAX_BUCKETS:
+            raise ValueError("invalid authentication rate-limit bucket capacity")
 
         self.db = connection
         self._secret = secret
         self.max_attempts = max_attempts
         self.window_seconds = window_seconds
         self.lockout_seconds = lockout_seconds
+        self.max_buckets = max_buckets
         self.clock = clock if clock is not None else time.time
         self.db.execute("PRAGMA busy_timeout = 10000")
         self.db.execute(
@@ -187,9 +192,22 @@ class SqliteAuthRateLimiter:
         self._require_transaction()
         digest = self._principal_digest(principal)
         now = self._now()
+        # Bound database growth from arbitrary unknown usernames. Expired
+        # failure windows and completed lockouts no longer need a stored bucket.
+        self.db.execute(
+            """DELETE FROM auth_attempt_limits
+               WHERE (blocked_until IS NULL AND window_started_at <= ?)
+                  OR (blocked_until IS NOT NULL AND blocked_until <= ?)""",
+            (now - self.window_seconds, now),
+        )
         state = self._load_state(digest)
 
         if state is None:
+            bucket_count = self.db.execute(
+                "SELECT count(*) FROM auth_attempt_limits"
+            ).fetchone()[0]
+            if bucket_count >= self.max_buckets:
+                raise AuthenticationRateLimited("authentication temporarily unavailable")
             started, attempts, blocked_until = now, 0, None
         else:
             started, attempts, blocked_until = state
