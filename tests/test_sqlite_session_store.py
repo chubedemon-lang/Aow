@@ -96,6 +96,7 @@ class SqliteSessionStoreTests(unittest.TestCase):
     def test_constructor_does_not_commit_callers_transaction(self):
         self.db.execute("CREATE TABLE caller_work (value INTEGER)")
         self.db.commit()
+        self.db.execute("BEGIN")
         self.db.execute("INSERT INTO caller_work VALUES (1)")
         with self.assertRaises(ValueError):
             SqliteSessionStore(self.db)
