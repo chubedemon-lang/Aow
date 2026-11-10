@@ -9,6 +9,9 @@ No HTTP route is registered by this facade.
 Every operation holds BEGIN IMMEDIATE across session resolution, ownership and
 the reward-ledger operation so revocation cannot race a grant or balance read.
 The reward ledger remains separate from authoritative inventory.
+
+Session tokens must only be issued after trusted account authentication.
+No HTTP route is registered here. Character ownership transfer is not supported.
 """
 import sqlite3
 
