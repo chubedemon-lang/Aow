@@ -57,3 +57,11 @@ The offline type inventory now preserves raw field, method-return, and parameter
 ## MessageTypes default metadata — 2026-11-10
 
 The v31 metadata contains field-default records for the `MessageTypes` definition. In a private offline pass, the matching arm64 native type-registration array resolved the field and default-value type references to IL2CPP type code `I4` (32-bit integer). This identifies the static metadata storage type only. It does not prove that these constants are used as wire message IDs or establish their byte order/framing in transmitted packets. Numeric candidates remain private and are not committed.
+
+## MessageTypes default-value aggregate cross-check — 2026-11-10
+
+A further private offline pass over the same APK fingerprint found 761/761 MessageTypes field definitions have corresponding field-default records. The authorized arm64 native type-registration mapping used for this pass resolves both the field type and default-value type references to IL2CPP I4 (32-bit integer). Reading the bounded default-data records as 32-bit values yields 761 distinct raw bit patterns. The exact numeric candidates remain private and are not included in this public repository.
+
+This is a stronger static metadata observation, but it still does **not** prove that these values are active wire message IDs, nor does it establish message-header byte order, serialization, framing, or dispatch behavior. The NetworkSettings metadata also has default records for HeaderLength and several buffer-capacity fields; their raw patterns are not treated as effective runtime lengths until the native initialization/read path is traced.
+
+Next investigation target: the native execution path that populates MessageHelper's class/type dictionaries, the NetworkSettings initializer and the serializer/deserializer dispatch. No extracted endpoint was contacted.
