@@ -33,6 +33,8 @@ The synthetic schema does not expose ownership transfer. If transfers are introd
 
 ## Session-authorized synthetic domain facades
 
+- server/sqlite_authorized_character_service.py creates, lists and reads one synthetic character per durable authenticated account. Character creation initializes a zero-balance wallet in the same transaction and requires unique account ownership plus foreign keys. The default map and origin are synthetic placeholders, not AOW character data.
+
 - server/sqlite_authorized_map_service.py checks ownership before map position create/read/enter/move/leave operations.
 - server/sqlite_authorized_player_state_service.py checks ownership before player snapshot create/read/apply operations.
 - Both are Python domain services only; neither adds an HTTP route, verifies passwords, or establishes AOW wire compatibility.
