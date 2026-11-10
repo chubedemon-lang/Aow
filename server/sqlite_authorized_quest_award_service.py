@@ -3,15 +3,11 @@
 This is a local persistence boundary only. It does not verify quest completion,
 implement AOW quest packets, or establish original-game reward rules. The
 trusted quest domain must validate completion before granting a reward.
-Session tokens must only be issued after trusted account authentication.
-No HTTP route is registered by this facade.
-
 Every operation holds BEGIN IMMEDIATE across session resolution, ownership and
 the reward-ledger operation so revocation cannot race a grant or balance read.
-The reward ledger remains separate from authoritative inventory.
-
-Session tokens must only be issued after trusted account authentication.
-No HTTP route is registered here. Character ownership transfer is not supported.
+The reward ledger remains separate from authoritative inventory. Session
+tokens must only be issued after trusted account authentication. No HTTP route
+is registered here; ownership transfer is not supported.
 """
 import sqlite3
 
