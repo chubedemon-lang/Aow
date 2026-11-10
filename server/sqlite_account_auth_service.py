@@ -11,6 +11,8 @@ import hmac
 import secrets
 import sqlite3
 
+from server.sqlite_session_store import SqliteSessionStore
+
 
 _MIN_ITERATIONS = 100_000
 _MAX_ITERATIONS = 2_000_000
@@ -88,7 +90,6 @@ class SqliteAccountAuthService:
         )
         self.db.commit()
 
-        from server.sqlite_session_store import SqliteSessionStore
         self.sessions = SqliteSessionStore(
             connection, ttl_seconds=ttl_seconds, clock=clock
         )
@@ -200,7 +201,8 @@ class SqliteAccountAuthService:
             raise AccountAuthError("invalid credentials")
 
         account_id, iterations, salt, stored_digest = row
-        if (type(account_id) is not int or type(iterations) is not int
+        if (type(account_id) is not int or not 1 <= account_id <= 2**63 - 1
+                or type(iterations) is not int
                 or not _MIN_ITERATIONS <= iterations <= _MAX_ITERATIONS
                 or not isinstance(salt, (bytes, bytearray, memoryview))
                 or len(salt) != 16
