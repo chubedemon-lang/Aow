@@ -15,6 +15,7 @@ from tools.il2cpp_metadata_inventory import (
 )
 
 HEADER_MIN_BYTES = 256
+MAX_STRING_HEAP_BYTES = 64 * 1024**2
 STRING_HEAP_PAIR_OFFSET = 24
 METHODS_PAIR_OFFSET = 0x30
 FIELDS_PAIR_OFFSET = 0x60
@@ -129,6 +130,7 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
     if (
         string_offset < HEADER_MIN_BYTES
         or string_size <= 0
+        or string_size > MAX_STRING_HEAP_BYTES
         or string_offset + string_size > len(metadata)
     ):
         raise MetadataInventoryError("invalid metadata string-heap bounds")
