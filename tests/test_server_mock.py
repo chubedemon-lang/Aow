@@ -194,9 +194,8 @@ class HandlerRouteTests(unittest.TestCase):
         response.read()
         connection.close()
 
-        status, payload = self.request("POST", "/characters", {"username": "alice", "name": "hero"})
-        self.assertEqual(status, 201)
-        self.assertEqual(payload["name"], "hero")
+        with self.assertRaises(KeyError):
+            self.domain.get_character(2)
 
     def test_post_rejects_non_json_content_type(self):
         body = b'{"username":"alice","name":"hero"}'
