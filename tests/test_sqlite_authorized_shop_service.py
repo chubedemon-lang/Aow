@@ -1,8 +1,8 @@
 """Session ownership tests for synthetic durable shop purchases only."""
 import os
 import sqlite3
-import threading
 import tempfile
+import threading
 import unittest
 
 from server.sessions import SessionError
@@ -10,7 +10,6 @@ from server.sqlite_authorized_shop_service import SqliteAuthorizedShopService
 from server.sqlite_inventory_store import SqliteInventoryStore
 from server.sqlite_player_state_store import SqlitePlayerStateStore
 from server.sqlite_shop_store import ShopOffer, ShopPurchase
-
 from server.sqlite_session_store import SqliteSessionStore
 
 
