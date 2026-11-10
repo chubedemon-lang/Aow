@@ -12,34 +12,72 @@ from tools.il2cpp_type_inventory import inspect_type_tables
 def make_metadata(types=(), *, version=31, magic=METADATA_MAGIC,
                   bad_type_size=False, bad_method_size=False,
                   wrong_method_owner=False, bad_field_start=False,
-                  bad_name_index=False):
+                  bad_name_index=False, bad_parameter_size=False,
+                  bad_parameter_range=False):
     values = []
     for item in types:
         values.extend((item["namespace"], item["name"]))
         values.extend(item.get("fields", ()))
         values.extend(item.get("methods", ()))
+        for method_name in item.get("methods", ()):
+            signature = item.get("method_signatures", {}).get(method_name, {})
+            values.extend(
+                parameter["name"] for parameter in signature.get("parameters", ())
+            )
     values = list(dict.fromkeys(values))
     heap = bytearray()
     indexes = {}
     for value in values:
         indexes[value] = len(heap)
-        heap.extend(value.encode("utf-8") + b"\x00")
+        heap.extend(value.encode("utf-8") + b"\\x00")
 
     fields = []
     methods = []
+    parameters = []
     type_records = []
     for type_index, item in enumerate(types):
         field_start = len(fields)
         method_start = len(methods)
         for field_name in item.get("fields", ()):
             record = bytearray(12)
-            struct.pack_into("<I", record, 0, indexes[field_name])
+            struct.pack_into(
+                "<IiI", record, 0,
+                indexes[field_name],
+                item.get("field_type_indexes", {}).get(field_name, 0),
+                item.get("field_tokens", {}).get(field_name, 0),
+            )
             fields.append(bytes(record))
         for method_name in item.get("methods", ()):
+            signature = item.get("method_signatures", {}).get(method_name, {})
+            parameter_start = len(parameters)
+            method_parameters = signature.get("parameters", ())
+            for parameter in method_parameters:
+                record = bytearray(12)
+                struct.pack_into(
+                    "<IIi", record, 0,
+                    indexes[parameter["name"]],
+                    parameter.get("token", 0),
+                    parameter.get("type_index", 0),
+                )
+                parameters.append(bytes(record))
+            if bad_parameter_range and method_parameters:
+                parameter_start = 10000
             record = bytearray(36)
-            struct.pack_into("<I", record, 0, indexes[method_name])
             owner = type_index + 1 if wrong_method_owner else type_index
-            struct.pack_into("<i", record, 4, owner)
+            struct.pack_into(
+                "<IiiIiiIHHHH", record, 0,
+                indexes[method_name],
+                owner,
+                signature.get("return_type_index", 0),
+                signature.get("return_parameter_token", 0),
+                parameter_start,
+                signature.get("generic_container_index", -1),
+                signature.get("token", 0),
+                signature.get("flags", 0),
+                signature.get("iflags", 0),
+                signature.get("slot", 0),
+                len(method_parameters),
+            )
             methods.append(bytes(record))
 
         record = bytearray(0x58)
@@ -56,21 +94,26 @@ def make_metadata(types=(), *, version=31, magic=METADATA_MAGIC,
 
     field_blob = b"".join(fields)
     method_blob = b"".join(methods)
+    parameter_blob = b"".join(parameters)
     type_blob = b"".join(type_records)
     header_size = 256
     string_offset = header_size
     methods_offset = string_offset + len(heap)
-    fields_offset = methods_offset + len(method_blob)
+    parameters_offset = methods_offset + len(method_blob)
+    fields_offset = parameters_offset + len(parameter_blob)
     types_offset = fields_offset + len(field_blob)
     header = bytearray(header_size)
     struct.pack_into("<II", header, 0, magic, version)
     struct.pack_into("<II", header, 24, string_offset, len(heap))
-    method_size = len(method_blob) + (1 if bad_method_size else 0)
-    type_size = len(type_blob) + (1 if bad_type_size else 0)
-    struct.pack_into("<II", header, 0x30, methods_offset, method_size)
+    struct.pack_into("<II", header, 0x30, methods_offset,
+                     len(method_blob) + (1 if bad_method_size else 0))
+    struct.pack_into("<II", header, 0x58, parameters_offset,
+                     len(parameter_blob) + (1 if bad_parameter_size else 0))
     struct.pack_into("<II", header, 0x60, fields_offset, len(field_blob))
-    struct.pack_into("<II", header, 0xA0, types_offset, type_size)
-    return bytes(header) + bytes(heap) + method_blob + field_blob + type_blob
+    struct.pack_into("<II", header, 0xA0, types_offset,
+                     len(type_blob) + (1 if bad_type_size else 0))
+    return (bytes(header) + bytes(heap) + method_blob + parameter_blob
+            + field_blob + type_blob)
 
 
 def write_apk(path, metadata):
@@ -85,7 +128,16 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
             types = [
                 {"namespace": "com.geargames.aow.messages", "name": "LoginRequest",
                  "fields": ["protocolVersion", "token"],
-                 "methods": ["get_ProtocolVersion", "set_ProtocolVersion"]},
+                 "field_type_indexes": {"protocolVersion": 17, "token": 42},
+                 "field_tokens": {"protocolVersion": 0x04000001, "token": 0x04000002},
+                 "methods": ["get_ProtocolVersion", "set_ProtocolVersion"],
+                 "method_signatures": {
+                     "get_ProtocolVersion": {"return_type_index": 17, "token": 0x06000001},
+                     "set_ProtocolVersion": {
+                         "return_type_index": 0, "token": 0x06000002,
+                         "parameters": [{"name": "value", "type_index": 17, "token": 0x08000001}],
+                     },
+                 }},
                 {"namespace": "com.geargames.serialization.serializers",
                  "name": "LoginRequestSTSerializer", "methods": ["serialize"]},
                 {"namespace": "com.geargames.serialization.serializers",
@@ -98,6 +150,19 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
             result = inspect_type_tables(apk)
             by_name = {item["name"]: item for item in result["observed_type_definitions"]}
             self.assertEqual(by_name["LoginRequest"]["field_names"], ["protocolVersion", "token"])
+            fields_by_name = {
+                item["name"]: item for item in by_name["LoginRequest"]["field_records"]
+            }
+            self.assertEqual(fields_by_name["protocolVersion"]["type_index"], 17)
+            self.assertEqual(fields_by_name["token"]["type_index"], 42)
+            self.assertEqual(fields_by_name["protocolVersion"]["metadata_token"], 0x04000001)
+            methods_by_name = {
+                item["name"]: item for item in by_name["LoginRequest"]["method_records"]
+            }
+            self.assertEqual(methods_by_name["get_ProtocolVersion"]["return_type_index"], 17)
+            self.assertEqual(methods_by_name["set_ProtocolVersion"]["parameters"], [{
+                "name": "value", "type_index": 17, "metadata_token": 0x08000001,
+            }])
             self.assertEqual(
                 by_name["LoginRequestSTSerializer"]["method_names"], ["serialize"]
             )
@@ -174,6 +239,40 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
                 [{"namespace": "com.geargames.aow.messages", "name": "LoginRequest"}],
                 bad_name_index=True,
             ))
+            with self.assertRaises(MetadataInventoryError):
+                inspect_type_tables(apk)
+
+    def test_rejects_method_parameter_range_out_of_bounds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "synthetic.apk"
+            types = [{
+                "namespace": "com.geargames.aow.messages",
+                "name": "LoginRequest",
+                "methods": ["set_Token"],
+                "method_signatures": {
+                    "set_Token": {
+                        "parameters": [{"name": "value", "type_index": 3}],
+                    },
+                },
+            }]
+            write_apk(apk, make_metadata(types, bad_parameter_range=True))
+            with self.assertRaises(MetadataInventoryError):
+                inspect_type_tables(apk)
+
+    def test_rejects_misaligned_parameter_table(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "synthetic.apk"
+            types = [{
+                "namespace": "com.geargames.aow.messages",
+                "name": "LoginRequest",
+                "methods": ["set_Token"],
+                "method_signatures": {
+                    "set_Token": {
+                        "parameters": [{"name": "value", "type_index": 3}],
+                    },
+                },
+            }]
+            write_apk(apk, make_metadata(types, bad_parameter_size=True))
             with self.assertRaises(MetadataInventoryError):
                 inspect_type_tables(apk)
 
