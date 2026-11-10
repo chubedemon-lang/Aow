@@ -265,7 +265,7 @@ class SqliteInventoryStore:
                     )
                 snapshot = self._decode_snapshot(previous[3])
                 if owns_transaction:
-                self.db.commit()
+                    self.db.commit()
                 return InventoryMutation(snapshot, True)
 
             header = self.db.execute(
