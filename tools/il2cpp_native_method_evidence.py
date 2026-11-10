@@ -9,6 +9,7 @@ import hashlib
 import json
 import struct
 import zipfile
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from tools.il2cpp_codegen_inventory import (
@@ -59,8 +60,22 @@ TARGET_METHODS = {
     ("com.geargames.serialization.serializers", "BattleSessionRestoreAnswerSTDeserializer"): {"deserialize"},
 }
 
+SERIALIZER_HELPER_METHODS = {
+    ("com.geargames.serialization", "SimpleSerializer"): {
+        "serializeInt", "serializeString", "serializeLong",
+        "serializeBoolean", "serializeByte",
+    },
+    ("com.geargames.serialization", "SimpleDeserializer"): {
+        "deserializeInt", "deserializeString", "deserializeLong",
+        "deserializeBoolean", "deserializeByte",
+    },
+}
+MAX_ENTRYPOINT_WINDOW_BYTES = 64 * 1024
 
-def _network_methods(metadata, info):
+
+def _network_methods(metadata, info, allowlist_map=None):
+    if allowlist_map is None:
+        allowlist_map = TARGET_METHODS
     string_off, string_size, _ = _table(metadata, 0x18, 1, "string heap")
     method_off, _, method_total = _table(metadata, 0x30, 0x24, "methods")
     type_off, _, type_total = _table(metadata, 0xA0, 0x58, "types")
@@ -87,7 +102,7 @@ def _network_methods(metadata, info):
         pos = type_off + type_index * 0x58
         name_index, namespace_index = struct.unpack_from("<II", metadata, pos)
         name, namespace = read_string(name_index), read_string(namespace_index)
-        allowlist = TARGET_METHODS.get((namespace, name))
+        allowlist = allowlist_map.get((namespace, name))
         if not allowlist:
             continue
         method_start = struct.unpack_from("<i", metadata, pos + 0x24)[0]
@@ -117,6 +132,8 @@ def _network_methods(metadata, info):
                 "category": (
                     "login_session_serializer"
                     if namespace == "com.geargames.serialization.serializers"
+                    else "serializer_helper"
+                    if namespace == "com.geargames.serialization"
                     else "network"
                 ),
                 "namespace": namespace, "type": name, "method": method_name,
@@ -168,36 +185,124 @@ def _module_tables(elf, images):
     return sections, relocations, tables
 
 
+
+def _decode_aarch64_bl_target(word, pc):
+    """Decode an AArch64 BL-immediate target; return None for other opcodes."""
+    if (type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+            or type(pc) is not int or pc < 0 or pc % 4):
+        return None
+    if (word & 0xFC000000) != 0x94000000:
+        return None
+    immediate = word & 0x03FFFFFF
+    if immediate & 0x02000000:
+        immediate -= 0x04000000
+    return pc + (immediate << 2)
+
+
+def _summarize_aarch64_calls(code, start_va, helper_targets):
+    """Summarize direct calls to allowlisted serializer helpers without addresses."""
+    if not isinstance(code, bytes) or len(code) % 4:
+        raise ValueError("AArch64 code window must be a multiple of four bytes")
+    if type(start_va) is not int or start_va < 0 or start_va % 4:
+        raise ValueError("AArch64 code window start must be an aligned address")
+    sequence = []
+    counts = Counter()
+    other_direct = 0
+    indirect = 0
+    for offset in range(0, len(code), 4):
+        word = struct.unpack_from("<I", code, offset)[0]
+        target = _decode_aarch64_bl_target(word, start_va + offset)
+        if target is not None:
+            labels = helper_targets.get(target, ())
+            if len(labels) == 1:
+                label = labels[0]
+                sequence.append(label)
+                counts[label] += 1
+            elif len(labels) > 1:
+                label = "ambiguous_serializer_helper_entry"
+                sequence.append(label)
+                counts[label] += 1
+            else:
+                other_direct += 1
+        elif (word & 0xFFFFFC1F) == 0xD63F0000:
+            indirect += 1
+    return {
+        "direct_helper_call_sequence": sequence,
+        "direct_helper_call_counts": dict(sorted(counts.items())),
+        "direct_calls_not_in_helper_allowlist": other_direct,
+        "indirect_call_count": indirect,
+    }
+
+
+def _entrypoint_windows(sections, relocations, tables, images, executable):
+    """Bound each entry window by the next distinct executable entry in its section."""
+    by_section = defaultdict(set)
+    for image in images:
+        pointer_table = tables.get(image["name"])
+        if pointer_table is None:
+            continue
+        for slot_index in range(image["method_count"]):
+            relocation = relocations.get(pointer_table + slot_index * 8)
+            if relocation is None or relocation[0] != R_AARCH64_RELATIVE:
+                continue
+            target = relocation[1]
+            matches = [
+                name for name, section in executable
+                if section["address"] <= target < section["address"] + section["size"]
+            ]
+            if len(matches) == 1:
+                by_section[matches[0]].add(target)
+    windows = {}
+    for section_name, addresses in by_section.items():
+        section = sections[section_name]
+        ordered = sorted(addresses)
+        section_end = section["address"] + section["size"]
+        for index, target in enumerate(ordered):
+            next_target = ordered[index + 1] if index + 1 < len(ordered) else section_end
+            available = next_target - target
+            if available <= 0:
+                continue
+            size = min(available, MAX_ENTRYPOINT_WINDOW_BYTES)
+            size -= size % 4
+            if size == 0:
+                continue
+            windows[(section_name, target)] = (
+                size, available > MAX_ENTRYPOINT_WINDOW_BYTES
+            )
+    return windows
+
+
 def inspect_bytes(metadata, elf, apk_sha256=None):
-    """Map allowlisted network and login/session serializer methods to relocation-backed native entries."""
+    """Map allowlisted network/serializer methods and summarize direct helper calls."""
     info = _metadata_images(metadata)
     methods = _network_methods(metadata, info)
+    helper_methods = _network_methods(metadata, info, SERIALIZER_HELPER_METHODS)
     sections, relocations, tables = _module_tables(elf, info["images"])
     executable = [
         (name, section) for name, section in sections.items()
         if section["type"] == 1 and (section["flags"] & 0x4)
     ]
+
+    def resolve(method):
+        pointer_table = tables.get(method["image"])
+        if pointer_table is None:
+            return "module_unresolved", None, None
+        slot = pointer_table + method["slot_index"] * 8
+        relocation = relocations.get(slot)
+        if relocation is None or relocation[0] != R_AARCH64_RELATIVE:
+            return "no_relative_relocation", None, None
+        target = relocation[1]
+        matches = [
+            name for name, section in executable
+            if section["address"] <= target < section["address"] + section["size"]
+        ]
+        if len(matches) == 1:
+            return "executable_relocation", matches[0], target
+        return "target_not_in_executable_section", None, target
+
     evidence = []
     for method in methods:
-        pointer_table = tables.get(method["image"])
-        target_section = None
-        if pointer_table is None:
-            status = "module_unresolved"
-        else:
-            slot = pointer_table + method["slot_index"] * 8
-            relocation = relocations.get(slot)
-            if relocation is None or relocation[0] != R_AARCH64_RELATIVE:
-                status = "no_relative_relocation"
-            else:
-                target = relocation[1]
-                matches = [
-                    name for name, section in executable
-                    if section["address"] <= target < section["address"] + section["size"]
-                ]
-                if len(matches) == 1:
-                    status, target_section = "executable_relocation", matches[0]
-                else:
-                    status = "target_not_in_executable_section"
+        status, target_section, _target = resolve(method)
         evidence.append({
             "category": method["category"],
             "namespace": method["namespace"], "type": method["type"],
@@ -209,6 +314,46 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         x["namespace"], x["type"], x["method"], x["parameter_count"],
         x["entry_status"],
     ))
+
+    helper_targets = defaultdict(list)
+    helper_entrypoints = 0
+    for method in helper_methods:
+        status, _section, target = resolve(method)
+        if status == "executable_relocation":
+            helper_entrypoints += 1
+            helper_targets[target].append(
+                f'{method["namespace"]}.{method["type"]}::{method["method"]}'
+            )
+
+    windows = _entrypoint_windows(
+        sections, relocations, tables, info["images"], executable
+    )
+    callsite_summary = []
+    for method in methods:
+        if method["category"] != "login_session_serializer":
+            continue
+        status, section_name, target = resolve(method)
+        if status != "executable_relocation":
+            continue
+        window = windows.get((section_name, target))
+        if window is None:
+            continue
+        window_bytes, truncated = window
+        section = sections[section_name]
+        file_offset = section["offset"] + target - section["address"]
+        code = _slice(elf, file_offset, window_bytes, "native method entry window")
+        summary = _summarize_aarch64_calls(code, target, helper_targets)
+        callsite_summary.append({
+            "type": method["type"],
+            "method": method["method"],
+            "image": method["image"],
+            "entry_window_kind": "next_distinct_executable_entry_in_section",
+            "entry_window_bytes": window_bytes,
+            "entry_window_truncated": truncated,
+            **summary,
+        })
+    callsite_summary.sort(key=lambda x: (x["type"], x["method"]))
+
     return {
         "apk_sha256": apk_sha256,
         "metadata_version": info["version"],
@@ -220,18 +365,23 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             x["category"] == "login_session_serializer" for x in evidence
         ),
         "observed_methods_total": len(evidence),
+        "observed_serializer_helper_methods": len(helper_methods),
+        "serializer_helper_entrypoints": helper_entrypoints,
         "executable_entrypoints": sum(
             x["entry_status"] == "executable_relocation" for x in evidence
         ),
         "methods": evidence,
+        "serializer_callsite_summary": callsite_summary,
         "native_addresses_emitted": False,
         "raw_instructions_emitted": False,
         "interpretation": (
-            "A metadata method slot for an allowlisted network or login/session serializer method has a relocation-backed pointer into an "
-            "executable ELF section. This is static native entry-point evidence "
-            "only; it does not establish call semantics, active transport, "
-            "framing, message IDs, serialization order, handshake, login, or "
-            "APK compatibility."
+            "Metadata method slots are associated with relocation-backed executable "
+            "entries. Serializer callsite summaries count direct AArch64 BL calls "
+            "to allowlisted SimpleSerializer/SimpleDeserializer helpers inside a "
+            "bounded entry window ending at the next distinct executable entry "
+            "in the same section. Indirect calls and other direct calls are counted "
+            "but not assigned field semantics. This is static evidence only, not "
+            "a wire protocol, field order, handshake, login, or compatibility proof."
         ),
     }
 
