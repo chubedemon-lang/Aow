@@ -13,7 +13,8 @@ def make_metadata(types=(), *, version=31, magic=METADATA_MAGIC,
                   bad_type_size=False, bad_method_size=False,
                   wrong_method_owner=False, bad_field_start=False,
                   bad_name_index=False, bad_parameter_size=False,
-                  bad_parameter_range=False):
+                  bad_parameter_range=False, bad_field_default_size=False,
+                  bad_default_data_index=False):
     values = []
     for item in types:
         values.extend((item["namespace"], item["name"]))
@@ -29,16 +30,18 @@ def make_metadata(types=(), *, version=31, magic=METADATA_MAGIC,
     indexes = {}
     for value in values:
         indexes[value] = len(heap)
-        heap.extend(value.encode("utf-8") + b"\x00")
+        heap.extend(value.encode("utf-8") + b"\\x00")
 
     fields = []
     methods = []
     parameters = []
     type_records = []
+    field_defaults = []
     for type_index, item in enumerate(types):
         field_start = len(fields)
         method_start = len(methods)
         for field_name in item.get("fields", ()):
+            field_index = len(fields)
             record = bytearray(12)
             struct.pack_into(
                 "<IiI", record, 0,
@@ -47,6 +50,14 @@ def make_metadata(types=(), *, version=31, magic=METADATA_MAGIC,
                 item.get("field_tokens", {}).get(field_name, 0),
             )
             fields.append(bytes(record))
+            default = item.get("field_defaults", {}).get(field_name)
+            if default is not None:
+                data_index = 1000 if bad_default_data_index else default.get("data_index", 0)
+                field_defaults.append((
+                    field_index,
+                    default.get("type_index", 0),
+                    data_index,
+                ))
         for method_name in item.get("methods", ()):
             signature = item.get("method_signatures", {}).get(method_name, {})
             parameter_start = len(parameters)
@@ -96,24 +107,33 @@ def make_metadata(types=(), *, version=31, magic=METADATA_MAGIC,
     method_blob = b"".join(methods)
     parameter_blob = b"".join(parameters)
     type_blob = b"".join(type_records)
+    field_default_blob = b"".join(
+        struct.pack("<iii", *item) for item in field_defaults
+    )
+    default_data_blob = bytes(range(16))
     header_size = 256
     string_offset = header_size
     methods_offset = string_offset + len(heap)
     parameters_offset = methods_offset + len(method_blob)
     fields_offset = parameters_offset + len(parameter_blob)
     types_offset = fields_offset + len(field_blob)
+    field_defaults_offset = types_offset + len(type_blob)
+    default_data_offset = field_defaults_offset + len(field_default_blob)
     header = bytearray(header_size)
     struct.pack_into("<II", header, 0, magic, version)
     struct.pack_into("<II", header, 24, string_offset, len(heap))
     struct.pack_into("<II", header, 0x30, methods_offset,
                      len(method_blob) + (1 if bad_method_size else 0))
+    struct.pack_into("<II", header, 0x40, field_defaults_offset,
+                     len(field_default_blob) + (1 if bad_field_default_size else 0))
+    struct.pack_into("<II", header, 0x48, default_data_offset, len(default_data_blob))
     struct.pack_into("<II", header, 0x58, parameters_offset,
                      len(parameter_blob) + (1 if bad_parameter_size else 0))
     struct.pack_into("<II", header, 0x60, fields_offset, len(field_blob))
     struct.pack_into("<II", header, 0xA0, types_offset,
                      len(type_blob) + (1 if bad_type_size else 0))
     return (bytes(header) + bytes(heap) + method_blob + parameter_blob
-            + field_blob + type_blob)
+            + field_blob + type_blob + field_default_blob + default_data_blob)
 
 
 def write_apk(path, metadata):
@@ -130,6 +150,7 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
                  "fields": ["protocolVersion", "token"],
                  "field_type_indexes": {"protocolVersion": 17, "token": 42},
                  "field_tokens": {"protocolVersion": 0x04000001, "token": 0x04000002},
+                 "field_defaults": {"protocolVersion": {"type_index": 9, "data_index": 3}},
                  "methods": ["get_ProtocolVersion", "set_ProtocolVersion"],
                  "method_signatures": {
                      "get_ProtocolVersion": {"return_type_index": 17, "token": 0x06000001},
@@ -156,6 +177,9 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
             self.assertEqual(fields_by_name["protocolVersion"]["type_index"], 17)
             self.assertEqual(fields_by_name["token"]["type_index"], 42)
             self.assertEqual(fields_by_name["protocolVersion"]["metadata_token"], 0x04000001)
+            self.assertEqual(fields_by_name["protocolVersion"]["default_value_type_index"], 9)
+            self.assertEqual(fields_by_name["protocolVersion"]["default_value_data_index"], 3)
+            self.assertIsNone(fields_by_name["token"]["default_value_type_index"])
             methods_by_name = {
                 item["name"]: item for item in by_name["LoginRequest"]["method_records"]
             }
@@ -239,6 +263,32 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
                 [{"namespace": "com.geargames.aow.messages", "name": "LoginRequest"}],
                 bad_name_index=True,
             ))
+            with self.assertRaises(MetadataInventoryError):
+                inspect_type_tables(apk)
+
+    def test_rejects_field_default_data_index_out_of_bounds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "synthetic.apk"
+            types = [{
+                "namespace": "com.geargames.aow.messages",
+                "name": "LoginRequest",
+                "fields": ["protocolVersion"],
+                "field_defaults": {"protocolVersion": {"type_index": 9, "data_index": 2}},
+            }]
+            write_apk(apk, make_metadata(types, bad_default_data_index=True))
+            with self.assertRaises(MetadataInventoryError):
+                inspect_type_tables(apk)
+
+    def test_rejects_misaligned_field_default_table(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "synthetic.apk"
+            types = [{
+                "namespace": "com.geargames.aow.messages",
+                "name": "LoginRequest",
+                "fields": ["protocolVersion"],
+                "field_defaults": {"protocolVersion": {"type_index": 9, "data_index": 2}},
+            }]
+            write_apk(apk, make_metadata(types, bad_field_default_size=True))
             with self.assertRaises(MetadataInventoryError):
                 inspect_type_tables(apk)
 
