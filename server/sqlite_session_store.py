@@ -17,6 +17,7 @@ from server.sessions import SessionError
 
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _MAX_TTL_SECONDS = 31_536_000
+_MAX_ACCOUNT_ID = 2**63 - 1
 
 
 class SqliteSessionStore:
@@ -31,6 +32,8 @@ class SqliteSessionStore:
                  clock=None):
         if not isinstance(connection, sqlite3.Connection):
             raise TypeError("sqlite connection required")
+        if connection.in_transaction:
+            raise ValueError("connection must not have an active transaction")
         self._validate_ttl(ttl_seconds)
         self.db = connection
         self.ttl_seconds = ttl_seconds
@@ -59,10 +62,15 @@ class SqliteSessionStore:
 
     def _now(self):
         value = self.clock()
-        if (isinstance(value, bool) or not isinstance(value, (int, float))
-                or not math.isfinite(value) or value < 0):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError("clock must return a finite non-negative epoch time")
-        return float(value)
+        try:
+            numeric = float(value)
+        except (OverflowError, ValueError):
+            raise ValueError("clock must return a finite non-negative epoch time") from None
+        if not math.isfinite(numeric) or numeric < 0:
+            raise ValueError("clock must return a finite non-negative epoch time")
+        return numeric
 
     @staticmethod
     def _digest(token):
@@ -72,16 +80,17 @@ class SqliteSessionStore:
 
     def issue(self, account_id: int, ttl_seconds=None) -> str:
         """Issue a random bearer token after trusted account authentication."""
-        if type(account_id) is not int or account_id < 1:
+        if (type(account_id) is not int
+                or not 1 <= account_id <= _MAX_ACCOUNT_ID):
             raise ValueError("invalid account id")
         ttl = self.ttl_seconds if ttl_seconds is None else ttl_seconds
         self._validate_ttl(ttl)
-        now = self._now()
         token = secrets.token_urlsafe(32)
         digest = self._digest(token)
 
         self.db.execute("BEGIN IMMEDIATE")
         try:
+            now = self._now()
             self.db.execute(
                 "INSERT INTO durable_sessions "
                 "(token_hash, account_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
@@ -96,11 +105,11 @@ class SqliteSessionStore:
     def resolve(self, token: str) -> int:
         """Resolve an active token to its account id; expired rows are removed."""
         digest = self._digest(token)
-        now = self._now()
         self.db.execute("BEGIN IMMEDIATE")
         account_id = None
         expired = False
         try:
+            now = self._now()
             row = self.db.execute(
                 "SELECT account_id, expires_at FROM durable_sessions WHERE token_hash=?",
                 (digest,),
@@ -141,9 +150,9 @@ class SqliteSessionStore:
 
     def purge_expired(self) -> int:
         """Delete all expired sessions and return the number of rows removed."""
-        now = self._now()
         self.db.execute("BEGIN IMMEDIATE")
         try:
+            now = self._now()
             result = self.db.execute(
                 "DELETE FROM durable_sessions WHERE expires_at <= ?", (now,)
             )
