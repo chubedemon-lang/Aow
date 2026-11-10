@@ -10,10 +10,14 @@ from server.sqlite_authorized_character_service import (
     SqliteAuthorizedCharacterService,
 )
 from server.sqlite_authorized_world_state_service import (
+    AuthorizedWorldMutationSnapshot,
     AuthorizedWorldSnapshot,
     SqliteAuthorizedWorldStateService,
 )
-from server.sqlite_map_position_store import MapPositionNotFound
+from server.sqlite_map_position_store import (
+    MapPositionNotFound,
+    MapPositionRevisionConflict,
+)
 from server.sqlite_player_state_store import PlayerNotFound, PlayerSnapshot
 from server.sqlite_session_store import SqliteSessionStore
 from server.synthetic_map_position import MapPosition, Position
@@ -63,9 +67,13 @@ class SqliteAuthorizedWorldStateServiceTests(unittest.TestCase):
             self.db, ttl_seconds=30, clock=lambda: self.now[0]
         )
 
+    @property
+    def character_id(self):
+        return self.bootstrap.character.character_id
+
     def test_owner_reads_all_three_snapshots_consistently(self):
         result = self.service.get_snapshot(
-            self.owner_token, self.bootstrap.character.character_id
+            self.owner_token, self.character_id
         )
         self.assertEqual(
             result,
@@ -90,9 +98,7 @@ class SqliteAuthorizedWorldStateServiceTests(unittest.TestCase):
                 "map_position_mutations",
             )
         }
-        self.service.get_snapshot(
-            self.owner_token, self.bootstrap.character.character_id
-        )
+        self.service.get_snapshot(self.owner_token, self.character_id)
         after = {
             table: self.db.execute(
                 "SELECT count(*) FROM " + table
@@ -104,7 +110,7 @@ class SqliteAuthorizedWorldStateServiceTests(unittest.TestCase):
     def test_foreign_and_unknown_characters_share_same_error(self):
         messages = []
         for token, character_id in (
-            (self.other_token, self.bootstrap.character.character_id),
+            (self.other_token, self.character_id),
             (self.owner_token, 999),
         ):
             with self.assertRaises(SessionError) as caught:
@@ -125,58 +131,146 @@ class SqliteAuthorizedWorldStateServiceTests(unittest.TestCase):
         )
 
     def test_missing_map_snapshot_fails_closed_without_repair(self):
-        character_id = self.bootstrap.character.character_id
         self.db.execute(
             "DELETE FROM map_position_snapshots WHERE character_id=?",
-            (str(character_id),),
+            (str(self.character_id),),
         )
         self.db.commit()
         with self.assertRaises(MapPositionNotFound):
-            self.service.get_snapshot(self.owner_token, character_id)
+            self.service.get_snapshot(self.owner_token, self.character_id)
         self.assertEqual(
             self.db.execute(
                 "SELECT count(*) FROM map_position_snapshots WHERE character_id=?",
-                (str(character_id),),
+                (str(self.character_id),),
             ).fetchone()[0],
             0,
         )
 
     def test_expired_and_revoked_sessions_cannot_read(self):
-        character_id = self.bootstrap.character.character_id
         self.now[0] = 10_030.0
         with self.assertRaises(SessionError):
-            self.service.get_snapshot(self.owner_token, character_id)
+            self.service.get_snapshot(self.owner_token, self.character_id)
 
         self.now[0] = 10_000.0
         token = self.service.sessions.issue(1)
         self.assertTrue(self.service.sessions.revoke(token))
         with self.assertRaises(SessionError):
-            self.service.get_snapshot(token, character_id)
+            self.service.get_snapshot(token, self.character_id)
 
-    def test_session_revocation_serializes_with_world_snapshot_read(self):
-        character_id = self.bootstrap.character.character_id
+    def test_enter_and_move_return_the_world_snapshot_from_the_same_commit(self):
+        entered = self.service.enter_and_get_snapshot(
+            self.owner_token, self.character_id, "enter-1", 0, 7, 10, 20
+        )
+        expected_entered = MapPosition(7, Position(10, 20), 1)
+        self.assertIsInstance(entered, AuthorizedWorldMutationSnapshot)
+        self.assertFalse(entered.mutation.replayed)
+        self.assertEqual(entered.mutation.snapshot, expected_entered)
+        self.assertEqual(entered.snapshot.map_position, expected_entered)
+        self.assertEqual(entered.snapshot.player_state.level, 4)
+
+        moved = self.service.move_and_get_snapshot(
+            self.owner_token, self.character_id, "move-1", 1, 7, 13, 24
+        )
+        expected_moved = MapPosition(7, Position(13, 24), 2)
+        self.assertFalse(moved.mutation.replayed)
+        self.assertEqual(moved.mutation.snapshot, expected_moved)
+        self.assertEqual(moved.snapshot.map_position, expected_moved)
+        self.assertEqual(
+            self.service.get_snapshot(
+                self.owner_token, self.character_id
+            ).map_position,
+            expected_moved,
+        )
+
+    def test_idempotent_retry_returns_original_receipt_and_current_snapshot(self):
+        self.service.enter_and_get_snapshot(
+            self.owner_token, self.character_id, "enter", 0, 9, 0, 0
+        )
+        first = self.service.move_and_get_snapshot(
+            self.owner_token, self.character_id, "move-first", 1, 9, 2, 3
+        )
+        self.service.move_and_get_snapshot(
+            self.owner_token, self.character_id, "move-second", 2, 9, 5, 8
+        )
+
+        replay = self.service.move_and_get_snapshot(
+            self.owner_token, self.character_id, "move-first", 1, 9, 2, 3
+        )
+        self.assertTrue(replay.mutation.replayed)
+        self.assertEqual(replay.mutation.snapshot, first.mutation.snapshot)
+        self.assertEqual(
+            replay.snapshot.map_position,
+            MapPosition(9, Position(5, 8), 3),
+        )
+
+    def test_stale_move_rolls_back_without_adding_a_receipt(self):
+        self.service.enter_and_get_snapshot(
+            self.owner_token, self.character_id, "enter", 0, 4, 1, 1
+        )
+        before_count = self.db.execute(
+            "SELECT count(*) FROM map_position_mutations"
+        ).fetchone()[0]
+        with self.assertRaises(MapPositionRevisionConflict):
+            self.service.move_and_get_snapshot(
+                self.owner_token, self.character_id, "stale-move",
+                0, 4, 2, 2,
+            )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_mutations"
+            ).fetchone()[0],
+            before_count,
+        )
+        self.assertEqual(
+            self.service.get_snapshot(
+                self.owner_token, self.character_id
+            ).map_position,
+            MapPosition(4, Position(1, 1), 1),
+        )
+
+    def test_foreign_account_cannot_transition_map(self):
+        self.service.enter_and_get_snapshot(
+            self.owner_token, self.character_id, "owner-enter", 0, 4, 1, 1
+        )
+        with self.assertRaises(SessionError):
+            self.service.move_and_get_snapshot(
+                self.other_token, self.character_id, "foreign-move",
+                1, 4, 2, 2,
+            )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_mutations"
+            ).fetchone()[0],
+            1,
+        )
+
+    def test_session_revocation_serializes_with_move_and_snapshot(self):
+        self.service.enter_and_get_snapshot(
+            self.owner_token, self.character_id, "before-move", 0, 3, 0, 0
+        )
         entered = threading.Event()
         release = threading.Event()
         revoke_started = threading.Event()
         revoke_done = threading.Event()
         outcome = {}
-        original_get = self.service.players.get
+        original_move = self.service.positions.move
 
-        def paused_get(*args, **kwargs):
+        def paused_move(*args, **kwargs):
             entered.set()
             if not release.wait(5):
-                raise TimeoutError("test did not release world snapshot read")
-            return original_get(*args, **kwargs)
+                raise TimeoutError("test did not release atomic world move")
+            return original_move(*args, **kwargs)
 
-        self.service.players.get = paused_get
+        self.service.positions.move = paused_move
 
-        def read_snapshot():
+        def move():
             try:
-                outcome["snapshot"] = self.service.get_snapshot(
-                    self.owner_token, character_id
+                outcome["result"] = self.service.move_and_get_snapshot(
+                    self.owner_token, self.character_id, "atomic-move",
+                    1, 3, 6, 7,
                 )
             except BaseException as exc:
-                outcome["read_error"] = exc
+                outcome["move_error"] = exc
 
         def revoke():
             connection = sqlite3.connect(
@@ -194,27 +288,33 @@ class SqliteAuthorizedWorldStateServiceTests(unittest.TestCase):
                 connection.close()
                 revoke_done.set()
 
-        reader = threading.Thread(target=read_snapshot)
+        mover = threading.Thread(target=move)
         revoker = threading.Thread(target=revoke)
-        reader.start()
+        mover.start()
         self.assertTrue(entered.wait(5))
         revoker.start()
         self.assertTrue(revoke_started.wait(5))
         try:
-            self.assertFalse(revoke_done.wait(0.2))
+            self.assertFalse(
+                revoke_done.wait(0.2),
+                "revocation must wait for the atomic movement transaction",
+            )
         finally:
             release.set()
-        reader.join(5)
+        mover.join(5)
         revoker.join(5)
 
-        self.assertFalse(reader.is_alive())
+        self.assertFalse(mover.is_alive())
         self.assertFalse(revoker.is_alive())
-        self.assertNotIn("read_error", outcome)
+        self.assertNotIn("move_error", outcome)
         self.assertNotIn("revoke_error", outcome)
-        self.assertIsInstance(outcome["snapshot"], AuthorizedWorldSnapshot)
         self.assertTrue(outcome["revoked"])
+        self.assertEqual(
+            outcome["result"].snapshot.map_position,
+            MapPosition(3, Position(6, 7), 2),
+        )
         with self.assertRaises(SessionError):
-            self.service.get_snapshot(self.owner_token, character_id)
+            self.service.get_snapshot(self.owner_token, self.character_id)
 
 
 if __name__ == "__main__":
