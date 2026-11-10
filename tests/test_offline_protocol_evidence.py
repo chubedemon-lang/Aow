@@ -22,6 +22,10 @@ def sample(**changes):
 
 
 class EvidenceManifestTests(unittest.TestCase):
+    def test_manifest_and_gate_topics_share_one_allowlist(self):
+        self.assertIs(ALLOWED_KINDS, ALLOWED_TOPICS)
+        self.assertIn("player", ALLOWED_KINDS)
+        self.assertIn("map", ALLOWED_KINDS)
     def test_accepts_synthetic_unverified_metadata(self):
         self.assertEqual(validate_record(sample())["status"], "unverified")
 
