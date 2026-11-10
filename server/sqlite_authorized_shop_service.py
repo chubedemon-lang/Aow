@@ -4,13 +4,13 @@ This is a local server-domain integration only. It does not implement AOW
 login, shop packets, item catalogs, or original-game economy rules. Offer IDs,
 prices and item IDs remain caller-supplied synthetic data.
 
-Session tokens must only be issued after a trusted authentication layer has
-verified the account. No HTTP route is registered by this facade. Character
-ownership transfer is not supported; if added, it must be serialized with
-shop transactions and authorization.
+Every purchase holds one BEGIN IMMEDIATE transaction across session
+resolution, character ownership, debit, item grant and receipt replay. Session
+revocation therefore serializes before or after the complete purchase.
 """
 import sqlite3
 
+from server.sqlite_authorized_transaction import authorized_character_transaction
 from server.sqlite_character_authorizer import (
     SqliteCharacterAuthorizer,
     require_character_schema,
@@ -68,19 +68,15 @@ class SqliteAuthorizedShopService:
                  expected_player_revision: int,
                  expected_inventory_revision: int,
                  offer_id: str, quantity: int = 1) -> ShopPurchase:
-        """Purchase for an owned character; authorization also gates receipt replay.
-
-        The durable shop store performs debit, inventory grant, mutation
-        ledgers and receipt insertion in one SQLite transaction. This facade
-        resolves the bearer session and checks characters.account_id before
-        invoking it, including on idempotent retries.
-        """
-        owned_id = self.authorizer.require(token, character_id)
-        return self._shop.purchase(
-            owned_id,
-            request_id,
-            expected_player_revision,
-            expected_inventory_revision,
-            offer_id,
-            quantity,
-        )
+        """Purchase atomically with authorization and idempotent receipt replay."""
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
+            return self._shop.purchase(
+                owned_id,
+                request_id,
+                expected_player_revision,
+                expected_inventory_revision,
+                offer_id,
+                quantity,
+            )
