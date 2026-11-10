@@ -134,6 +134,27 @@ class SqliteSessionStore:
             raise SessionError("invalid session")
         return account_id
 
+    def resolve_in_transaction(self, token: str) -> int:
+        """Resolve an active token without opening or committing a transaction.
+
+        The caller must hold a transaction (preferably BEGIN IMMEDIATE) across
+        both this check and the protected state read/write. This makes session
+        revocation serialize with the protected operation.
+        """
+        if not self.db.in_transaction:
+            raise ValueError("active SQLite transaction required")
+        digest = self._digest(token)
+        now = self._now()
+        row = self.db.execute(
+            "SELECT account_id, expires_at FROM durable_sessions WHERE token_hash=?",
+            (digest,),
+        ).fetchone()
+        if row is None:
+            raise SessionError("invalid session")
+        if now >= float(row[1]):
+            raise SessionError("expired session")
+        return int(row[0])
+
     def revoke(self, token: str) -> bool:
         """Revoke a token. Repeating the same revocation returns False."""
         digest = self._digest(token)
