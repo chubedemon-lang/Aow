@@ -130,3 +130,19 @@ The server now has an isolated `server/aow_primitive_codec.py` implementation wi
 The codec preserves UTF-16 surrogate code units and distinguishes null from empty strings. The deserializer mirrors the native sign-bit behavior for string lengths: any 16-bit length with bit 15 set returns null, while the serializer only emits the `0xFFFF` null sentinel and rejects lengths `>= 0x8000`.
 
 No APK bytes, native addresses, raw instructions, endpoint values or packet captures are committed.
+
+
+## Direct method-target resolution — 2026-11-10
+
+The offline analyzer now resolves direct AArch64 B/BL destinations found inside the bounded Login/Registration/Session serializer entry windows against the metadata-backed method-pointer table. It emits only method labels and aggregate counts; native addresses and instructions remain private. Targets that do not map uniquely are counted as unresolved or ambiguous.
+
+A second private offline pass over the unchanged APK reproduced these direct-call associations:
+
+- LoginRequest serializer: 19 direct serializeInt, 16 serializeString, 2 serializeLong, 1 serializeBoolean, and 1 GearGamesRunTimeException constructor call.
+- LoginRequest deserializer: 14 direct deserializeInt, 16 deserializeString, 2 deserializeLong, 1 deserializeBoolean, plus the LoginRequest constructor, diagnostic string conversion/concatenation and exception construction.
+- LoginAnswer serializer: 15 direct serializeInt, 3 serializeString and 1 serializeByte.
+- LoginAnswer deserializer: 10 direct deserializeInt, 3 deserializeString and 1 deserializeByte, plus its constructor and diagnostic/error paths.
+
+The target-resolution pass also identifies direct method names outside the primitive helper allowlist. Indirect BLR calls remain unresolved by this static pass; they are not assigned guessed property names.
+
+These results improve call-target attribution but **do not establish field order**. The windows are bounded by the next distinct relocation-backed executable entry, not formal function boundaries. Some instructions may be shared or belong to adjacent compiler-generated paths. The 79 indirect calls in the LoginRequest serializer and 74 in its deserializer remain unresolved. No packet framing, message ID, handshake order or APK/server compatibility is inferred.
