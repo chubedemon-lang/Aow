@@ -5,6 +5,7 @@
 ## Implemented — local/synthetic only
 
 - Local-only Python mock HTTP API and SQLite domain for synthetic account/character creation and movement.
+- The synthetic mock CLI now fails closed unless bound to a literal IPv4 loopback address. A read-only preflight checks the existing mock SQLite integrity, foreign keys and required tables/columns; it explicitly reports that the prototype is neither APK-compatible nor production-ready. See docs/DEPLOYMENT.md.
 - Synthetic SQLite inventory and player-state stores plus an atomic shop purchase store. A purchase debits player currency, grants inventory, advances both revisions, writes both mutation-ledger rows and a durable idempotency receipt in one BEGIN IMMEDIATE transaction; tests cover concurrent duplicate requests and rollback. Offer IDs, items and prices remain synthetic. These methods are not exposed as authenticated HTTP routes.
 - Process-local session lifecycle and a separate durable SQLite bearer-session store. The durable store hashes opaque tokens, enforces expiry/revocation and survives process restarts, but it does not authenticate passwords or APK login.
 - Shared SqliteCharacterAuthorizer resolves a durable session and checks characters.account_id ownership for a synthetic character ID.
