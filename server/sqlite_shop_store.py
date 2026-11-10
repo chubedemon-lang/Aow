@@ -268,8 +268,7 @@ class SqliteShopStore:
                     )
                 result = self._decode_result(previous[2], replayed=True)
                 if owns_transaction:
-                    if owns_transaction:
-                self.db.commit()
+                    self.db.commit()
                 return result
 
             offer = self.offers.get(offer_id)
