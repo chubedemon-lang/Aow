@@ -3,6 +3,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from pathlib import Path
 
 from server.sessions import SessionError
 from server.sqlite_account_auth_service import (
@@ -46,7 +47,7 @@ class SqliteAccountAuthServiceTests(unittest.TestCase):
         self.assertEqual(row[1], 100_000)
         self.assertEqual(len(row[2]), 16)
         self.assertEqual(len(row[3]), 32)
-        self.assertNotIn(PASSWORD.encode("utf-8"), open(self.path, "rb").read())
+        self.assertNotIn(PASSWORD.encode("utf-8"), Path(self.path).read_bytes())
 
     def test_valid_credentials_issue_a_resolvable_session(self):
         self.service.enroll_password(1, PASSWORD)
@@ -58,6 +59,17 @@ class SqliteAccountAuthServiceTests(unittest.TestCase):
             self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
             1,
         )
+
+
+    def test_session_token_is_not_in_repr_or_database(self):
+        self.service.enroll_password(1, PASSWORD)
+        result = self.service.authenticate_and_issue_session("alice", PASSWORD)
+        self.assertNotIn(result.token, repr(result))
+        self.assertNotIn(result.token.encode("ascii"), Path(self.path).read_bytes())
+        stored = self.db.execute(
+            "SELECT token_hash FROM durable_sessions"
+        ).fetchone()[0]
+        self.assertEqual(len(stored), 32)
 
     def test_wrong_password_and_unknown_username_share_generic_error(self):
         self.service.enroll_password(1, PASSWORD)
