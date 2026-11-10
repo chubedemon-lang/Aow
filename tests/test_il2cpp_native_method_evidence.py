@@ -281,6 +281,31 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _summarize_aarch64_calls(bytes(4), 0x1002, {})
 
+    def test_serializer_direct_call_targets_resolve_to_metadata_method_names(self):
+        elf = bytearray(make_elf(2, image="ConvertedAssembly.dll"))
+        struct.pack_into(
+            "<I", elf, 0x220, self._encode_bl(0x5000, 0x5004)
+        )
+        metadata = make_metadata(
+            ["serialize", "deserialize"],
+            image="ConvertedAssembly.dll",
+            type_name="LoginRequestSTSerializer",
+            namespace="com.geargames.serialization.serializers",
+        )
+        report = inspect_bytes(metadata, bytes(elf))
+        summary = report["serializer_callsite_summary"][0]
+        self.assertEqual(
+            summary["resolved_direct_method_call_counts"],
+            {
+                "com.geargames.serialization.serializers."
+                "LoginRequestSTSerializer::deserialize/p0": 1
+            },
+        )
+        self.assertEqual(summary["unresolved_direct_method_call_count"], 0)
+        rendered = json.dumps(summary)
+        self.assertNotIn("0x5000", rendered)
+        self.assertNotIn("0x5004", rendered)
+
     def test_no_native_addresses_or_instructions_are_emitted(self):
         report = inspect_bytes(
             make_metadata(["Cycle"]), make_elf(1)
