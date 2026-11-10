@@ -12,6 +12,7 @@ import secrets
 import sqlite3
 
 from server.sqlite_session_store import SqliteSessionStore
+from server.sqlite_auth_rate_limiter import SqliteAuthRateLimiter
 
 
 _MIN_ITERATIONS = 100_000
@@ -53,7 +54,8 @@ class SqliteAccountAuthService:
 
     def __init__(self, connection: sqlite3.Connection, *,
                  iterations: int = _DEFAULT_ITERATIONS,
-                 ttl_seconds: int = 900, clock=None):
+                 ttl_seconds: int = 900, clock=None,
+                 rate_limiter: SqliteAuthRateLimiter | None = None):
         if not isinstance(connection, sqlite3.Connection):
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
@@ -72,8 +74,14 @@ class SqliteAccountAuthService:
                 "initialized accounts(id, username) table required"
             ) from exc
 
+        if rate_limiter is not None and (
+                not isinstance(rate_limiter, SqliteAuthRateLimiter)
+                or rate_limiter.db is not connection):
+            raise ValueError("rate limiter must use the same SQLite connection")
+
         self.db = connection
         self.iterations = iterations
+        self.rate_limiter = rate_limiter
         self.db.execute("PRAGMA foreign_keys = ON")
         self.db.execute(
             """CREATE TABLE IF NOT EXISTS account_credentials (
@@ -181,6 +189,10 @@ class SqliteAccountAuthService:
             self.db.rollback()
             raise
 
+    def _record_auth_failure(self, username) -> None:
+        if self.rate_limiter is not None:
+            self.rate_limiter.record_failure(username)
+
     def authenticate_and_issue_session(
             self, username: str, password: str) -> AuthenticatedAccountSession:
         """Verify credentials and atomically persist a new opaque session.
@@ -190,14 +202,19 @@ class SqliteAccountAuthService:
         The session token is returned once and only its SHA-256 digest is
         persisted by SqliteSessionStore.
         """
+        if self.rate_limiter is not None:
+            self.rate_limiter.check_allowed(username)
+
         password_bytes, password_valid = self._password_material(password)
         if not self._username_is_valid(username):
             self._burn_dummy_kdf(password_bytes)
+            self._record_auth_failure(username)
             raise AccountAuthError("invalid credentials")
 
         row = self._lookup_credential(username)
         if row is None or row[1] is None:
             self._burn_dummy_kdf(password_bytes)
+            self._record_auth_failure(username)
             raise AccountAuthError("invalid credentials")
 
         account_id, iterations, salt, stored_digest = row
@@ -209,6 +226,7 @@ class SqliteAccountAuthService:
                 or not isinstance(stored_digest, (bytes, bytearray, memoryview))
                 or len(stored_digest) != 32):
             self._burn_dummy_kdf(password_bytes)
+            self._record_auth_failure(username)
             raise AccountAuthError("invalid credentials")
 
         candidate = hashlib.pbkdf2_hmac(
@@ -216,6 +234,7 @@ class SqliteAccountAuthService:
         )
         if not password_valid or not hmac.compare_digest(
                 candidate, bytes(stored_digest)):
+            self._record_auth_failure(username)
             raise AccountAuthError("invalid credentials")
 
         self.db.execute("BEGIN IMMEDIATE")
@@ -224,7 +243,13 @@ class SqliteAccountAuthService:
             if current != row:
                 raise AccountAuthError("invalid credentials")
             token = self.sessions.issue_in_transaction(account_id)
+            if self.rate_limiter is not None:
+                self.rate_limiter.record_success_in_transaction(username)
             self.db.commit()
+        except AccountAuthError:
+            self.db.rollback()
+            self._record_auth_failure(username)
+            raise
         except BaseException:
             self.db.rollback()
             raise
