@@ -2,10 +2,11 @@
 
 ## Scope
 
-`SqliteAuthorizedMapService` composes the existing durable SQLite bearer
-session store with the synthetic SQLite map-position store. It authorizes each
-map read or mutation by resolving a server-issued session and checking the
-`characters(id, account_id)` row before calling the map store.
+SqliteAuthorizedMapService composes the durable SQLite bearer session store,
+the shared SqliteCharacterAuthorizer, and the synthetic SQLite map-position
+store. It authorizes each map read or mutation by resolving a server-issued
+session and checking the characters(id, account_id) row before calling the
+map store.
 
 This is a local server-domain integration only. It is not the AOW APK login
 protocol, does not verify passwords, does not expose an HTTP route, and does
@@ -19,21 +20,21 @@ The supplied SQLite connection is shared by the session and map stores and
 must be idle when the service is constructed and before each operation.
 
 A trusted authentication layer must verify an account before issuing a token
-through `service.sessions.issue(account_id)`. The session store persists only
+through service.sessions.issue(account_id). The session store persists only
 a SHA-256 digest of the opaque token. Never log or commit the token.
 
 ## Authorization
 
-Every `create_position`, `get_position`, `enter`, `move` and `leave`
-call resolves the token, then checks that the requested integer character ID
-belongs to the resolved account. Unknown and foreign character IDs return the
-same `SessionError` to avoid a character-existence oracle. Expired and revoked
+Every create_position, get_position, enter, move and leave call resolves the
+token, then checks that the requested integer character ID belongs to the
+resolved account. Unknown and foreign character IDs return the same
+SessionError to avoid a character-existence oracle. Expired and revoked
 tokens are rejected before the map store is called.
 
 The current synthetic character schema does not support account ownership
 transfer. If ownership transfer is introduced, it must be serialized with map
-mutations or this facade must be redesigned to perform the ownership check and
-map mutation under one transaction.
+mutations or the shared authorizer must be redesigned to authorize and mutate
+under one transaction.
 
 ## Validation
 

@@ -143,11 +143,17 @@ class SqliteAuthorizedMapServiceTests(unittest.TestCase):
         with self.assertRaises(MapPositionAlreadyExists):
             self.service.create_position(self.owner_token, 101)
 
-    def test_service_requires_existing_ownership_schema(self):
+    def test_service_requires_existing_ownership_schema_without_side_effects(self):
         db = sqlite3.connect(":memory:", isolation_level=None)
         self.addCleanup(db.close)
         with self.assertRaisesRegex(ValueError, "characters"):
             SqliteAuthorizedMapService(db)
+        self.assertEqual(
+            db.execute(
+                "SELECT count(*) FROM sqlite_master WHERE name='durable_sessions'"
+            ).fetchone()[0],
+            0,
+        )
 
 
 if __name__ == "__main__":
