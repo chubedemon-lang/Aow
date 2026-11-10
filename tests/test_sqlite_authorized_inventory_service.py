@@ -1,8 +1,8 @@
 """Session ownership tests for synthetic durable inventory only."""
 import os
 import sqlite3
-import threading
 import tempfile
+import threading
 import unittest
 
 from server.sessions import SessionError
@@ -13,7 +13,6 @@ from server.sqlite_inventory_store import (
     InventoryAlreadyExists,
     InventorySnapshot,
 )
-
 from server.sqlite_session_store import SqliteSessionStore
 
 
