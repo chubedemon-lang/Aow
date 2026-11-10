@@ -77,3 +77,26 @@ The version-31 method table provides additional name/parameter associations for 
 - LoginRequestSTSerializer declares serialize(messageObject, buffer, context, logger); LoginRequestSTDeserializer declares deserialize(buffer, context, logger).
 
 These are metadata method names and parameter-name associations only. They do not expose method bodies, prove invocation order, identify active transport, or define the bytes written to the socket. The next step is to map these metadata methods to native method pointers and inspect the code paths without publishing proprietary binaries or private captures.
+
+
+## Native method-pointer mapping — 2026-11-10
+
+The offline codegen inventory tool now matches metadata image names to native codegen module records in the authorized arm64 IL2CPP library:
+
+- 165/165 metadata images match native codegen modules.
+- The 197,631 metadata method definitions match 197,631 native method-pointer slots.
+- 164,023 slots have AArch64 relative relocations to executable sections.
+- Relevant module counts: ScriptsAssembly.dll 56,481; ConvertedAssembly.dll 25,442; NetworkBase.dll 18; ResourceDispatcher.dll 2,970.
+
+A private local mapping associates native pointer-table slots with the previously identified methods in MessageHelper, MessageDispatcher, NetworkSettings, Receiver, Sender, and the LoginRequest serializer/deserializer. Raw native addresses and detailed disassembly remain private. Some pointer slots have no relative relocation; they may be null, shared, or represented by another registration path, so the count is not a count of unique method bodies.
+
+This supersedes the earlier “next step” statement that native method-pointer mapping was still pending. The mapping is now established statically, but method-body semantics and invocation order are not yet fully recovered.
+
+### Protocol conclusions remain unchanged
+
+- MessageTypes fields/defaults are stored as IL2CPP I4 values, but their active use as wire message IDs is not yet proven.
+- The NetworkSettings header/buffer metadata and Receiver stream-buffer methods are identified, but the effective header length, header fields, byte order, framing, compression/encryption order and message field serialization order remain unknown.
+- TCP/socket-related identifiers and a stream abstraction are present, but the active transport path and endpoint selection are not yet proven.
+- LoginRequest and SessionRestore serializer/deserializer native entry points are mapped, but no complete request/response byte sequence or handshake order has been reproduced.
+
+The next reverse-engineering target is now the native body and call sequence of the sender/receiver and login serializers, using only local authorized analysis. Do not infer a wire format from class names or method signatures, and do not contact extracted endpoints.
