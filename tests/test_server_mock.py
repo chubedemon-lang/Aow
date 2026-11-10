@@ -181,6 +181,36 @@ class HandlerRouteTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual((payload["x"], payload["y"]), (7, -8))
+    
+    def test_post_rejects_duplicate_json_keys_without_creating_character(self):
+        body = b'{"username":"alice","username":"mallory","name":"hero"}'
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=2)
+        connection.request(
+            "POST", "/characters", body=body,
+            headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+        )
+        response = connection.getresponse()
+        self.assertEqual(response.status, 400)
+        response.read()
+        connection.close()
+
+        status, payload = self.request("POST", "/characters", {"username": "alice", "name": "hero"})
+        self.assertEqual(status, 201)
+        self.assertEqual(payload["name"], "hero")
+
+    def test_post_rejects_non_json_content_type(self):
+        body = b'{"username":"alice","name":"hero"}'
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=2)
+        connection.request(
+            "POST", "/characters", body=body,
+            headers={"Content-Type": "text/plain", "Content-Length": str(len(body))},
+        )
+        response = connection.getresponse()
+        self.assertEqual(response.status, 400)
+        response.read()
+        connection.close()
+        with self.assertRaises(KeyError):
+            self.domain.get_character(2)
 
 
 if __name__ == "__main__":
