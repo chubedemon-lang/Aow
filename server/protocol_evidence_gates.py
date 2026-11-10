@@ -9,8 +9,10 @@ from dataclasses import dataclass
 from server.protocol_evidence_registry import Evidence, EvidenceError
 
 
-STAGES = ("transport", "framing", "handshake", "login", "session",
-          "movement", "inventory", "shop", "combat", "quest")
+STAGES = (
+    "transport", "framing", "handshake", "login", "session",
+    "player", "map", "movement", "inventory", "shop", "combat", "quest",
+)
 
 
 @dataclass(frozen=True)
