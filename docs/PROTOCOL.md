@@ -65,3 +65,15 @@ A further private offline pass over the same APK fingerprint found 761/761 Messa
 This is a stronger static metadata observation, but it still does **not** prove that these values are active wire message IDs, nor does it establish message-header byte order, serialization, framing, or dispatch behavior. The NetworkSettings metadata also has default records for HeaderLength and several buffer-capacity fields; their raw patterns are not treated as effective runtime lengths until the native initialization/read path is traced.
 
 Next investigation target: the native execution path that populates MessageHelper's class/type dictionaries, the NetworkSettings initializer and the serializer/deserializer dispatch. No extracted endpoint was contacted.
+
+## Native dispatch and codec signature leads — 2026-11-10
+
+The version-31 method table provides additional name/parameter associations for the next native-code trace:
+
+- MessageHelper declares InternalGetMessageType(type) and GetMessageType overloads; its reverse lookup helpers are GetMessageTypeName and GetMessageClassName.
+- MessageDispatcher declares TypeRegister(type, listener), Register(type, listener), Dispatch(message), and global/unhandled message handler registration methods.
+- Sender's constructor parameter names include socket, receiverMessageQueue, senderMessageQueue and messageSerializer. It also declares SetCryptoProvider and TrySendHeartbeat.
+- Receiver's constructor parameter names include socket, receiverMessageQueue, senderMessageQueue and messageDeserializer. It declares SetCryptoProvider, DoStreamReadedBytes, GetHttpMessageResponse(header, streamBuffer), and ReadStreamBufferToEnd(streamBuffer).
+- LoginRequestSTSerializer declares serialize(messageObject, buffer, context, logger); LoginRequestSTDeserializer declares deserialize(buffer, context, logger).
+
+These are metadata method names and parameter-name associations only. They do not expose method bodies, prove invocation order, identify active transport, or define the bytes written to the socket. The next step is to map these metadata methods to native method pointers and inspect the code paths without publishing proprietary binaries or private captures.
