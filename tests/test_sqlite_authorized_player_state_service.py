@@ -40,19 +40,13 @@ class SqliteAuthorizedPlayerStateServiceTests(unittest.TestCase):
         created = self.service.create_snapshot(
             self.owner_token, 101, level=3, experience=20, currency=75
         )
-        self.assertEqual(
-            created,
-            PlayerSnapshot("101", 3, 20, 75, 0),
-        )
+        self.assertEqual(created, PlayerSnapshot("101", 3, 20, 75, 0))
         changed = self.service.apply(
             self.owner_token, 101, "award-1", 0,
             level=4, experience_delta=30, currency_delta=-5,
         )
         self.assertFalse(changed.replayed)
-        self.assertEqual(
-            changed.snapshot,
-            PlayerSnapshot("101", 4, 50, 70, 1),
-        )
+        self.assertEqual(changed.snapshot, PlayerSnapshot("101", 4, 50, 70, 1))
         self.assertEqual(
             self.service.get_snapshot(self.owner_token, 101),
             changed.snapshot,
@@ -147,11 +141,17 @@ class SqliteAuthorizedPlayerStateServiceTests(unittest.TestCase):
         with self.assertRaises(PlayerAlreadyExists):
             self.service.create_snapshot(self.owner_token, 101)
 
-    def test_service_requires_existing_ownership_schema(self):
+    def test_service_requires_existing_ownership_schema_without_side_effects(self):
         db = sqlite3.connect(":memory:", isolation_level=None)
         self.addCleanup(db.close)
         with self.assertRaisesRegex(ValueError, "characters"):
             SqliteAuthorizedPlayerStateService(db)
+        self.assertEqual(
+            db.execute(
+                "SELECT count(*) FROM sqlite_master WHERE name='durable_sessions'"
+            ).fetchone()[0],
+            0,
+        )
 
 
 if __name__ == "__main__":
