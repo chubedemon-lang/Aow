@@ -51,7 +51,11 @@ unreadable.
 The limiter records failed credentials, clears the bucket after successful
 authentication in the same transaction as durable session issuance, and
 serializes counter updates with `BEGIN IMMEDIATE`. Its fixed-window and lockout
-settings are bounded and injectable for deterministic tests.
+settings and the maximum number of stored principal buckets are bounded and
+injectable for deterministic tests. Expired windows and completed lockouts are
+pruned before a new bucket is inserted. At capacity, new principal buckets fail
+closed while existing buckets remain usable; this prevents unbounded database
+growth from arbitrary unknown usernames.
 
 The limiter is per-username only. It does not replace per-source/network rate
 limits, trusted reverse-proxy handling, monitoring, TLS where applicable, or
