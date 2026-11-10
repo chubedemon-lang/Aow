@@ -113,3 +113,20 @@ A private offline disassembly spot-check of the unchanged APK's `LoginRequestSTS
 The analyzer now summarizes these direct AArch64 `BL` callsites by helper name, and separately counts indirect `BLR` calls and direct calls outside the helper allowlist. The scan window is bounded by the next distinct relocation-backed executable entry in the same ELF section and is explicitly an entry window, not a formally recovered function boundary.
 
 These are callsite counts, **not** field counts. They do not establish which property getter feeds each helper, the field order, optionality, wire IDs, byte encoding, framing, handshake sequence, or login semantics. No raw instructions, native addresses, APK bytes, or packet data are emitted or committed.
+
+
+## Primitive payload encoding — 2026-11-10
+
+Private read-only inspection of the native `SimpleSerializer` and `SimpleDeserializer` method bodies provides strong static evidence for the primitive payload layer:
+
+- `serializeChar` passes the high byte first and then the low byte to the underlying virtual writer; `deserializeChar`/`deserializeShort` read two bytes and combine the first as the high byte. This is a 16-bit big-endian code-unit/short representation.
+- `serializeInt` serializes the high 16-bit half before the low half; `deserializeInt` reads two 16-bit halves in the same order. This supports big-endian 32-bit integers.
+- `serializeLong` emits four 16-bit chunks from most-significant to least-significant; `deserializeLong` combines two 32-bit values high half first. This supports big-endian 64-bit integers.
+- `serializeString` writes a 16-bit length, then each .NET string character as a 16-bit code unit. Null is written as `0xFFFF`; lengths at or above `0x8000` are rejected. `deserializeString` treats a length with the sign bit set as null and reads valid strings through the character-array path. This supports a UTF-16BE code-unit payload with a signed 16-bit length/sentinel.
+- `serializeBoolean` masks the value to one bit before a single byte write; `deserializeBoolean` returns true only when the byte equals `1`. `serializeByte`/`deserializeByte` use the one-byte primitive path.
+
+The server now has an isolated `server/aow_primitive_codec.py` implementation with synthetic known-vector tests. It is **not** wired into network handlers and must not be mistaken for a complete AOW packet codec. It does not implement the outer frame, header, message ID, compression/encryption, handshake, or LoginRequest field order.
+
+The codec preserves UTF-16 surrogate code units and distinguishes null from empty strings. The deserializer mirrors the native sign-bit behavior for string lengths: any 16-bit length with bit 15 set returns null, while the serializer only emits the `0xFFFF` null sentinel and rejects lengths `>= 0x8000`.
+
+No APK bytes, native addresses, raw instructions, endpoint values or packet captures are committed.

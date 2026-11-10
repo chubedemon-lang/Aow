@@ -63,11 +63,12 @@ TARGET_METHODS = {
 SERIALIZER_HELPER_METHODS = {
     ("com.geargames.serialization", "SimpleSerializer"): {
         "serializeInt", "serializeString", "serializeLong",
-        "serializeBoolean", "serializeByte",
+        "serializeBoolean", "serializeByte", "serializeChar", "serializeShort",
     },
     ("com.geargames.serialization", "SimpleDeserializer"): {
         "deserializeInt", "deserializeString", "deserializeLong",
-        "deserializeBoolean", "deserializeByte",
+        "deserializeBoolean", "deserializeByte", "deserializeChar",
+        "deserializeShort", "deserializeChars",
     },
 }
 MAX_ENTRYPOINT_WINDOW_BYTES = 64 * 1024
@@ -199,6 +200,19 @@ def _decode_aarch64_bl_target(word, pc):
     return pc + (immediate << 2)
 
 
+def _decode_aarch64_b_target(word, pc):
+    """Decode an AArch64 B-immediate target; return None for other opcodes."""
+    if (type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+            or type(pc) is not int or pc < 0 or pc % 4):
+        return None
+    if (word & 0xFC000000) != 0x14000000:
+        return None
+    immediate = word & 0x03FFFFFF
+    if immediate & 0x02000000:
+        immediate -= 0x04000000
+    return pc + (immediate << 2)
+
+
 def _summarize_aarch64_calls(code, start_va, helper_targets):
     """Summarize direct calls to allowlisted serializer helpers without addresses."""
     if not isinstance(code, bytes) or len(code) % 4:
@@ -207,11 +221,15 @@ def _summarize_aarch64_calls(code, start_va, helper_targets):
         raise ValueError("AArch64 code window start must be an aligned address")
     sequence = []
     counts = Counter()
+    tail_sequence = []
+    tail_counts = Counter()
     other_direct = 0
     indirect = 0
+    indirect_tail = 0
     for offset in range(0, len(code), 4):
         word = struct.unpack_from("<I", code, offset)[0]
-        target = _decode_aarch64_bl_target(word, start_va + offset)
+        pc = start_va + offset
+        target = _decode_aarch64_bl_target(word, pc)
         if target is not None:
             labels = helper_targets.get(target, ())
             if len(labels) == 1:
@@ -224,13 +242,31 @@ def _summarize_aarch64_calls(code, start_va, helper_targets):
                 counts[label] += 1
             else:
                 other_direct += 1
-        elif (word & 0xFFFFFC1F) == 0xD63F0000:
+            continue
+        tail_target = _decode_aarch64_b_target(word, pc)
+        if tail_target is not None:
+            labels = helper_targets.get(tail_target, ())
+            if len(labels) == 1:
+                label = labels[0]
+                tail_sequence.append(label)
+                tail_counts[label] += 1
+            elif len(labels) > 1:
+                label = "ambiguous_serializer_helper_entry"
+                tail_sequence.append(label)
+                tail_counts[label] += 1
+            continue
+        if (word & 0xFFFFFC1F) == 0xD63F0000:
             indirect += 1
+        elif (word & 0xFFFFFC1F) == 0xD61F0000:
+            indirect_tail += 1
     return {
         "direct_helper_call_sequence": sequence,
         "direct_helper_call_counts": dict(sorted(counts.items())),
+        "direct_tail_helper_call_sequence": tail_sequence,
+        "direct_tail_helper_call_counts": dict(sorted(tail_counts.items())),
         "direct_calls_not_in_helper_allowlist": other_direct,
         "indirect_call_count": indirect,
+        "indirect_tail_call_count": indirect_tail,
     }
 
 
@@ -354,6 +390,30 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         })
     callsite_summary.sort(key=lambda x: (x["type"], x["method"]))
 
+    primitive_helper_summary = []
+    for method in helper_methods:
+        status, section_name, target = resolve(method)
+        if status != "executable_relocation":
+            continue
+        window = windows.get((section_name, target))
+        if window is None:
+            continue
+        window_bytes, truncated = window
+        section = sections[section_name]
+        file_offset = section["offset"] + target - section["address"]
+        code = _slice(elf, file_offset, window_bytes, "primitive helper entry window")
+        summary = _summarize_aarch64_calls(code, target, helper_targets)
+        primitive_helper_summary.append({
+            "type": method["type"],
+            "method": method["method"],
+            "image": method["image"],
+            "entry_window_kind": "next_distinct_executable_entry_in_section",
+            "entry_window_bytes": window_bytes,
+            "entry_window_truncated": truncated,
+            **summary,
+        })
+    primitive_helper_summary.sort(key=lambda x: (x["type"], x["method"]))
+
     return {
         "apk_sha256": apk_sha256,
         "metadata_version": info["version"],
@@ -372,14 +432,15 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         ),
         "methods": evidence,
         "serializer_callsite_summary": callsite_summary,
+        "primitive_helper_callsite_summary": primitive_helper_summary,
         "native_addresses_emitted": False,
         "raw_instructions_emitted": False,
         "interpretation": (
             "Metadata method slots are associated with relocation-backed executable "
-            "entries. Serializer callsite summaries count direct AArch64 BL calls "
+            "entries. Serializer and primitive-helper callsite summaries count direct AArch64 BL calls "
             "to allowlisted SimpleSerializer/SimpleDeserializer helpers inside a "
             "bounded entry window ending at the next distinct executable entry "
-            "in the same section. Indirect calls and other direct calls are counted "
+            "in the same section. Direct tail branches and indirect tail branches are reported separately. Indirect calls and other direct calls are counted "
             "but not assigned field semantics. This is static evidence only, not "
             "a wire protocol, field order, handshake, login, or compatibility proof."
         ),

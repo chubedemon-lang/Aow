@@ -4,7 +4,8 @@ import struct
 import unittest
 
 from tools.il2cpp_native_method_evidence import (
-    _decode_aarch64_bl_target, _summarize_aarch64_calls, inspect_bytes,
+    _decode_aarch64_bl_target, _decode_aarch64_b_target,
+    _summarize_aarch64_calls, inspect_bytes,
 )
 
 
@@ -116,6 +117,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertEqual(report["executable_entrypoints"], 2)
         self.assertEqual(report["observed_serializer_helper_methods"], 0)
         self.assertEqual(report["serializer_callsite_summary"], [])
+        self.assertEqual(report["primitive_helper_callsite_summary"], [])
         self.assertEqual(report["methods"][0]["target_section"], ".text")
         self.assertEqual(
             [item["method"] for item in report["methods"]],
@@ -211,6 +213,17 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             raise ValueError("branch target outside AArch64 BL range")
         return 0x94000000 | (immediate & 0x03FFFFFF)
 
+    def test_aarch64_b_decoder_handles_forward_backward_and_non_b(self):
+        self.assertEqual(
+            _decode_aarch64_b_target(self._encode_bl(0x1000, 0x1010) - 0x80000000, 0x1000),
+            0x1010,
+        )
+        self.assertEqual(
+            _decode_aarch64_b_target(0x14000000 | ((-4) & 0x03FFFFFF), 0x1000),
+            0x0FF0,
+        )
+        self.assertIsNone(_decode_aarch64_b_target(0xD65F03C0, 0x1000))
+
     def test_aarch64_bl_decoder_handles_forward_backward_and_non_bl(self):
         self.assertEqual(
             _decode_aarch64_bl_target(self._encode_bl(0x1000, 0x1010), 0x1000),
@@ -230,6 +243,8 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             self._encode_bl(start + 4, 0x1800),
             0xD63F0100,  # blr x8
             self._encode_bl(start + 12, 0x3000),
+            0x14000000 | (((0x4000 - (start + 16)) // 4) & 0x03FFFFFF),
+            0xD61F0120,  # br x9
         )
         code = b"".join(struct.pack("<I", word) for word in words)
         summary = _summarize_aarch64_calls(
@@ -237,6 +252,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             {
                 0x2000: ["com.geargames.serialization.SimpleSerializer::serializeInt"],
                 0x3000: ["com.geargames.serialization.SimpleSerializer::serializeString"],
+                0x4000: ["com.geargames.serialization.SimpleSerializer::serializeChar"],
             },
         )
         self.assertEqual(
@@ -247,11 +263,17 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             ],
         )
         self.assertEqual(summary["direct_calls_not_in_helper_allowlist"], 1)
+        self.assertEqual(
+            summary["direct_tail_helper_call_sequence"],
+            ["com.geargames.serialization.SimpleSerializer::serializeChar"],
+        )
         self.assertEqual(summary["indirect_call_count"], 1)
+        self.assertEqual(summary["indirect_tail_call_count"], 1)
         rendered = json.dumps(summary)
         self.assertNotIn("0x1000", rendered)
         self.assertNotIn("0x2000", rendered)
         self.assertNotIn("0x3000", rendered)
+        self.assertNotIn("0x4000", rendered)
 
     def test_direct_call_summary_rejects_misaligned_windows(self):
         with self.assertRaises(ValueError):
