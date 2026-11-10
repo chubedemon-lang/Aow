@@ -142,8 +142,7 @@ class SqlitePlayerStateStore:
             except sqlite3.IntegrityError as exc:
                 raise PlayerAlreadyExists("player snapshot already exists") from exc
             if owns_transaction:
-                if owns_transaction:
-                    self.db.commit()
+                self.db.commit()
             return snapshot
         except BaseException:
             if owns_transaction:
@@ -214,7 +213,6 @@ class SqlitePlayerStateStore:
                     int(previous[7]), int(previous[8]),
                 )
                 if owns_transaction:
-                if owns_transaction:
                     self.db.commit()
                 return PlayerMutation(replay, True)
 
@@ -260,8 +258,7 @@ class SqlitePlayerStateStore:
                  updated.currency, updated.revision),
             )
             if owns_transaction:
-                if owns_transaction:
-                    self.db.commit()
+                self.db.commit()
             return PlayerMutation(updated, False)
         except BaseException:
             if owns_transaction:
