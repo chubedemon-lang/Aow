@@ -199,6 +199,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
                 else:
                     status = "target_not_in_executable_section"
         evidence.append({
+            "category": method["category"],
             "namespace": method["namespace"], "type": method["type"],
             "method": method["method"], "parameter_count": method["parameter_count"],
             "image": method["image"], "entry_status": status,
