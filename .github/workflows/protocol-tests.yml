@@ -13,6 +13,9 @@ on:
       - 'tools/il2cpp_native_method_evidence.py'
       - 'tests/test_il2cpp_native_method_evidence.py'
       - 'docs/IL2CPP_NATIVE_METHOD_EVIDENCE.md'
+      - 'server/aow_primitive_codec.py'
+      - 'tests/test_aow_primitive_codec.py'
+      - 'docs/AOW_PRIMITIVE_SERIALIZATION.md'
       - 'docs/PROTOCOL.md'
       - 'docs/IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md'
       - '.github/workflows/protocol-tests.yml'
@@ -27,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile offline analysis tools
-        run: python -m py_compile tools/protocol_candidates.py tools/il2cpp_metadata_inventory.py tools/il2cpp_type_inventory.py tools/il2cpp_native_method_evidence.py
+        run: python -m py_compile tools/protocol_candidates.py tools/il2cpp_metadata_inventory.py tools/il2cpp_type_inventory.py tools/il2cpp_native_method_evidence.py server/aow_primitive_codec.py
       - name: Protocol candidate scanner tests (synthetic input only)
         run: python -m unittest discover -s tests -p 'test_protocol_candidates.py' -v
       - name: IL2CPP metadata inventory tests (synthetic fixtures only)
@@ -36,3 +39,5 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_il2cpp_type_inventory.py' -v
       - name: Native method entry-point evidence tests (synthetic fixtures only)
         run: python -m unittest discover -s tests -p 'test_il2cpp_native_method_evidence.py' -v
+      - name: AOW primitive codec tests (synthetic vectors only)
+        run: python -m unittest discover -s tests -p 'test_aow_primitive_codec.py' -v
