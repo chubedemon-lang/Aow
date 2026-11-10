@@ -24,9 +24,10 @@ def require_character_schema(connection: sqlite3.Connection) -> None:
 class SqliteCharacterAuthorizer:
     """Resolve a durable session and authorize an integer character ID.
 
-    The current synthetic schema does not expose character ownership transfer.
-    If transfers are added, they must be serialized with state mutations or
-    this authorization boundary must be upgraded to a single transaction.
+    require() is a convenience check for non-transactional reads. Protected
+    state operations should use require_in_transaction() inside BEGIN IMMEDIATE
+    so session revocation and ownership changes serialize with the mutation.
+    The current synthetic schema does not expose ownership transfer.
     """
 
     def __init__(self, connection: sqlite3.Connection,
@@ -41,7 +42,11 @@ class SqliteCharacterAuthorizer:
         require_character_schema(connection)
 
     def require(self, token: str, character_id: int) -> str:
-        """Return the domain's string ID only when the active session owns it."""
+        """Return the domain ID after a standalone session/ownership check.
+
+        This method is not atomic with a later state mutation. Use
+        require_in_transaction() for protected writes.
+        """
         if type(character_id) is not int or character_id < 1:
             raise SessionError("invalid character")
         account_id = self.sessions.resolve(token)
