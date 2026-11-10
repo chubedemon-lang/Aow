@@ -4,7 +4,6 @@ Callers must provide server-monotonic timestamps, never client timestamps.
 The tracker serializes its own operations within one process. Callers must
 coordinate session/map lifecycle transitions with movement operations.
 """
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import math
 from threading import RLock
