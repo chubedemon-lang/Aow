@@ -20,6 +20,8 @@ class AowPrimitiveCodecTests(unittest.TestCase):
         reader = AowPrimitiveReader(writer.to_bytes())
         self.assertEqual([reader.read_int() for _ in values], list(values))
         self.assertEqual(reader.remaining, 0)
+        self.assertEqual(reader.offset, len(writer.to_bytes()))
+        reader.require_consumed()
 
     def test_signed_long_round_trip(self):
         values = (-(1 << 63), -1, 0, 1, (1 << 63) - 1)
@@ -28,6 +30,7 @@ class AowPrimitiveCodecTests(unittest.TestCase):
             writer.write_long(value)
         reader = AowPrimitiveReader(writer.to_bytes())
         self.assertEqual([reader.read_long() for _ in values], list(values))
+        reader.require_consumed()
 
     def test_char_and_short_are_big_endian_16_bit_values(self):
         writer = AowPrimitiveWriter()
@@ -36,6 +39,7 @@ class AowPrimitiveCodecTests(unittest.TestCase):
         reader = AowPrimitiveReader(writer.to_bytes())
         self.assertEqual(reader.read_char(), 0x1234)
         self.assertEqual(reader.read_short(), -2)
+        reader.require_consumed()
 
     def test_string_null_empty_and_utf16_code_units(self):
         writer = AowPrimitiveWriter()
@@ -45,6 +49,7 @@ class AowPrimitiveCodecTests(unittest.TestCase):
         self.assertIsNone(reader.read_string())
         self.assertEqual(reader.read_string(), "")
         self.assertEqual(reader.read_string(), "A")
+        reader.require_consumed()
 
     def test_non_bmp_string_uses_two_utf16_code_units(self):
         writer = AowPrimitiveWriter().write_string("😀")
@@ -107,6 +112,19 @@ class AowPrimitiveCodecTests(unittest.TestCase):
     def test_reader_requires_bytes_like_input(self):
         with self.assertRaises(TypeError):
             AowPrimitiveReader("not bytes")
+
+    def test_reader_rejects_trailing_bytes_after_known_payload(self):
+        reader = AowPrimitiveReader(bytes.fromhex("01020304ff"))
+        self.assertEqual(reader.read_int(), 0x01020304)
+        self.assertEqual(reader.offset, 4)
+        self.assertEqual(reader.remaining, 1)
+        with self.assertRaisesRegex(ValueError, "trailing bytes"):
+            reader.require_consumed()
+
+    def test_reader_accepts_exact_payload_boundary(self):
+        reader = AowPrimitiveReader(bytes.fromhex("01020304"))
+        self.assertEqual(reader.read_int(), 0x01020304)
+        self.assertIs(reader.require_consumed(), reader)
 
 
 if __name__ == "__main__":

@@ -38,9 +38,15 @@ The module is intentionally isolated and is not connected to any network handler
 It must not be used to claim that AOW framing, message IDs, payload field order,
 compression/encryption, handshake or login have been recovered.
 
+The reader exposes its current payload offset and a `require_consumed()`
+guard. A caller may use that guard only after it already knows the exact
+payload schema and boundary; the method does not discover a packet frame or
+prove that a byte sequence belongs to one AOW message.
+
 ## Validation
 
 The codec has synthetic known-vector tests for big-endian values, signed
 round-trips, null/empty strings, UTF-16 surrogate pairs, the 32767-code-unit
-limit, boolean semantics, truncation and invalid values. No APK, native
-binary, address, raw instruction, endpoint or packet capture is committed.
+limit, boolean semantics, truncation, invalid values and exact payload
+consumption. No APK, native binary, address, raw instruction, endpoint or
+packet capture is committed.
