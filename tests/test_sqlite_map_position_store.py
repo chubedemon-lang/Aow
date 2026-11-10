@@ -117,7 +117,7 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
         with self.assertRaises(MapPositionStoreError):
             self.store.enter("hero", "bad-revision", True, 1, 0, 0)
         with self.assertRaises(MapPositionStoreError):
-            self.store.enter("hero", "bad-request", 0, 1, 0, 0)
+            self.store.enter("hero", "", 0, 1, 0, 0)
         self.assertEqual(self.store.get("hero"), MapPosition())
 
     def test_reopen_preserves_position_and_receipts(self):
