@@ -7,7 +7,7 @@
 - Local-only Python mock HTTP API and SQLite domain for synthetic account/character creation and movement.
 - The synthetic mock CLI now fails closed unless bound to a literal IPv4 loopback address. A read-only preflight checks the existing mock SQLite integrity, foreign keys and required tables/columns; it explicitly reports that the prototype is neither APK-compatible nor production-ready. See docs/DEPLOYMENT.md.
 - Synthetic SQLite inventory and player-state stores plus an atomic shop purchase store. A purchase debits player currency, grants inventory, advances both revisions, writes both mutation-ledger rows and a durable idempotency receipt in one BEGIN IMMEDIATE transaction; tests cover concurrent duplicate requests and rollback. Offer IDs, items and prices remain synthetic. These methods are not exposed as authenticated HTTP routes.
-- Process-local session lifecycle and a separate durable SQLite bearer-session store. The durable store hashes opaque tokens, enforces expiry/revocation and survives process restarts. A separate local synthetic PBKDF2 account-auth service verifies enrolled credentials and issues a durable session after an in-transaction credential recheck; it has no HTTP route and is not the APK login protocol.
+- Process-local session lifecycle and a separate durable SQLite bearer-session store. The durable store hashes opaque tokens, enforces expiry/revocation and survives process restarts. A separate local synthetic PBKDF2 account-auth service verifies enrolled credentials and issues a durable session after an in-transaction credential recheck; it can be composed with an optional persistent HMAC-keyed username failure limiter that clears atomically on success. The limiter is not a source-IP/network control; there is no HTTP route and this is not the APK login protocol.
 - Shared SqliteCharacterAuthorizer resolves a durable session and checks characters.account_id ownership for a synthetic character ID.
 - SqliteAuthorizedShopService holds BEGIN IMMEDIATE across in-transaction session resolution, characters.account_id ownership and the complete debit/grant/receipt transaction; the low-level shop store joins the caller-owned transaction. This serializes revocation with purchases and receipt replay. It remains a local domain service, not an authenticated HTTP route or AOW shop contract.
 - SqliteAuthorizedInventoryService holds BEGIN IMMEDIATE across in-transaction session resolution, characters.account_id ownership and inventory create/read/apply; low-level store methods join the caller-owned transaction and do not commit it. This serializes revocation with protected inventory operations, including receipt replay. It remains a local domain service, not an authenticated HTTP route or AOW item contract.
@@ -32,7 +32,7 @@
 
 ## Not implemented or not verified
 
-- Production authentication, password verification, account registration/login routes, authorization and secure session integration.
+- Production authentication, account registration/login routes, source/network abuse controls, transport security and secure session integration. The current PBKDF2 and optional per-username limiter are synthetic local primitives only.
 - Verified transport, outer framing, complete message serializer/deserializer contract, handshake, version negotiation or endpoint selection for the unchanged APK.
 - APK connectivity or an end-to-end login → player initialization → map join → movement flow.
 - Authoritative AOW item catalog, economy, combat/skills, quest rules, matchmaking or production anti-cheat.
