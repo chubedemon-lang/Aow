@@ -188,20 +188,30 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
         with self.assertRaises(MapPositionStoreError):
             self.store.move("hero", "overflow", 2**63 - 1, 1, 1, 1)
 
-    def test_mutation_does_not_take_over_callers_transaction(self):
-        self.store.create("hero")
+    def test_mutations_join_but_do_not_commit_callers_transaction(self):
         self.db.execute("CREATE TABLE caller_work (value INTEGER)")
         self.db.commit()
         self.db.execute("BEGIN")
         self.db.execute("INSERT INTO caller_work VALUES (1)")
-        with self.assertRaises(ValueError):
-            self.store.enter("hero", "blocked", 0, 1, 0, 0)
+
+        self.assertEqual(self.store.create("temporary"), MapPosition())
+        entered = self.store.enter(
+            "temporary", "inside-caller", 0, 1, 2, 3
+        )
+        self.assertEqual(
+            entered.snapshot, MapPosition(1, Position(2, 3), 1)
+        )
         self.assertTrue(self.db.in_transaction)
+
         self.db.rollback()
         self.assertEqual(self.db.execute(
             "SELECT count(*) FROM caller_work"
         ).fetchone()[0], 0)
-        self.assertEqual(self.store.get("hero"), MapPosition())
+        with self.assertRaises(MapPositionNotFound):
+            self.store.get("temporary")
+        self.assertEqual(self.db.execute(
+            "SELECT count(*) FROM map_position_mutations"
+        ).fetchone()[0], 0)
 
     def test_constructor_does_not_commit_callers_transaction(self):
         self.db.execute("CREATE TABLE caller_work (value INTEGER)")
