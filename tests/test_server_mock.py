@@ -1,11 +1,15 @@
 """Tests for synthetic server domain only; no APK protocol assertions."""
+import http.client
+import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 import tempfile
+import threading
 import unittest
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from server.mock import Domain
+from server.mock import Domain, make_handler
 
 
 class DomainTests(unittest.TestCase):
@@ -35,6 +39,11 @@ class DomainTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.domain.create_character("", "hero")
         created = self.domain.create_character("alice", "hero")
+        for invalid_id in (True, 1.0, "1", 0, -1):
+            with self.assertRaises(ValueError):
+                self.domain.get_character(invalid_id)
+            with self.assertRaises(ValueError):
+                self.domain.move(invalid_id, 1, 1)
         for x, y in [(True, 1), (1.5, 2), (10001, 0)]:
             with self.assertRaises(ValueError):
                 self.domain.move(created["id"], x, y)
@@ -120,6 +129,58 @@ class DomainTests(unittest.TestCase):
         self.assertEqual(sum(results), 10)
         self.assertEqual(self.domain.list_inventory(cid), [{"item_id": "potion", "quantity": 10}])
         self.assertEqual(self.domain.credit_wallet(cid, 1), 1)
+
+
+class HandlerRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.domain = Domain(Path(self.temp.name) / "routes.sqlite3")
+        self.character_id = self.domain.create_character("alice", "hero")["id"]
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.domain))
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.stop_server)
+
+    def stop_server(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def request(self, method, path, payload=None):
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=2)
+        body = json.dumps(payload) if payload is not None else None
+        headers = {"Content-Type": "application/json"} if body is not None else {}
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        result = (response.status, json.loads(response.read().decode("utf-8")))
+        connection.close()
+        return result
+
+    def test_get_rejects_extra_path_segments(self):
+        status, _ = self.request("GET", f"/characters/ignored/{self.character_id}")
+        self.assertEqual(status, 404)
+        self.assertEqual(self.domain.get_character(self.character_id)["x"], 0)
+
+    def test_move_rejects_extra_path_segments_without_mutation(self):
+        status, _ = self.request(
+            "POST",
+            f"/characters/{self.character_id}/ignored/move",
+            {"x": 7, "y": 8},
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(
+            (self.domain.get_character(self.character_id)["x"],
+             self.domain.get_character(self.character_id)["y"]),
+            (0, 0),
+        )
+
+    def test_move_accepts_exact_route(self):
+        status, payload = self.request(
+            "POST", f"/characters/{self.character_id}/move", {"x": 7, "y": -8}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual((payload["x"], payload["y"]), (7, -8))
 
 
 if __name__ == "__main__":
