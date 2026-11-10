@@ -307,9 +307,11 @@ class SqliteInventoryStoreTests(unittest.TestCase):
 
     def test_verify_integrity_is_read_only_and_requires_idle_connection(self):
         self.store.create("hero")
-        before = open(self.path, "rb").read()
+        with open(self.path, "rb") as source:
+            before = source.read()
         self.store.verify_integrity()
-        after = open(self.path, "rb").read()
+        with open(self.path, "rb") as source:
+            after = source.read()
         self.assertEqual(after, before)
 
         self.db.execute("BEGIN")
