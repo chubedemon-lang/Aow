@@ -71,7 +71,10 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
     allowlist = dict(TARGET_METHODS)
     for key, names in NETWORK_SUPPORT_METHODS.items():
         allowlist[key] = set(allowlist.get(key, ())) | set(names)
-    methods = _network_methods(metadata, info, allowlist)
+    methods = [
+        method for method in _network_methods(metadata, info, allowlist)
+        if method["category"] != "login_session_serializer"
+    ]
 
     sections, relocations, tables = _module_tables(elf, info["images"])
     executable = [
