@@ -108,6 +108,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(report["observed_network_methods"], 2)
         self.assertEqual(report["executable_entrypoints"], 2)
+        self.assertEqual(report["methods"][0]["target_section"], ".text")
         self.assertEqual(
             [item["method"] for item in report["methods"]],
             ["Cycle", "DoStreamReadedBytes"],
