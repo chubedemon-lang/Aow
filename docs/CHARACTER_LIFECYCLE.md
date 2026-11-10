@@ -12,6 +12,7 @@ The module server/sqlite_authorized_character_service.py provides:
   the account exists, create one character with a validated display name,
   a configured synthetic default map ID and origin coordinates (0, 0), then
   create its zero-balance wallet in the same BEGIN IMMEDIATE transaction.
+- create_with_initial_state(token, name, level=1, experience=0): atomically create the character and zero-balance wallet, then create a synthetic player snapshot and an unplaced map-position snapshot on the same SQLite transaction. A later authorized map.enter() performs the first synthetic map transition.
 - list_for_account(token): list only the authenticated account's characters.
 - get(token, character_id): read only a character owned by the authenticated
   account. Unknown and foreign IDs share the same SessionError.
@@ -20,12 +21,11 @@ The schema is checked before the session store creates tables. It requires
 characters.account_id and wallets.character_id to be unique, plus foreign
 keys from characters to accounts and wallets to characters. This enforces the
 current synthetic one-character-per-account model and one-wallet-per-character
-invariant. Creation and wallet initialization roll back together on failure.
+invariant. Creation and wallet initialization roll back together on failure. The optional create_with_initial_state operation additionally rolls back the character, wallet, player snapshot and unplaced map snapshot as one unit.
 
 ## Scope limits
 
-- Names, test_map, origin coordinates and zero starting currency are synthetic
-  defaults, not recovered AOW rules.
+- Names, test_map, origin coordinates, level 1, zero experience/currency and an unplaced map snapshot are synthetic defaults, not recovered AOW rules. The character row's string map_id placeholder is not mapped to the integer map-position ID domain.
 - The current schema supports one character per account; character slots,
   deletion, rename, starter inventory and AOW player-init fields are unknown.
 - This service has no HTTP route and does not implement APK login, handshake,
