@@ -6,11 +6,10 @@ recorded. Never commit private capture contents, endpoints or credentials.
 """
 import re
 
+from server.protocol_evidence_registry import ALLOWED_TOPICS
+
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-ALLOWED_KINDS = frozenset({
-    "transport", "framing", "handshake", "login", "session",
-    "player", "map", "movement", "inventory", "shop", "combat", "quest"
-})
+ALLOWED_KINDS = ALLOWED_TOPICS
 ALLOWED_STATUS = frozenset({"unverified", "verified", "rejected"})
 MAX_MANIFEST_RECORDS = 4096
 FIELDS = frozenset({

@@ -8,7 +8,7 @@ import re
 
 
 _SHA = re.compile(r"^[0-9a-f]{64}$")
-_ALLOWED = frozenset({"transport", "framing", "handshake", "login", "session", "player", "map", "movement", "inventory", "shop", "combat", "quest"})
+ALLOWED_TOPICS = frozenset({"transport", "framing", "handshake", "login", "session", "player", "map", "movement", "inventory", "shop", "combat", "quest"})
 
 
 class EvidenceError(ValueError):
@@ -24,7 +24,7 @@ class Evidence:
     verified: bool = False
 
     def __post_init__(self):
-        if self.topic not in _ALLOWED:
+        if self.topic not in ALLOWED_TOPICS:
             raise EvidenceError("unknown topic")
         if not isinstance(self.artifact_sha256, str) or not _SHA.fullmatch(self.artifact_sha256):
             raise EvidenceError("invalid sha256")
@@ -49,7 +49,7 @@ class EvidenceRegistry:
     def summary(self):
         return {topic: {"observations": sum(r.topic == topic for r in self._records),
                         "verified": sum(r.topic == topic and r.verified for r in self._records)}
-                for topic in sorted(_ALLOWED)}
+                for topic in sorted(ALLOWED_TOPICS)}
 
     @staticmethod
     def digest(data):
