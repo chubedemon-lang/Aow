@@ -39,6 +39,14 @@ class EvidenceRegistryTests(unittest.TestCase):
             with self.assertRaises(EvidenceError):
                 Evidence(*fields)
 
+    def test_player_and_map_topics_are_registered(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence("player", self.sha, "player init evidence", "offline test"))
+        registry.add(Evidence("map", self.sha, "map join evidence", "offline test"))
+        summary = registry.summary()
+        self.assertEqual(summary["player"]["observations"], 1)
+        self.assertEqual(summary["map"]["observations"], 1)
+
     def test_summary_empty(self):
         self.assertEqual(EvidenceRegistry().summary()["handshake"]["verified"], 0)
 

@@ -36,6 +36,14 @@ class EvidenceGateTests(unittest.TestCase):
         result = evaluate_evidence([evidence(topic) for topic in STAGES])
         self.assertTrue(all(item.ready for item in result))
 
+    def test_player_and_map_are_required_before_movement(self):
+        prefix = ("transport", "framing", "handshake", "login", "session", "movement")
+        result = {item.stage: item for item in evaluate_evidence([evidence(x) for x in prefix])}
+        self.assertFalse(result["player"].ready)
+        self.assertFalse(result["map"].ready)
+        self.assertFalse(result["movement"].ready)
+        self.assertEqual(result["movement"].missing, ("player", "map"))
+
     def test_invalid_collection_fails_closed(self):
         for invalid in (None, {}, [object()], [evidence("transport"), None]):
             with self.subTest(invalid=repr(invalid)):

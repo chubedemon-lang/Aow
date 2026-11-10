@@ -8,7 +8,7 @@ import re
 
 
 _SHA = re.compile(r"^[0-9a-f]{64}$")
-_ALLOWED = {"transport", "framing", "handshake", "login", "session", "movement", "inventory", "shop", "combat", "quest"}
+_ALLOWED = frozenset({"transport", "framing", "handshake", "login", "session", "player", "map", "movement", "inventory", "shop", "combat", "quest"})
 
 
 class EvidenceError(ValueError):

@@ -7,3 +7,5 @@ A future codec must be backed by an authorized offline APK analysis report with 
 Before a real codec can be implemented, document: transport selection; message framing; byte order; handshake order; authentication ownership; request/response identifiers; encryption/compression if present; errors and reconnect semantics. Each fact needs a reproducible source reference and negative test. Keep original APKs, assets, tokens, endpoints with private paths, and raw traffic out of public commits.
 
 Synthetic test fixtures in `tests/test_transport.py` exercise fail-closed behavior, input validation and codec boundaries. They are not evidence of an original wire format.
+
+The evidence readiness sequence is transport → framing → handshake → login → session → player initialization → map join → movement → inventory → shop → combat → quest. Each stage requires its own verified evidence record; a later record cannot bypass a missing prerequisite. These gates track evidence coverage only and do not claim APK compatibility.
