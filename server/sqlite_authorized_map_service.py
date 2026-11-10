@@ -13,7 +13,6 @@ import sqlite3
 from server.sessions import SessionError
 from server.sqlite_map_position_store import (
     MapPositionMutation,
-    MapPositionNotFound,
     SqliteMapPositionStore,
 )
 from server.sqlite_session_store import SqliteSessionStore
