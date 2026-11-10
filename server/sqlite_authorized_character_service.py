@@ -26,6 +26,12 @@ class CharacterSnapshot:
 
 
 def _has_unique_single_column(connection, table: str, column: str) -> bool:
+    primary_key_columns = [
+        row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')
+        if int(row[5]) > 0
+    ]
+    if primary_key_columns == [column]:
+        return True
     for index in connection.execute(f'PRAGMA index_list("{table}")'):
         if int(index[2]) != 1:
             continue
