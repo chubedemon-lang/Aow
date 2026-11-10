@@ -4,7 +4,8 @@ import struct
 import unittest
 
 from tools.il2cpp_native_method_evidence import (
-    _decode_aarch64_bl_target, _decode_aarch64_b_target,\n    _summarize_aarch64_calls, inspect_bytes,
+    _decode_aarch64_bl_target, _decode_aarch64_b_target,
+    _summarize_aarch64_calls, inspect_bytes,
 )
 
 
