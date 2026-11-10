@@ -4,8 +4,11 @@ import struct
 import unittest
 
 from tools.il2cpp_native_method_evidence import (
-    _decode_aarch64_bl_target, _decode_aarch64_b_target,
-    _summarize_aarch64_calls, inspect_bytes,
+    R_AARCH64_RELATIVE,
+    _decode_aarch64_adrp, _decode_aarch64_add_imm64,
+    _decode_aarch64_ldr_x_unsigned, _decode_aarch64_bl_target,
+    _decode_aarch64_b_target, _summarize_aarch64_calls,
+    _summarize_relocated_indirect_calls, inspect_bytes,
 )
 
 
@@ -315,6 +318,156 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertNotIn("0x5000", rendered)
         self.assertFalse(report["native_addresses_emitted"])
         self.assertFalse(report["raw_instructions_emitted"])
+
+
+    @staticmethod
+    def _encode_adrp(pc, target_page, register):
+        delta_pages = ((target_page & ~0xFFF) - (pc & ~0xFFF)) >> 12
+        immediate = delta_pages & 0x1FFFFF
+        return (
+            0x90000000
+            | ((immediate & 0x3) << 29)
+            | (((immediate >> 2) & 0x7FFFF) << 5)
+            | register
+        )
+
+    @staticmethod
+    def _encode_add_x(rd, rn, immediate, shift12=False):
+        if not 0 <= immediate <= 0xFFF:
+            raise ValueError("immediate outside 12-bit range")
+        return (
+            0x91000000
+            | ((1 if shift12 else 0) << 22)
+            | (immediate << 10)
+            | (rn << 5)
+            | rd
+        )
+
+    @staticmethod
+    def _encode_ldr_x(rt, rn, byte_offset=0):
+        if byte_offset < 0 or byte_offset % 8 or byte_offset // 8 > 0xFFF:
+            raise ValueError("invalid LDR offset")
+        return 0xF9400000 | ((byte_offset // 8) << 10) | (rn << 5) | rt
+
+    @staticmethod
+    def _encode_blr(rn):
+        return 0xD63F0000 | (rn << 5)
+
+    def test_relocated_indirect_call_resolves_adrp_add_ldr_blr_chain(self):
+        start = 0x5000
+        words = (
+            self._encode_adrp(start, 0x3000, 8),
+            self._encode_add_x(8, 8, 0x80),
+            self._encode_ldr_x(9, 8),
+            self._encode_blr(9),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_relocated_indirect_calls(
+            code, start,
+            {0x3080: (R_AARCH64_RELATIVE, 0x5010)},
+            {0x5010: ["com.geargames.serialization.SimpleSerializer::serializeString"]},
+        )
+        self.assertEqual(
+            summary["resolved_indirect_method_call_counts"],
+            {"com.geargames.serialization.SimpleSerializer::serializeString": 1},
+        )
+        self.assertEqual(summary["unresolved_indirect_call_count"], 0)
+        rendered = json.dumps(summary)
+        self.assertNotIn("0x3080", rendered)
+        self.assertNotIn("0x5010", rendered)
+
+    def test_relocated_indirect_call_accepts_shifted_add_and_ldr_offset(self):
+        start = 0x5000
+        words = (
+            self._encode_adrp(start, 0x4000, 10),
+            self._encode_add_x(10, 10, 1, shift12=True),
+            self._encode_ldr_x(11, 10, 0x20),
+            self._encode_blr(11),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_relocated_indirect_calls(
+            code, start, {0x5020: (R_AARCH64_RELATIVE, 0x5010)},
+            {0x5010: ["Receiver::Cycle"]},
+        )
+        self.assertEqual(
+            summary["resolved_indirect_method_call_counts"],
+            {"Receiver::Cycle": 1},
+        )
+
+    def test_unrelocated_or_non_relative_pointer_stays_unresolved(self):
+        start = 0x5000
+        words = (
+            self._encode_adrp(start, 0x3000, 8),
+            self._encode_add_x(8, 8, 0x80),
+            self._encode_ldr_x(9, 8),
+            self._encode_blr(9),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        for relocation in (None, (2, 0x5010)):
+            with self.subTest(relocation=relocation):
+                mapping = {} if relocation is None else {0x3080: relocation}
+                summary = _summarize_relocated_indirect_calls(
+                    code, start, mapping, {0x5010: ["Receiver::Cycle"]}
+                )
+                self.assertEqual(summary["resolved_indirect_method_call_counts"], {})
+                self.assertEqual(summary["unresolved_indirect_call_count"], 1)
+
+    def test_unknown_instruction_breaks_indirect_resolution_chain(self):
+        start = 0x5000
+        words = (
+            self._encode_adrp(start, 0x3000, 8),
+            0xD65F03C0,
+            self._encode_ldr_x(9, 8),
+            self._encode_blr(9),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_relocated_indirect_calls(
+            code, start, {0x3000: (R_AARCH64_RELATIVE, 0x5010)},
+            {0x5010: ["Receiver::Cycle"]},
+        )
+        self.assertEqual(summary["resolved_indirect_method_call_counts"], {})
+        self.assertEqual(summary["unresolved_indirect_call_count"], 1)
+
+    def test_ambiguous_indirect_target_is_not_assigned_a_method(self):
+        start = 0x5000
+        words = (
+            self._encode_adrp(start, 0x3000, 8),
+            self._encode_add_x(8, 8, 0x80),
+            self._encode_ldr_x(9, 8),
+            self._encode_blr(9),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_relocated_indirect_calls(
+            code, start, {0x3080: (R_AARCH64_RELATIVE, 0x5010)},
+            {0x5010: ["Receiver::Cycle", "Sender::Cycle"]},
+        )
+        self.assertEqual(summary["resolved_indirect_method_call_counts"], {})
+        self.assertEqual(summary["ambiguous_indirect_call_count"], 1)
+        self.assertEqual(summary["unresolved_indirect_call_count"], 0)
+
+    def test_indirect_tail_branch_is_reported_separately(self):
+        start = 0x5000
+        words = (
+            self._encode_adrp(start, 0x3000, 8),
+            self._encode_add_x(8, 8, 0x80),
+            self._encode_ldr_x(9, 8),
+            0xD61F0000 | (9 << 5),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_relocated_indirect_calls(
+            code, start, {0x3080: (R_AARCH64_RELATIVE, 0x5010)},
+            {0x5010: ["Receiver::Cycle"]},
+        )
+        self.assertEqual(
+            summary["resolved_indirect_tail_method_call_counts"],
+            {"Receiver::Cycle": 1},
+        )
+        self.assertEqual(summary["unresolved_indirect_tail_call_count"], 0)
+
+    def test_aarch64_indirect_instruction_decoders_reject_other_words(self):
+        self.assertIsNone(_decode_aarch64_adrp(0xD503201F, 0x5000))
+        self.assertIsNone(_decode_aarch64_add_imm64(0xD503201F))
+        self.assertIsNone(_decode_aarch64_ldr_x_unsigned(0xD503201F))
 
 
 if __name__ == "__main__":
