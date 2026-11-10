@@ -124,6 +124,9 @@ class SqliteAuthRateLimiterTests(unittest.TestCase):
             {"window_seconds": 86_401},
             {"lockout_seconds": -1},
             {"lockout_seconds": True},
+            {"max_buckets": 0},
+            {"max_buckets": True},
+            {"max_buckets": 1_000_001},
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 SqliteAuthRateLimiter(self.db, self.secret, **kwargs)
@@ -165,6 +168,34 @@ class SqliteAuthRateLimiterTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(row[0], 3)
         self.assertEqual(row[1], 1_030.0)
+
+
+    def test_bucket_capacity_is_bounded_and_expired_rows_are_pruned(self):
+        limiter = SqliteAuthRateLimiter(
+            self.db, self.secret, max_attempts=3, window_seconds=60,
+            lockout_seconds=30, max_buckets=2, clock=lambda: self.now[0],
+        )
+        limiter.record_failure("alice")
+        limiter.record_failure("bob")
+        with self.assertRaises(AuthenticationRateLimited):
+            limiter.record_failure("carol")
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM auth_attempt_limits").fetchone()[0],
+            2,
+        )
+
+        # Existing buckets remain usable at capacity; only a new principal is rejected.
+        self.assertEqual(limiter.record_failure("alice"), 2)
+
+        # Expired windows are pruned before a new bucket is inserted.
+        self.now[0] += 60
+        self.assertEqual(limiter.record_failure("carol"), 1)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM auth_attempt_limits"
+            ).fetchone()[0],
+            1,
+        )
 
 
 if __name__ == "__main__":
