@@ -110,3 +110,8 @@ Private read-only inspection of the native `SimpleSerializer` and `SimpleDeseria
 The isolated `server/aow_primitive_codec.py` implementation has synthetic known-vector tests and is intentionally not connected to network handlers. These findings describe primitive payload helpers only. They do not establish LoginRequest field order, optionality, outer framing/header, message IDs, compression/encryption, active transport, handshake sequence or APK compatibility.
 
 No APK bytes, native addresses, raw instructions, endpoint values or packet captures are committed.
+
+
+## Synthetic credential authentication boundary — 2026-11-10
+
+The repository now contains a local-only PBKDF2-HMAC-SHA256 credential verifier that can issue a durable synthetic session after rechecking the credential in the same SQLite write transaction. This is a server-domain security primitive, **not** evidence of the APK's password encoding, hash/challenge algorithm, login message fields, handshake, or token format. It is not exposed as an HTTP route and must not be connected to an APK adapter until those client-facing semantics are established from authorized offline evidence and a redacted reproducible fixture.
