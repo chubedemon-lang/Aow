@@ -2,14 +2,11 @@
 
 This is a local server-domain integration only. It is NOT the AOW APK login
 protocol and does not establish original-game character, map or movement
-semantics. Session tokens must only be issued after trusted account
-authentication. No HTTP route is registered by this facade.
-
-Every operation holds BEGIN IMMEDIATE across session resolution, character
-ownership and map persistence so revocation cannot race a protected operation.
-
-Session tokens must only be issued after trusted account authentication.
-No HTTP route is registered here. Character ownership transfer is not supported.
+semantics. Every operation holds BEGIN IMMEDIATE across session resolution,
+character ownership and map persistence so revocation cannot race a protected
+operation. Session tokens must only be issued after trusted account
+authentication. No HTTP route is registered here; ownership transfer is not
+supported.
 """
 import sqlite3
 
