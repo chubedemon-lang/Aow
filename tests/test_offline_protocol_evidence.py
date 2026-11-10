@@ -77,6 +77,40 @@ class EvidenceManifestTests(unittest.TestCase):
         self.assertEqual(original["notes"], "  local-only  ")
         self.assertEqual(result[0]["notes"], "local-only")
 
+    def test_rejects_urls_in_every_free_text_field(self):
+        for field in ("method", "reproduction", "test_reference", "notes"):
+            with self.subTest(field=field):
+                with self.assertRaises(EvidenceError):
+                    validate_record(sample(**{field: "review https://example.invalid/private?q=token"}))
+
+    def test_rejects_ipv4_endpoints_in_free_text(self):
+        with self.assertRaises(EvidenceError):
+            validate_record(sample(notes="observed endpoint 192.0.2.10"))
+
+    def test_rejects_credential_assignments(self):
+        for value in ("token=abc123", "password:secret", "api_key=xyz", "Authorization:Bearer abc123"):
+            with self.subTest(value=value):
+                with self.assertRaises(EvidenceError):
+                    validate_record(sample(notes=value))
+
+    def test_rejects_bearer_values_and_raw_byte_markers(self):
+        with self.assertRaises(EvidenceError):
+            validate_record(sample(notes="Bearer abcdefghijklmnop"))
+        with self.assertRaises(EvidenceError):
+            validate_record(sample(notes="packet_bytes=00112233"))
+
+    def test_rejects_private_key_pem_marker(self):
+        with self.assertRaises(EvidenceError):
+            validate_record(sample(notes="-----BEGIN PRIVATE KEY-----"))
+
+    def test_accepts_redacted_provenance_without_endpoint_values(self):
+        item = validate_record(sample(
+            method="Authorized local offline inspection",
+            reproduction="Replay synthetic fixture; endpoint redacted",
+            notes="Credentials and endpoint values omitted",
+        ))
+        self.assertEqual(item["status"], "unverified")
+
 
 if __name__ == "__main__":
     unittest.main()
