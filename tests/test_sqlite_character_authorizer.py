@@ -73,16 +73,10 @@ class SqliteCharacterAuthorizerTests(unittest.TestCase):
             self.db.rollback()
 
     def test_revocation_serializes_after_protected_transaction(self):
-        connection = sqlite3.connect(
-            self.path, timeout=10, isolation_level=None
-        )
-        self.addCleanup(connection.close)
-        revoker = SqliteSessionStore(
-            connection, ttl_seconds=60, clock=lambda: self.now[0]
-        )
         started = threading.Event()
         completed = threading.Event()
         result = []
+        errors = []
 
         self.db.execute("BEGIN IMMEDIATE")
         self.assertEqual(
@@ -91,9 +85,20 @@ class SqliteCharacterAuthorizerTests(unittest.TestCase):
         )
 
         def revoke():
-            started.set()
-            result.append(revoker.revoke(self.owner_token))
-            completed.set()
+            connection = sqlite3.connect(
+                self.path, timeout=10, isolation_level=None
+            )
+            try:
+                revoker = SqliteSessionStore(
+                    connection, ttl_seconds=60, clock=lambda: self.now[0]
+                )
+                started.set()
+                result.append(revoker.revoke(self.owner_token))
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                connection.close()
+                completed.set()
 
         thread = threading.Thread(target=revoke)
         thread.start()
@@ -102,6 +107,8 @@ class SqliteCharacterAuthorizerTests(unittest.TestCase):
         self.db.commit()
         self.assertTrue(completed.wait(5))
         thread.join(timeout=5)
+        if errors:
+            raise errors[0]
         self.assertEqual(result, [True])
         with self.assertRaises(SessionError):
             self.sessions.resolve(self.owner_token)
