@@ -129,3 +129,16 @@ The tools support the observed metadata version 31 only, check header/table boun
 - [Perfare/Il2CppDumper `MetadataClass.cs` at the pinned source commit](https://github.com/Perfare/Il2CppDumper/blob/4741d46ba9cd6159c5d853eb9d6fc48b4bfa2b1a/Il2CppDumper/Il2Cpp/MetadataClass.cs) — version gates and field layouts for type, method, and field definitions.
 - [Il2CppTypeDefinition v27–v31 layout](https://reverseengineering.wiki/index.php/Fact:IL2CPP_global-metadata.dat/struct/Il2CppTypeDefinition_v27_to_v31).
 - [Il2CppMethodDefinition layout](https://reverseengineering.wiki/index.php/Fact:IL2CPP_global-metadata.dat/struct/Il2CppMethodDefinition).
+
+
+## Raw signature-index follow-up
+
+The read-only v31 inventory now records, for allowlisted message and network types:
+
+- each field's raw metadata `type_index` and metadata token;
+- each method's raw return-type index, return-parameter token, generic-container index, metadata token, flags, interface flags, slot and parameter list;
+- each parameter's metadata name, raw type index and metadata token.
+
+These values are copied from the v31 metadata records after table-bound and owner/range checks. **They are not resolved managed types.** The type indexes refer to the native IL2CPP type-registration layer and cannot be converted into names from the metadata tables alone. The metadata tokens are managed metadata identifiers, not AOW wire message IDs. The raw indexes do not reveal serializer field order or prove the runtime path is active.
+
+The public tool emits only the targeted message/network type records and the existing allowlisted `MessageTypes` field names. Original APK bytes, native library bytes, extracted assets, and full local analysis output remain private.
