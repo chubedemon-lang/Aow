@@ -53,3 +53,22 @@ class SqliteCharacterAuthorizer:
             # Do not reveal whether an unknown/foreign character exists.
             raise SessionError("character not owned by session")
         return str(character_id)
+
+    def require_in_transaction(self, token: str, character_id: int) -> str:
+        """Authorize a character within the caller's existing SQLite transaction.
+
+        Callers should use BEGIN IMMEDIATE before this method and retain the
+        transaction through the protected state operation.
+        """
+        if not self.db.in_transaction:
+            raise ValueError("active SQLite transaction required")
+        if type(character_id) is not int or character_id < 1:
+            raise SessionError("invalid character")
+        account_id = self.sessions.resolve_in_transaction(token)
+        row = self.db.execute(
+            "SELECT 1 FROM characters WHERE id=? AND account_id=?",
+            (character_id, account_id),
+        ).fetchone()
+        if row is None:
+            raise SessionError("character not owned by session")
+        return str(character_id)
