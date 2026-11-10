@@ -69,7 +69,7 @@ class SqliteSessionStoreTests(unittest.TestCase):
         self.assertEqual(store.resolve(token), 12)
 
     def test_invalid_inputs_do_not_create_rows(self):
-        for account_id in (True, 0, -1, "1"):
+        for account_id in (True, 0, -1, "1", 2**63):
             with self.subTest(account_id=account_id), self.assertRaises(ValueError):
                 self.store.issue(account_id)
         for ttl in (True, 0, -1, 31_536_001, 1.5):
@@ -84,12 +84,25 @@ class SqliteSessionStoreTests(unittest.TestCase):
         )
 
     def test_clock_must_be_finite_epoch_value(self):
-        for value in (True, -1, float("nan"), float("inf"), "100"):
+        for value in (True, -1, float("nan"), float("inf"), "100", 10**1000):
             store = SqliteSessionStore(self.db, clock=lambda value=value: value)
-            with self.subTest(value=value), self.assertRaises(ValueError):
+            with self.subTest(value=str(value)[:20]), self.assertRaises(ValueError):
                 store.issue(1)
         self.assertEqual(
             self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            0,
+        )
+
+    def test_constructor_does_not_commit_callers_transaction(self):
+        self.db.execute("CREATE TABLE caller_work (value INTEGER)")
+        self.db.commit()
+        self.db.execute("INSERT INTO caller_work VALUES (1)")
+        with self.assertRaises(ValueError):
+            SqliteSessionStore(self.db)
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM caller_work").fetchone()[0],
             0,
         )
 
