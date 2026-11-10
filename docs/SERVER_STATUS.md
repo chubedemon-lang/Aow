@@ -5,7 +5,7 @@
 ## Implemented — local/synthetic only
 
 - Local-only Python mock HTTP API and SQLite domain for synthetic account/character creation and movement.
-- Synthetic SQLite inventory, wallet and shop methods with transactional updates and concurrency tests; these methods are not exposed as authenticated HTTP routes.
+- Synthetic SQLite inventory and player-state stores plus an atomic shop purchase store. A purchase debits player currency, grants inventory, advances both revisions, writes both mutation-ledger rows and a durable idempotency receipt in one `BEGIN IMMEDIATE` transaction; tests cover concurrent duplicate requests and rollback. Offer IDs, items and prices remain synthetic. These methods are not exposed as authenticated HTTP routes.
 - Process-local session lifecycle and a separate durable SQLite bearer-session store. The durable store hashes opaque tokens, enforces expiry/revocation and survives process restarts, but it is not wired into the HTTP API and does not authenticate passwords or APK login.
 - Separate durable SQLite player snapshots with optimistic revisions and idempotent mutation receipts. The store is not yet wired into account/character ownership or the HTTP API.
 - SQLite reward/quest ledgers and synthetic map/movement/combat/quest modules with local regression tests.
