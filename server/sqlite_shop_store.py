@@ -238,20 +238,15 @@ class SqliteShopStore:
         )
         if type(quantity) is not int or not 1 <= quantity <= self.max_purchase_quantity:
             raise ShopStoreError("invalid purchase quantity")
-        if not isinstance(offer_id, str) or not offer_id:
+        if not isinstance(offer_id, str) or not _ID_PATTERN.fullmatch(offer_id):
             raise ShopStoreError("invalid offer identifier")
-        offer = self.offers.get(offer_id)
-        if offer is None:
-            raise ShopOfferNotFound("unknown shop offer")
-
-        total = offer.unit_price * quantity
-        if total > _MAX_CURRENCY:
-            raise ShopStoreError("purchase total exceeds currency limit")
+        # The idempotency payload records caller intent, not mutable catalog
+        # price data. A retry must replay the original receipt even if an offer
+        # is later repriced or removed from the current catalog.
         payload_json = json.dumps(
             [
                 character_id, expected_player_revision,
-                expected_inventory_revision, offer.offer_id,
-                offer.item_id, offer.unit_price, quantity,
+                expected_inventory_revision, offer_id, quantity,
             ],
             separators=(",", ":"), ensure_ascii=True,
         )
@@ -273,6 +268,13 @@ class SqliteShopStore:
                 result = self._decode_result(previous[2], replayed=True)
                 self.db.commit()
                 return result
+
+            offer = self.offers.get(offer_id)
+            if offer is None:
+                raise ShopOfferNotFound("unknown shop offer")
+            total = offer.unit_price * quantity
+            if total > _MAX_CURRENCY:
+                raise ShopStoreError("purchase total exceeds currency limit")
 
             player_row = self.db.execute(
                 """SELECT character_id, level, experience, currency, revision
