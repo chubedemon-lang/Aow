@@ -219,5 +219,105 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         )
 
 
+    def test_verify_integrity_accepts_empty_and_mutated_histories(self):
+        self.store.create("hero", capacity=3, max_stack=10)
+        self.store.create("other")
+        self.store.apply("hero", "audit-first", 0, [("potion", 5)])
+        self.store.apply("hero", "audit-second", 1, [("potion", -2)])
+        self.assertEqual(
+            self.store.verify_integrity(),
+            {"snapshots": 2, "items": 1, "mutations": 2},
+        )
+
+    def test_verify_integrity_rejects_missing_first_receipt(self):
+        self.store.create("hero")
+        self.store.apply("hero", "audit-first", 0, [("potion", 2)])
+        self.store.apply("hero", "audit-second", 1, [("potion", 1)])
+        self.db.execute(
+            "DELETE FROM inventory_mutations WHERE request_id='audit-first'"
+        )
+        with self.assertRaisesRegex(InventoryStoreError, "history has a gap"):
+            self.store.verify_integrity()
+
+    def test_verify_integrity_rejects_tampered_intermediate_receipt(self):
+        self.store.create("hero")
+        self.store.apply("hero", "audit-first", 0, [("potion", 2)])
+        self.store.apply("hero", "audit-second", 1, [("potion", 1)])
+        self.db.execute(
+            """UPDATE inventory_mutations SET result_json=?
+               WHERE request_id='audit-first'""",
+            ('{"character_id":"hero","capacity":20,"max_stack":99,'
+             '"revision":1,"items":[["potion",3]]}',),
+        )
+        with self.assertRaisesRegex(InventoryStoreError, "receipt does not match"):
+            self.store.verify_integrity()
+
+    def test_verify_integrity_rejects_invalid_payload_json(self):
+        self.store.create("hero")
+        self.store.apply("hero", "audit-first", 0, [("potion", 2)])
+        self.db.execute(
+            "UPDATE inventory_mutations SET payload_json='not-json' "
+            "WHERE request_id='audit-first'"
+        )
+        with self.assertRaisesRegex(InventoryStoreError, "mutation payload"):
+            self.store.verify_integrity()
+
+    def test_verify_integrity_rejects_capacity_overflow_in_stored_items(self):
+        self.store.create("hero", capacity=1, max_stack=10)
+        self.db.executemany(
+            "INSERT INTO inventory_items(character_id,item_id,quantity) "
+            "VALUES ('hero',?,1)",
+            (("potion",), ("gem",)),
+        )
+        with self.assertRaisesRegex(InventoryStoreError, "exceeds capacity"):
+            self.store.verify_integrity()
+
+    def test_verify_integrity_rejects_boolean_integer_in_receipt(self):
+        self.store.create("hero")
+        self.store.apply("hero", "audit-first", 0, [("potion", 1)])
+        self.db.execute(
+            """UPDATE inventory_mutations SET result_json=?
+               WHERE request_id='audit-first'""",
+            ('{"character_id":"hero","capacity":true,"max_stack":99,'
+             '"revision":1,"items":[["potion",1]]}',),
+        )
+        with self.assertRaisesRegex(InventoryStoreError, "receipt snapshot"):
+            self.store.verify_integrity()
+
+    def test_verify_integrity_accepts_shop_and_quest_inventory_receipts(self):
+        from server.sqlite_player_state_store import SqlitePlayerStateStore
+        from server.sqlite_shop_store import ShopOffer, SqliteShopStore
+        from server.sqlite_quest_inventory_award_store import (
+            SqliteQuestInventoryAwardStore,
+        )
+
+        players = SqlitePlayerStateStore(self.db)
+        players.create("hero", currency=100)
+        self.store.create("hero", capacity=10, max_stack=20)
+        shop = SqliteShopStore(
+            self.db, offers={"potion": ShopOffer("potion", "potion", 5)}
+        )
+        shop.purchase("hero", "buy-once", 0, 0, "potion", 2)
+        awards = SqliteQuestInventoryAwardStore(self.db, self.store)
+        awards.grant_once("hero", "quest-once", 1, 42, "gem", 2)
+        self.assertEqual(
+            self.store.verify_integrity(),
+            {"snapshots": 1, "items": 2, "mutations": 2},
+        )
+
+    def test_verify_integrity_is_read_only_and_requires_idle_connection(self):
+        self.store.create("hero")
+        before = open(self.path, "rb").read()
+        self.store.verify_integrity()
+        after = open(self.path, "rb").read()
+        self.assertEqual(after, before)
+
+        self.db.execute("BEGIN")
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            self.store.verify_integrity()
+        self.db.rollback()
+
+
+
 if __name__ == "__main__":
     unittest.main()
