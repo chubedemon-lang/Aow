@@ -74,6 +74,7 @@ class SqliteAuthRateLimiterTests(unittest.TestCase):
     def test_invalid_principals_share_one_bounded_bucket(self):
         self.limiter.record_failure(None)
         self.limiter.record_failure(object())
+        self.limiter.record_failure("\x00also-invalid")
         with self.assertRaises(AuthenticationRateLimited):
             self.limiter.check_allowed("\x00bad")
 
