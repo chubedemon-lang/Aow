@@ -149,8 +149,8 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
     methods = _network_methods(metadata, info)
     sections, relocations, tables = _module_tables(elf, info["images"])
     executable = [
-        x for x in sections.values()
-        if x["type"] == 1 and (x["flags"] & 0x4)
+        (name, section) for name, section in sections.items()
+        if section["type"] == 1 and (section["flags"] & 0x4)
     ]
     evidence = []
     for method in methods:
@@ -166,8 +166,8 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             else:
                 target = relocation[1]
                 matches = [
-                    x["name"] for x in executable
-                    if x["address"] <= target < x["address"] + x["size"]
+                    name for name, section in executable
+                    if section["address"] <= target < section["address"] + section["size"]
                 ]
                 if len(matches) == 1:
                     status, target_section = "executable_relocation", matches[0]
