@@ -52,3 +52,8 @@ See [the detailed offline type/field/method inventory](IL2CPP_PROTOCOL_IDENTIFIE
 ## Raw IL2CPP signature indexes — 2026-11-10
 
 The offline type inventory now preserves raw field, method-return, and parameter type indexes plus metadata tokens from the version-31 tables. This narrows the next investigation to the native type-registration data in `libil2cpp.so`, but does not resolve those indexes into managed type names. Metadata tokens are not wire message IDs. No field order, payload layout, framing rule, or active transport is inferred from these values.
+
+
+## MessageTypes default metadata — 2026-11-10
+
+The v31 metadata contains field-default records for the `MessageTypes` definition. In a private offline pass, the matching arm64 native type-registration array resolved the field and default-value type references to IL2CPP type code `I4` (32-bit integer). This identifies the static metadata storage type only. It does not prove that these constants are used as wire message IDs or establish their byte order/framing in transmitted packets. Numeric candidates remain private and are not committed.
