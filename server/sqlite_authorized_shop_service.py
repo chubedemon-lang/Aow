@@ -6,10 +6,9 @@ prices and item IDs remain caller-supplied synthetic data.
 
 Every purchase holds one BEGIN IMMEDIATE transaction across session
 resolution, character ownership, debit, item grant and receipt replay. Session
-revocation therefore serializes before or after the complete purchase.
-
-Session tokens must only be issued after trusted account authentication.
-No HTTP route is registered here. Character ownership transfer is not supported.
+revocation therefore serializes before or after the complete purchase. Session
+tokens must only be issued after trusted account authentication. No HTTP route
+is registered here; character ownership transfer is not supported.
 """
 import sqlite3
 
