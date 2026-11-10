@@ -35,7 +35,7 @@ class SqliteShopStoreTests(unittest.TestCase):
         self.players = SqlitePlayerStateStore(self.db)
         self.inventory = SqliteInventoryStore(self.db)
         self.players.create("hero", level=3, experience=17, currency=100)
-        self.inventory.create("hero", capacity=2, max_stack=5)
+        self.inventory.create("hero", capacity=1, max_stack=5)
         self.offers = {
             "potion-pack": ShopOffer("potion-pack", "potion", 12),
             "rare-token": ShopOffer("rare-token", "token", 40),
@@ -110,18 +110,37 @@ class SqliteShopStoreTests(unittest.TestCase):
         with self.assertRaises(ShopRevisionConflict):
             self.shop.purchase("hero", "stale-inventory", 1, 0, "potion-pack")
         self.assertEqual(self.players.get("hero").currency, 100)
-        self.assertEqual(self.inventory.get("hero").count("herb"), 1)
+        self.assertEqual(self.inventory.get("hero").count("potion"), 2)
 
     def test_exact_retry_returns_original_result_after_later_mutations(self):
         first = self.shop.purchase("hero", "stable-request", 0, 0, "potion-pack", 1)
         self.players.apply("hero", "later-player-change", 1, currency_delta=5)
-        self.inventory.apply("hero", "later-inventory-change", 1, [("herb", 1)])
+        self.inventory.apply("hero", "later-inventory-change", 1, [("potion", 1)])
         replay = self.shop.purchase("hero", "stable-request", 0, 0, "potion-pack", 1)
         self.assertTrue(replay.replayed)
         self.assertEqual(replay.player, first.player)
         self.assertEqual(replay.inventory, first.inventory)
         self.assertEqual(self.players.get("hero").currency, 93)
         self.assertEqual(self.inventory.get("hero").count("herb"), 1)
+
+    def test_retry_survives_offer_removal_and_repricing(self):
+        original = self.shop.purchase("hero", "catalog-change", 0, 0, "potion-pack", 1)
+        changed_catalog = {
+            "potion-pack": ShopOffer("potion-pack", "potion", 99),
+        }
+        changed_shop = SqliteShopStore(self.db, changed_catalog)
+        replay = changed_shop.purchase("hero", "catalog-change", 0, 0, "potion-pack", 1)
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.total, original.total)
+        self.assertEqual(replay.player, original.player)
+        removed_catalog_shop = SqliteShopStore(
+            self.db, {"rare-token": self.offers["rare-token"]}
+        )
+        removed_replay = removed_catalog_shop.purchase(
+            "hero", "catalog-change", 0, 0, "potion-pack", 1
+        )
+        self.assertTrue(removed_replay.replayed)
+        self.assertEqual(removed_replay, replay)
 
     def test_request_id_cannot_be_reused_for_another_purchase(self):
         self.shop.purchase("hero", "same-key", 0, 0, "potion-pack", 1)
