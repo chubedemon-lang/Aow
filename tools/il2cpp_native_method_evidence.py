@@ -5,6 +5,7 @@ instructions, packet bytes, endpoints and proprietary assets remain private.
 This is static registration evidence, not a wire-protocol compatibility proof.
 """
 import argparse
+import bisect
 import hashlib
 import json
 import struct
@@ -200,6 +201,86 @@ def _decode_aarch64_bl_target(word, pc):
     return pc + (immediate << 2)
 
 
+def _all_method_targets(metadata, info, tables, relocations, executable, target_addresses):
+    """Resolve selected direct-call destinations to metadata method labels only."""
+    string_off, string_size, _ = _table(metadata, 0x18, 1, "string heap")
+    method_off, _, method_total = _table(metadata, 0x30, 0x24, "methods")
+    type_off, _, type_total = _table(metadata, 0xA0, 0x58, "types")
+    heap = _slice(metadata, string_off, string_size, "string heap")
+
+    def read_string(index):
+        if type(index) is not int or not 0 <= index < len(heap):
+            raise CodegenInventoryError("invalid metadata string index")
+        end = heap.find(b"\\0", index)
+        if end < 0:
+            raise CodegenInventoryError("unterminated metadata string")
+        try:
+            return heap[index:end].decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise CodegenInventoryError("invalid metadata UTF-8") from exc
+
+    image_ranges = sorted(
+        (item["method_start"], item["method_start"] + item["method_count"], item["name"])
+        for item in info["images"]
+        if item["method_start"] is not None and item["method_count"]
+    )
+    image_starts = [item[0] for item in image_ranges]
+    targets = defaultdict(list)
+
+    for type_index in range(type_total):
+        type_pos = type_off + type_index * 0x58
+        name_index, namespace_index = struct.unpack_from("<II", metadata, type_pos)
+        type_name = read_string(name_index)
+        namespace = read_string(namespace_index)
+        method_start = struct.unpack_from("<i", metadata, type_pos + 0x24)[0]
+        method_count = struct.unpack_from("<H", metadata, type_pos + 0x40)[0]
+        if method_count == 0:
+            continue
+        if (method_start < 0 or method_start > method_total
+                or method_count > method_total - method_start):
+            raise CodegenInventoryError("type method range is invalid")
+
+        for method_index in range(method_start, method_start + method_count):
+            method_pos = method_off + method_index * 0x24
+            method_name_index = struct.unpack_from("<I", metadata, method_pos)[0]
+            owner = struct.unpack_from("<i", metadata, method_pos + 4)[0]
+            if owner != type_index:
+                raise CodegenInventoryError("method owner mismatch")
+            method_name = read_string(method_name_index)
+            parameter_count = struct.unpack_from("<H", metadata, method_pos + 34)[0]
+
+            image_index = bisect.bisect_right(image_starts, method_index) - 1
+            if image_index < 0:
+                continue
+            image_start, image_end, image_name = image_ranges[image_index]
+            if not image_start <= method_index < image_end:
+                continue
+            pointer_table = tables.get(image_name)
+            if pointer_table is None:
+                continue
+            relocation = relocations.get(
+                pointer_table + (method_index - image_start) * 8
+            )
+            if relocation is None or relocation[0] != R_AARCH64_RELATIVE:
+                continue
+            target = relocation[1]
+            if target not in target_addresses:
+                continue
+            matches = [
+                section for _, section in executable
+                if section["address"] <= target < section["address"] + section["size"]
+            ]
+            if len(matches) != 1:
+                continue
+            label = (
+                f"{namespace + '.' if namespace else ''}"
+                f"{type_name}::{method_name}/p{parameter_count}"
+            )
+            targets[target].append(label)
+
+    return targets
+
+
 def _decode_aarch64_b_target(word, pc):
     """Decode an AArch64 B-immediate target; return None for other opcodes."""
     if (type(word) is not int or not 0 <= word <= 0xFFFFFFFF
@@ -267,6 +348,64 @@ def _summarize_aarch64_calls(code, start_va, helper_targets):
         "direct_calls_not_in_helper_allowlist": other_direct,
         "indirect_call_count": indirect,
         "indirect_tail_call_count": indirect_tail,
+    }
+
+
+def _direct_branch_targets(code, start_va):
+    """Return direct AArch64 B/BL destinations from a bounded entry window."""
+    if not isinstance(code, bytes) or len(code) % 4:
+        raise ValueError("AArch64 code window must be a multiple of four bytes")
+    if type(start_va) is not int or start_va < 0 or start_va % 4:
+        raise ValueError("AArch64 code window start must be an aligned address")
+    targets = set()
+    for offset in range(0, len(code), 4):
+        word = struct.unpack_from("<I", code, offset)[0]
+        pc = start_va + offset
+        target = _decode_aarch64_bl_target(word, pc)
+        if target is None:
+            target = _decode_aarch64_b_target(word, pc)
+        if target is not None:
+            targets.add(target)
+    return targets
+
+
+def _summarize_named_method_calls(code, start_va, method_targets):
+    """Resolve direct B/BL destinations to unique metadata method labels."""
+    if not isinstance(code, bytes) or len(code) % 4:
+        raise ValueError("AArch64 code window must be a multiple of four bytes")
+    if type(start_va) is not int or start_va < 0 or start_va % 4:
+        raise ValueError("AArch64 code window start must be an aligned address")
+    direct = Counter()
+    tail = Counter()
+    unresolved_direct = 0
+    unresolved_tail = 0
+    for offset in range(0, len(code), 4):
+        word = struct.unpack_from("<I", code, offset)[0]
+        pc = start_va + offset
+        target = _decode_aarch64_bl_target(word, pc)
+        if target is not None:
+            labels = method_targets.get(target, ())
+            if len(labels) == 1:
+                direct[labels[0]] += 1
+            elif len(labels) > 1:
+                direct["<ambiguous_method_target>"] += 1
+            else:
+                unresolved_direct += 1
+            continue
+        target = _decode_aarch64_b_target(word, pc)
+        if target is not None:
+            labels = method_targets.get(target, ())
+            if len(labels) == 1:
+                tail[labels[0]] += 1
+            elif len(labels) > 1:
+                tail["<ambiguous_method_target>"] += 1
+            else:
+                unresolved_tail += 1
+    return {
+        "resolved_direct_method_call_counts": dict(sorted(direct.items())),
+        "resolved_direct_tail_method_call_counts": dict(sorted(tail.items())),
+        "unresolved_direct_method_call_count": unresolved_direct,
+        "unresolved_direct_tail_method_call_count": unresolved_tail,
     }
 
 
@@ -364,7 +503,8 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
     windows = _entrypoint_windows(
         sections, relocations, tables, info["images"], executable
     )
-    callsite_summary = []
+    serializer_windows = []
+    direct_targets = set()
     for method in methods:
         if method["category"] != "login_session_serializer":
             continue
@@ -378,7 +518,18 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         section = sections[section_name]
         file_offset = section["offset"] + target - section["address"]
         code = _slice(elf, file_offset, window_bytes, "native method entry window")
+        serializer_windows.append(
+            (method, section_name, target, window_bytes, truncated, code)
+        )
+        direct_targets.update(_direct_branch_targets(code, target))
+
+    method_targets = _all_method_targets(
+        metadata, info, tables, relocations, executable, direct_targets
+    )
+    callsite_summary = []
+    for method, section_name, target, window_bytes, truncated, code in serializer_windows:
         summary = _summarize_aarch64_calls(code, target, helper_targets)
+        named_summary = _summarize_named_method_calls(code, target, method_targets)
         callsite_summary.append({
             "type": method["type"],
             "method": method["method"],
@@ -387,6 +538,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "entry_window_bytes": window_bytes,
             "entry_window_truncated": truncated,
             **summary,
+            **named_summary,
         })
     callsite_summary.sort(key=lambda x: (x["type"], x["method"]))
 
@@ -440,7 +592,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "entries. Serializer and primitive-helper callsite summaries count direct AArch64 BL calls "
             "to allowlisted SimpleSerializer/SimpleDeserializer helpers inside a "
             "bounded entry window ending at the next distinct executable entry "
-            "in the same section. Direct tail branches and indirect tail branches are reported separately. Indirect calls and other direct calls are counted "
+            "in the same section. Direct tail branches and indirect tail branches are reported separately. Direct B/BL targets are resolved against metadata-backed method entries where unique; unresolved and ambiguous targets remain counts only. Indirect calls and other direct calls are counted "
             "but not assigned field semantics. This is static evidence only, not "
             "a wire protocol, field order, handshake, login, or compatibility proof."
         ),
