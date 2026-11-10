@@ -1,19 +1,20 @@
 # AOW protocol evidence ledger
 
-**Current status: unknown.** Unity IL2CPP and Addressables have been identified, but no verified transport, packet structure, server host, authentication flow, or wire captures are available here.
+**Current status: unknown.** Unity IL2CPP and Addressables are present. Offline metadata now identifies a client message serializer/deserializer layer and socket sender/receiver abstractions, but no verified wire transport, packet framing, server host, authentication flow, or wire captures are available here.
 
 | Component | Verified evidence | Status |
 |---|---|---|
-| Endpoint discovery | Not established | Unknown |
-| Transport | Not established | Unknown |
-| Handshake | Not established | Unknown |
-| Serialization | Not established | Unknown |
-| Compression/encryption | Not established | Unknown |
-| Login/session | Not established | Unknown |
+| Endpoint discovery | Address configuration type names only; no values published | Unknown |
+| Transport | Socket/TCP-related metadata identifiers | Active transport unverified |
+| Framing | `HeaderLength`, header/stream buffers, zipped/encrypted/decrypted buffer identifiers | Layout and rules unknown |
+| Handshake | Login/registration/session type names | Application handshake sequence unknown |
+| Serialization | Message type registry and paired serializer/deserializer type definitions | Wire encoding and field order unknown |
+| Compression/encryption | Zipped/encrypted/decrypted buffer and crypto-provider identifiers | Algorithms and activation rules unknown |
+| Login/session | Login, registration, and session-restore fields/methods identified | Wire semantics unknown |
 | Player initialization | Not established | Unknown |
-| World synchronization | Not established | Unknown |
+| World synchronization | Battle, lobby, map, and movement message names identified | Wire semantics unknown |
 
-Add each discovery with APK version/hash, observation method, confidence, redacted evidence and a local test. Never publish tokens or other users' data.
+Add each discovery with APK version/hash, observation method, confidence, redacted evidence and a reproducible local test. Never publish tokens or other users' data.
 
 ## Offline candidate scanner safety and limits
 
@@ -41,14 +42,8 @@ Observed namespace tokens include `com.geargames.aow.messages`, `com.geargames.c
 
 Observed network-related identifier strings include `NetworkSocket`, `NetworkSocketStream`, `NetworkSettings`, `MessageDispatcher`, `MessageHelper`, `MessageMeta`, `MessageTypes`, `IClientMessageSerializer`, `IClientMessageDeserializer`, `RemoteServerAddresses`, `ServerAddressHelper`, `ClientServerAddressConfiguration`, `ClientServerPreset`, `TransportType`, `CSEstablishConnection`, and `CSHttpSendRequestAndReceiveResponse`.
 
-Observed message-related identifier strings include `LoginRequest`, `LoginAnswer`, `SessionRestoreRequest`, `SessionRestoreAnswer`, `LoginToBattleRequest`, `LoginToBattleAnswer`, `RegistrationRequest`, `RegistrationAnswer`, `CheckSocket`, and `Ping`. Each of those ten identifiers has matching `STSerializer` and `STDeserializer` suffix strings in the metadata string heap.
+Observed message-related identifier strings include `LoginRequest`, `LoginAnswer`, `SessionRestoreRequest`, `SessionRestoreAnswer`, `LoginToBattleRequest`, `LoginToBattleAnswer`, `RegistrationRequest`, `RegistrationAnswer`, `BattleSessionRestoreRequest`, `BattleSessionRestoreAnswer`, `CheckSocket`, and `Ping`. Each has matching serializer/deserializer identifier suffix strings.
 
-**Interpretation limit:** these are static metadata string identifiers, not recovered method bodies or a wire specification. They do not establish message IDs, field layouts, payload encoding, framing, byte order, transport choice, endpoint selection, application handshake order, authentication semantics, or compatibility with the APK. In particular, names such as `NetworkSocket` and `TransportType` do not prove TCP, UDP, or any particular protocol. No extracted host/IP values are published and no remote host was contacted.
+**Interpretation limit:** these are static metadata strings and table associations, not recovered method bodies or a wire specification. They do not establish message IDs, field layouts, payload encoding, framing, byte order, transport choice, endpoint selection, application handshake order, authentication semantics, or compatibility with the APK. In particular, names such as `NetworkSocket` and `TransportType` do not prove a specific active protocol. No extracted host/IP values are published and no remote host was contacted.
 
-Reproduce the allowlisted inventory locally:
-
-```bash
-python tools/il2cpp_metadata_inventory.py /path/to/authorized/aow.apk --output /private/local/il2cpp_protocol_inventory.json
-```
-
-The tool reads only the bounded metadata member, validates the v31 header/string-heap bounds, emits an allowlisted identifier summary, and makes no network requests. Keep APK bytes and local reports outside this public repository. See [the detailed offline inventory](IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md).
+See [the detailed offline type/field/method inventory](IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md) for table counts, login/session field names, and framing-related identifiers. Keep APK bytes and local reports outside this public repository.
