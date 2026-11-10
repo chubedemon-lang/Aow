@@ -1,6 +1,7 @@
 """Session ownership tests for synthetic durable shop purchases only."""
 import os
 import sqlite3
+import threading
 import tempfile
 import unittest
 
@@ -10,13 +11,15 @@ from server.sqlite_inventory_store import SqliteInventoryStore
 from server.sqlite_player_state_store import SqlitePlayerStateStore
 from server.sqlite_shop_store import ShopOffer, ShopPurchase
 
+from server.sqlite_session_store import SqliteSessionStore
+
 
 class SqliteAuthorizedShopServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        path = os.path.join(self.temp.name, "authorized-shop.sqlite3")
-        self.db = sqlite3.connect(path, timeout=10, isolation_level=None)
+        self.path = os.path.join(self.temp.name, "authorized-shop.sqlite3")
+        self.db = sqlite3.connect(self.path, timeout=10, isolation_level=None, check_same_thread=False)
         self.addCleanup(self.db.close)
         self.db.execute(
             """CREATE TABLE characters (
@@ -166,6 +169,78 @@ class SqliteAuthorizedShopServiceTests(unittest.TestCase):
         self.assertNotIn("shop_purchase_receipts", tables)
         self.assertNotIn("player_state_snapshots", tables)
         self.assertNotIn("inventory_snapshots", tables)
+
+
+
+    def test_session_revocation_serializes_with_atomic_purchase(self):
+        entered = threading.Event()
+        release = threading.Event()
+        revoke_started = threading.Event()
+        revoke_done = threading.Event()
+        outcome = {}
+        original_purchase = self.service._shop.purchase
+
+        def paused_purchase(*args, **kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("test did not release shop purchase")
+            return original_purchase(*args, **kwargs)
+
+        self.service._shop.purchase = paused_purchase
+
+        def purchase():
+            try:
+                outcome["purchase"] = self.service.purchase(
+                    self.owner_token, 101, "atomic-revoke-buy",
+                    0, 0, "potion-pack", 1,
+                )
+            except BaseException as exc:
+                outcome["purchase_error"] = exc
+
+        def revoke():
+            connection = sqlite3.connect(
+                self.path, timeout=10, isolation_level=None
+            )
+            try:
+                sessions = SqliteSessionStore(
+                    connection, ttl_seconds=30, clock=lambda: self.now[0]
+                )
+                revoke_started.set()
+                outcome["revoked"] = sessions.revoke(self.owner_token)
+            except BaseException as exc:
+                outcome["revoke_error"] = exc
+            finally:
+                connection.close()
+                revoke_done.set()
+
+        purchase_thread = threading.Thread(target=purchase)
+        revoke_thread = threading.Thread(target=revoke)
+        purchase_thread.start()
+        self.assertTrue(entered.wait(5))
+        revoke_thread.start()
+        self.assertTrue(revoke_started.wait(5))
+        try:
+            self.assertFalse(
+                revoke_done.wait(0.2),
+                "session revocation must wait for the authorized purchase",
+            )
+        finally:
+            release.set()
+        purchase_thread.join(5)
+        revoke_thread.join(5)
+        self.assertFalse(purchase_thread.is_alive())
+        self.assertFalse(revoke_thread.is_alive())
+        self.assertNotIn("purchase_error", outcome)
+        self.assertNotIn("revoke_error", outcome)
+        self.assertTrue(outcome["revoked"])
+        self.assertEqual(outcome["purchase"].total, 12)
+        self.assertEqual(self.players.get("101").currency, 88)
+        self.assertEqual(self.inventory.get("101").count("potion"), 1)
+        with self.assertRaises(SessionError):
+            self.service.purchase(
+                self.owner_token, 101, "after-revoke",
+                1, 1, "potion-pack", 1,
+            )
 
 
 if __name__ == "__main__":
