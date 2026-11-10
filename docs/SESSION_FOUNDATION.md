@@ -14,6 +14,8 @@ server/sessions.py implements a local-only session primitive:
 
 ## Durable SQLite token store
 
+The store also exposes resolve_in_transaction() for callers that already hold a SQLite transaction. Pair it with BEGIN IMMEDIATE and SqliteCharacterAuthorizer.require_in_transaction() so session revocation cannot race between authorization and a protected state mutation. These methods do not open, commit, or roll back the caller's transaction.
+
 server/sqlite_session_store.py is a separate persistence primitive:
 
 - Stores only SHA-256 token digests, account IDs and epoch-based expiry timestamps.
