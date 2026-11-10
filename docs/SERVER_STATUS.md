@@ -16,6 +16,7 @@
 - Separate durable SQLite player snapshots with optimistic revisions and idempotent mutation receipts. The store remains a domain persistence primitive and does not establish AOW player initialization or progression rules.
 - Separate durable SQLite synthetic map-position snapshots with map-bound enter/move/leave transitions, optimistic revisions and idempotent receipts. The underlying store remains a persistence primitive and does not establish AOW map or movement rules.
 - SQLite reward/quest ledgers and synthetic map/movement/combat/quest modules with local regression tests.
+- A session-authorized SQLite combat facade persists deterministic synthetic battle snapshots and turn events with optimistic revisions and idempotent receipts; actor selection remains a trusted server-coordinator responsibility, and no HTTP/AOW route is exposed.
 - Offline APK inventory, protocol-candidate and IL2CPP metadata/type/codegen analysis tools. They make no network requests and do not modify the APK.
 - GitHub Actions for synthetic server tests, protocol discovery tests and repository quality checks.
 
