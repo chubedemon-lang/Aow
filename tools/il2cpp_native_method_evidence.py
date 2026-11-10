@@ -211,7 +211,7 @@ def _all_method_targets(metadata, info, tables, relocations, executable, target_
     def read_string(index):
         if type(index) is not int or not 0 <= index < len(heap):
             raise CodegenInventoryError("invalid metadata string index")
-        end = heap.find(b"\\0", index)
+        end = heap.find(b"\0", index)
         if end < 0:
             raise CodegenInventoryError("unterminated metadata string")
         try:
