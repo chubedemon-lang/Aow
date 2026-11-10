@@ -199,6 +199,71 @@ class SqlitePlayerStateStoreTests(unittest.TestCase):
         self.assertEqual(self.store.get("hero").currency, 90)
         self.assertEqual(self.store.get("hero").revision, 1)
 
+    def test_verify_integrity_accepts_initial_and_mutated_snapshots(self):
+        self.store.create("hero", level=4, experience=20, currency=100)
+        self.store.create("other", level=2, experience=7, currency=3)
+        self.store.apply(
+            "hero", "audit-first", 0, level=5,
+            experience_delta=10, currency_delta=-10,
+        )
+        self.store.apply(
+            "hero", "audit-second", 1,
+            experience_delta=4, currency_delta=5,
+        )
+        self.assertEqual(
+            self.store.verify_integrity(),
+            {"snapshots": 2, "mutations": 2},
+        )
+
+    def test_verify_integrity_rejects_missing_first_receipt(self):
+        self.store.create("hero", currency=100)
+        self.store.apply("hero", "audit-first", 0, currency_delta=-10)
+        self.store.apply("hero", "audit-second", 1, currency_delta=5)
+        self.db.execute(
+            "DELETE FROM player_state_mutations WHERE request_id='audit-first'"
+        )
+        with self.assertRaisesRegex(PlayerStoreError, "history has a gap"):
+            self.store.verify_integrity()
+
+    def test_verify_integrity_rejects_tampered_intermediate_receipt(self):
+        self.store.create("hero", currency=100)
+        self.store.apply("hero", "audit-first", 0, currency_delta=-10)
+        self.store.apply("hero", "audit-second", 1, currency_delta=5)
+        self.db.execute(
+            "UPDATE player_state_mutations SET result_currency=91 "
+            "WHERE request_id='audit-first'"
+        )
+        with self.assertRaisesRegex(PlayerStoreError, "receipt does not match"):
+            self.store.verify_integrity()
+
+    def test_verify_integrity_rejects_orphan_mutation(self):
+        self.db.execute(
+            """INSERT INTO player_state_mutations
+               (request_id, character_id, expected_revision, requested_level,
+                experience_delta, currency_delta, result_level,
+                result_experience, result_currency, result_revision)
+               VALUES ('orphan', 'missing', 0, NULL, 1, 0, 1, 1, 0, 1)"""
+        )
+        with self.assertRaisesRegex(PlayerStoreError, "no player snapshot"):
+            self.store.verify_integrity()
+
+    def test_verify_integrity_rejects_revision_without_receipt(self):
+        self.store.create("hero")
+        self.db.execute(
+            "UPDATE player_state_snapshots SET revision=1 WHERE character_id='hero'"
+        )
+        with self.assertRaisesRegex(PlayerStoreError, "no mutation history"):
+            self.store.verify_integrity()
+
+    def test_verify_integrity_requires_idle_connection(self):
+        self.store.create("hero")
+        self.db.execute("BEGIN")
+        try:
+            with self.assertRaisesRegex(ValueError, "active transaction"):
+                self.store.verify_integrity()
+        finally:
+            self.db.rollback()
+
     def test_constructor_does_not_commit_callers_transaction(self):
         self.db.execute("CREATE TABLE caller_work (value INTEGER)")
         self.db.execute("BEGIN")
