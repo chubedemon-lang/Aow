@@ -83,7 +83,9 @@ class ShopPurchase:
 class SqliteShopStore:
     """Persist an atomic debit + inventory grant with idempotent receipts.
 
-    The supplied connection must be idle at construction and before purchase.
+    The supplied connection must be idle at construction. Purchases start their own
+    transaction when called standalone, or join an existing caller-owned
+    transaction without committing or rolling it back.
     Constructing this store initializes the same schema used by
     SqlitePlayerStateStore and SqliteInventoryStore. A purchase updates those
     tables directly so the currency debit, item grant, their revision/audit
@@ -250,10 +252,9 @@ class SqliteShopStore:
             ],
             separators=(",", ":"), ensure_ascii=True,
         )
-        if self.db.in_transaction:
-            raise ValueError("connection must not have an active transaction")
-
-        self.db.execute("BEGIN IMMEDIATE")
+        owns_transaction = not self.db.in_transaction
+        if owns_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
         try:
             previous = self.db.execute(
                 """SELECT character_id, payload_json, result_json
@@ -266,6 +267,8 @@ class SqliteShopStore:
                         "request id reused with a different purchase"
                     )
                 result = self._decode_result(previous[2], replayed=True)
+                if owns_transaction:
+                    if owns_transaction:
                 self.db.commit()
                 return result
 
@@ -398,8 +401,10 @@ class SqliteShopStore:
                     updated_player.revision, updated_inventory.revision,
                 ),
             )
-            self.db.commit()
+            if owns_transaction:
+                self.db.commit()
             return result
         except BaseException:
-            self.db.rollback()
+            if owns_transaction:
+                self.db.rollback()
             raise
