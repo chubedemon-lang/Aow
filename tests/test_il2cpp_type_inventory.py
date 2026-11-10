@@ -30,7 +30,7 @@ def make_metadata(types=(), *, version=31, magic=METADATA_MAGIC,
     indexes = {}
     for value in values:
         indexes[value] = len(heap)
-        heap.extend(value.encode("utf-8") + b"\\x00")
+        heap.extend(value.encode("utf-8") + b"\x00")
 
     fields = []
     methods = []
