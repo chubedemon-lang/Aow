@@ -20,7 +20,7 @@ class EvidenceRegistryTests(unittest.TestCase):
     def test_verified_explicit_only(self):
         registry = EvidenceRegistry()
         registry.add(Evidence("login", self.sha, "offline observation", "manual review", True))
-        self.assertEqual(registry.summary()["login"]["verified"], 1)
+        self.assertEqual(registry.summary()["login"], {"observations": 1, "verified": 1})
 
     def test_duplicate_rejected(self):
         registry = EvidenceRegistry()
@@ -46,6 +46,18 @@ class EvidenceRegistryTests(unittest.TestCase):
         summary = registry.summary()
         self.assertEqual(summary["player"]["observations"], 1)
         self.assertEqual(summary["map"]["observations"], 1)
+
+    def test_primitive_serialization_is_a_distinct_topic(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence(
+            "serialization", self.sha,
+            "primitive helper method-body observation",
+            "authorized offline native inspection",
+        ))
+        self.assertEqual(
+            registry.summary()["serialization"],
+            {"observations": 1, "verified": 0},
+        )
 
     def test_summary_empty(self):
         self.assertEqual(EvidenceRegistry().summary()["handshake"]["verified"], 0)
