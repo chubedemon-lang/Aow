@@ -37,6 +37,26 @@ TARGET_METHODS = {
         "Dispatch", "TypeRegister",
     },
     ("", "NetworkSocketStream"): {"Read", "Write"},
+    ("com.geargames.serialization.serializers", "LoginRequestSTSerializer"): {"serialize"},
+    ("com.geargames.serialization.serializers", "LoginRequestSTDeserializer"): {"deserialize"},
+    ("com.geargames.serialization.serializers", "LoginAnswerSTSerializer"): {"serialize"},
+    ("com.geargames.serialization.serializers", "LoginAnswerSTDeserializer"): {"deserialize"},
+    ("com.geargames.serialization.serializers", "RegistrationRequestSTSerializer"): {"serialize"},
+    ("com.geargames.serialization.serializers", "RegistrationRequestSTDeserializer"): {"deserialize"},
+    ("com.geargames.serialization.serializers", "RegistrationAnswerSTSerializer"): {"serialize"},
+    ("com.geargames.serialization.serializers", "RegistrationAnswerSTDeserializer"): {"deserialize"},
+    ("com.geargames.serialization.serializers", "SessionRestoreRequestSTSerializer"): {"serialize"},
+    ("com.geargames.serialization.serializers", "SessionRestoreRequestSTDeserializer"): {"deserialize"},
+    ("com.geargames.serialization.serializers", "SessionRestoreAnswerSTSerializer"): {"serialize"},
+    ("com.geargames.serialization.serializers", "SessionRestoreAnswerSTDeserializer"): {"deserialize"},
+    ("com.geargames.serialization.serializers", "LoginToBattleRequestSTSerializer"): {"serialize"},
+    ("com.geargames.serialization.serializers", "LoginToBattleRequestSTDeserializer"): {"deserialize"},
+    ("com.geargames.serialization.serializers", "LoginToBattleAnswerSTSerializer"): {"serialize"},
+    ("com.geargames.serialization.serializers", "LoginToBattleAnswerSTDeserializer"): {"deserialize"},
+    ("com.geargames.serialization.serializers", "BattleSessionRestoreRequestSTSerializer"): {"serialize"},
+    ("com.geargames.serialization.serializers", "BattleSessionRestoreRequestSTDeserializer"): {"deserialize"},
+    ("com.geargames.serialization.serializers", "BattleSessionRestoreAnswerSTSerializer"): {"serialize"},
+    ("com.geargames.serialization.serializers", "BattleSessionRestoreAnswerSTDeserializer"): {"deserialize"},
 }
 
 
@@ -94,6 +114,11 @@ def _network_methods(metadata, info):
                 raise CodegenInventoryError("method does not map to one metadata image")
             image_name, image_start, _ = matches[0]
             records.append({
+                "category": (
+                    "login_session_serializer"
+                    if namespace == "com.geargames.serialization.serializers"
+                    else "network"
+                ),
                 "namespace": namespace, "type": name, "method": method_name,
                 "parameter_count": parameter_count, "image": image_name,
                 "slot_index": index - image_start,
@@ -144,7 +169,7 @@ def _module_tables(elf, images):
 
 
 def inspect_bytes(metadata, elf, apk_sha256=None):
-    """Map allowlisted metadata methods to relocation-backed native entries."""
+    """Map allowlisted network and login/session serializer methods to relocation-backed native entries."""
     info = _metadata_images(metadata)
     methods = _network_methods(metadata, info)
     sections, relocations, tables = _module_tables(elf, info["images"])
@@ -187,7 +212,13 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         "apk_sha256": apk_sha256,
         "metadata_version": info["version"],
         "metadata_method_definitions": info["method_definitions"],
-        "observed_network_methods": len(evidence),
+        "observed_network_methods": sum(
+            x["category"] == "network" for x in evidence
+        ),
+        "observed_login_session_serializers": sum(
+            x["category"] == "login_session_serializer" for x in evidence
+        ),
+        "observed_methods_total": len(evidence),
         "executable_entrypoints": sum(
             x["entry_status"] == "executable_relocation" for x in evidence
         ),
@@ -195,7 +226,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         "native_addresses_emitted": False,
         "raw_instructions_emitted": False,
         "interpretation": (
-            "A metadata method slot has a relocation-backed pointer into an "
+            "A metadata method slot for an allowlisted network or login/session serializer method has a relocation-backed pointer into an "
             "executable ELF section. This is static native entry-point evidence "
             "only; it does not establish call semantics, active transport, "
             "framing, message IDs, serialization order, handshake, login, or "

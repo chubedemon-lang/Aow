@@ -6,7 +6,8 @@ import unittest
 from tools.il2cpp_native_method_evidence import inspect_bytes
 
 
-def make_metadata(method_names, wrong_owner=False):
+def make_metadata(method_names, wrong_owner=False, *, image="ScriptsAssembly.dll",
+                  type_name="Receiver", namespace="com.geargames.common.network"):
     header = bytearray(0x100)
     strings = bytearray()
 
@@ -15,9 +16,9 @@ def make_metadata(method_names, wrong_owner=False):
         strings.extend(value.encode("utf-8") + b"\0")
         return index
 
-    image_name = add("ScriptsAssembly.dll")
-    type_name = add("Receiver")
-    namespace = add("com.geargames.common.network")
+    image_name = add(image)
+    type_name_index = add(type_name)
+    namespace_index = add(namespace)
     method_names = [add(name) for name in method_names]
     string_offset = len(header)
     method_offset = string_offset + len(strings)
@@ -29,7 +30,7 @@ def make_metadata(method_names, wrong_owner=False):
         )
     type_offset = method_offset + len(method_data)
     type_data = bytearray(0x58)
-    struct.pack_into("<II", type_data, 0, type_name, namespace)
+    struct.pack_into("<II", type_data, 0, type_name_index, namespace_index)
     struct.pack_into("<i", type_data, 0x24, 0)
     struct.pack_into("<H", type_data, 0x40, len(method_names))
     image_offset = type_offset + len(type_data)
@@ -45,13 +46,14 @@ def make_metadata(method_names, wrong_owner=False):
     return bytes(header) + bytes(strings) + bytes(method_data) + bytes(type_data) + bytes(image_data)
 
 
-def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000):
+def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
+             image="ScriptsAssembly.dll"):
     names = b"\0.shstrtab\0.rodata\0.data.rel.ro\0.text\0.rela.dyn\0"
     offsets = {
         name: names.index(name.encode())
         for name in (".shstrtab", ".rodata", ".data.rel.ro", ".text", ".rela.dyn")
     }
-    image_name = b"ScriptsAssembly.dll\0"
+    image_name = image.encode("ascii") + b"\0"
     ro_off, relro_off, text_off, rela_off, names_off = 0x100, 0x120, 0x220, 0x240, 0x2A0
     names_end = names_off + len(names)
     shoff = (names_end + 7) & ~7
@@ -107,6 +109,8 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             make_metadata(["Cycle", "DoStreamReadedBytes"]), make_elf(2)
         )
         self.assertEqual(report["observed_network_methods"], 2)
+        self.assertEqual(report["observed_login_session_serializers"], 0)
+        self.assertEqual(report["observed_methods_total"], 2)
         self.assertEqual(report["executable_entrypoints"], 2)
         self.assertEqual(report["methods"][0]["target_section"], ".text")
         self.assertEqual(
@@ -150,6 +154,47 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(report["observed_network_methods"], 1)
         self.assertEqual(report["methods"][0]["method"], "Cycle")
+
+
+    def test_maps_login_and_session_serializer_families(self):
+        cases = (
+            ("LoginRequestSTSerializer", "serialize"),
+            ("LoginRequestSTDeserializer", "deserialize"),
+            ("LoginAnswerSTSerializer", "serialize"),
+            ("LoginAnswerSTDeserializer", "deserialize"),
+            ("RegistrationRequestSTSerializer", "serialize"),
+            ("RegistrationRequestSTDeserializer", "deserialize"),
+            ("RegistrationAnswerSTSerializer", "serialize"),
+            ("RegistrationAnswerSTDeserializer", "deserialize"),
+            ("SessionRestoreRequestSTSerializer", "serialize"),
+            ("SessionRestoreRequestSTDeserializer", "deserialize"),
+            ("SessionRestoreAnswerSTSerializer", "serialize"),
+            ("SessionRestoreAnswerSTDeserializer", "deserialize"),
+            ("LoginToBattleRequestSTSerializer", "serialize"),
+            ("LoginToBattleRequestSTDeserializer", "deserialize"),
+            ("LoginToBattleAnswerSTSerializer", "serialize"),
+            ("LoginToBattleAnswerSTDeserializer", "deserialize"),
+            ("BattleSessionRestoreRequestSTSerializer", "serialize"),
+            ("BattleSessionRestoreRequestSTDeserializer", "deserialize"),
+            ("BattleSessionRestoreAnswerSTSerializer", "serialize"),
+            ("BattleSessionRestoreAnswerSTDeserializer", "deserialize"),
+        )
+        for type_name, method_name in cases:
+            with self.subTest(type_name=type_name):
+                report = inspect_bytes(
+                    make_metadata(
+                        [method_name], image="ConvertedAssembly.dll",
+                        type_name=type_name,
+                        namespace="com.geargames.serialization.serializers",
+                    ),
+                    make_elf(1, image="ConvertedAssembly.dll"),
+                )
+                self.assertEqual(report["observed_network_methods"], 0)
+                self.assertEqual(report["observed_login_session_serializers"], 1)
+                self.assertEqual(report["observed_methods_total"], 1)
+                self.assertEqual(report["executable_entrypoints"], 1)
+                self.assertEqual(report["methods"][0]["category"], "login_session_serializer")
+                self.assertEqual(report["methods"][0]["method"], method_name)
 
     def test_no_native_addresses_or_instructions_are_emitted(self):
         report = inspect_bytes(
