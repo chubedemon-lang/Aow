@@ -202,5 +202,32 @@ class SqliteAuthorizedCharacterServiceTests(unittest.TestCase):
         )
 
 
+    def test_partial_unique_index_does_not_enforce_one_character_per_account(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.executescript(
+            """CREATE TABLE accounts(id INTEGER PRIMARY KEY, username TEXT);
+               CREATE TABLE characters(
+                   id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL,
+                   name TEXT NOT NULL, map_id TEXT NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL,
+                   FOREIGN KEY(account_id) REFERENCES accounts(id)
+               );
+               CREATE UNIQUE INDEX character_account_positive
+                   ON characters(account_id) WHERE account_id > 0;
+               CREATE TABLE wallets(
+                   character_id INTEGER PRIMARY KEY, balance INTEGER NOT NULL,
+                   FOREIGN KEY(character_id) REFERENCES characters(id)
+               );"""
+        )
+        with self.assertRaisesRegex(ValueError, "characters.account_id must be unique"):
+            SqliteAuthorizedCharacterService(connection)
+        self.assertEqual(
+            connection.execute(
+                "SELECT count(*) FROM sqlite_master WHERE name='durable_sessions'"
+            ).fetchone()[0],
+            0,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
