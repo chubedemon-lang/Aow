@@ -23,7 +23,7 @@ def make_metadata(method_count=2):
     method_data = bytes(method_count * 0x24)
     type_offset = method_offset + len(method_data)
     type_data = bytearray(0x58)
-    struct.pack_into("<II", type_data, 0, 18, 30)
+    struct.pack_into("<II", type_data, 0, 17, 26)
     struct.pack_into("<i", type_data, 0x24, 0)
     struct.pack_into("<H", type_data, 0x40, method_count)
     image_offset = type_offset + len(type_data)
