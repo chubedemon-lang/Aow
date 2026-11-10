@@ -132,7 +132,7 @@ def create_backup(source, destination):
         source_db.close()
         source_db = None
 
-        with temp_path.open("rb") as stream:
+        with temp_path.open("rb+") as stream:
             os.fsync(stream.fileno())
 
         # os.link is an atomic no-replace publication on the same filesystem.
@@ -158,6 +158,11 @@ def create_backup(source, destination):
     except BackupError:
         raise
     except (OSError, sqlite3.Error) as exc:
+        if published:
+            try:
+                destination_path.unlink()
+            except OSError:
+                pass
         raise BackupError("SQLite backup could not be completed safely") from exc
     finally:
         if backup_db is not None:
@@ -168,12 +173,6 @@ def create_backup(source, destination):
             try:
                 temp_path.unlink()
             except FileNotFoundError:
-                pass
-        if published and destination_path.exists() and temp_path is not None:
-            # A failed publication cleanup must never leave a partial target.
-            try:
-                destination_path.unlink()
-            except OSError:
                 pass
 
 
