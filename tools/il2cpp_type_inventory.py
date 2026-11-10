@@ -25,6 +25,10 @@ TYPE_DEFINITION_STRIDE = 0x58
 METHOD_DEFINITION_STRIDE = 0x24
 FIELD_DEFINITION_STRIDE = 0x0C
 PARAMETER_DEFINITION_STRIDE = 0x0C
+FIELD_DEFAULT_VALUES_PAIR_OFFSET = 0x40
+FIELD_DEFAULT_DATA_PAIR_OFFSET = 0x48
+FIELD_DEFAULT_VALUE_STRIDE = 0x0C
+MAX_DEFAULT_DATA_BYTES = 64 * 1024**2
 
 MESSAGE_NAMES = (
     "LoginRequest", "LoginAnswer", "RegistrationRequest", "RegistrationAnswer",
@@ -144,12 +148,43 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
     parameters_offset, parameters_size, parameter_count = _checked_section(
         metadata, PARAMETERS_PAIR_OFFSET, PARAMETER_DEFINITION_STRIDE, "parameter"
     )
+    field_defaults_offset, field_defaults_size, field_default_count = _checked_section(
+        metadata, FIELD_DEFAULT_VALUES_PAIR_OFFSET, FIELD_DEFAULT_VALUE_STRIDE,
+        "field default value"
+    )
+    default_data_offset, default_data_size = struct.unpack_from(
+        "<II", metadata, FIELD_DEFAULT_DATA_PAIR_OFFSET
+    )
+    if (
+        default_data_offset < HEADER_MIN_BYTES
+        or default_data_size > MAX_DEFAULT_DATA_BYTES
+        or default_data_offset + default_data_size < default_data_offset
+        or default_data_offset + default_data_size > len(metadata)
+    ):
+        raise MetadataInventoryError("invalid field default data bounds")
     fields_offset, fields_size, field_count = _checked_section(
         metadata, FIELDS_PAIR_OFFSET, FIELD_DEFINITION_STRIDE, "field"
     )
     types_offset, types_size, type_count = _checked_section(
         metadata, TYPE_DEFINITIONS_PAIR_OFFSET, TYPE_DEFINITION_STRIDE, "type definition"
     )
+
+    field_defaults = {}
+    for default_index in range(field_default_count):
+        default_pos = field_defaults_offset + default_index * FIELD_DEFAULT_VALUE_STRIDE
+        field_index, default_type_index, data_index = struct.unpack_from(
+            "<iii", metadata, default_pos
+        )
+        if field_index < 0 or field_index >= field_count:
+            raise MetadataInventoryError("field default references unknown field")
+        if data_index < 0 or data_index >= default_data_size:
+            raise MetadataInventoryError("field default data index out of bounds")
+        if field_index in field_defaults:
+            raise MetadataInventoryError("duplicate field default record")
+        field_defaults[field_index] = {
+            "type_index": default_type_index,
+            "data_index": data_index,
+        }
 
     summaries = []
     for type_index in range(type_count):
@@ -175,10 +210,17 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
             field_name_index = struct.unpack_from("<I", metadata, field_pos)[0]
             field_type_index = struct.unpack_from("<i", metadata, field_pos + 4)[0]
             field_token = struct.unpack_from("<I", metadata, field_pos + 8)[0]
+            default_value = field_defaults.get(field_index)
             field_records.append({
                 "name": _read_heap_string(heap, field_name_index),
                 "type_index": field_type_index,
                 "metadata_token": field_token,
+                "default_value_type_index": (
+                    default_value["type_index"] if default_value is not None else None
+                ),
+                "default_value_data_index": (
+                    default_value["data_index"] if default_value is not None else None
+                ),
             })
 
         method_names = []
@@ -268,14 +310,17 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
         "metadata_table_counts": {
             "type_definitions": type_count,
             "methods": method_count,
+            "parameters": parameter_count,
             "fields": field_count,
+            "field_default_values": field_default_count,
+            "field_default_data_bytes": default_data_size,
         },
         "observed_type_definitions": summaries,
         "interpretation": (
             "Static metadata type/field/method associations and raw type indexes only. "
-            "Native type-index resolution, method bodies, serialization order, numeric "
-            "message IDs, wire framing, transport activation, and APK compatibility "
-            "are not established."
+            "Native type-index resolution, default-value decoding, method bodies, "
+            "serialization order, numeric wire message IDs, framing, transport "
+            "activation, and APK compatibility are not established."
         ),
     }
 
