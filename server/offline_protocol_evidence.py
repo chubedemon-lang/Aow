@@ -17,27 +17,60 @@ FIELDS = frozenset({
     "reproduction", "test_reference", "notes"
 })
 
+# Free-text metadata is intended for public provenance, not raw observations.
+# Reject common endpoint/credential forms before a caller writes it to a
+# public manifest. This is a guardrail, not a general-purpose DLP scanner.
+_URL = re.compile(r"\b(?:https?|wss?)://", re.IGNORECASE)
+_IPV4 = re.compile(
+    r"(?<![A-Za-z0-9_.])"
+    r"(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])"
+    r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
+    r"(?![A-Za-z0-9_.])"
+)
+_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"\b(?:authorization|bearer|token|password|passwd|secret|"
+    r"api[_-]?key|access[_-]?key|refresh[_-]?token)\s*[:=]\s*\S+",
+    re.IGNORECASE,
+)
+_BEARER_VALUE = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
+_PACKET_BYTES = re.compile(
+    r"\b(?:packet|capture|payload)_bytes\s*[:=]", re.IGNORECASE
+)
+_PRIVATE_KEY = re.compile(
+    r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.IGNORECASE
+)
+
 
 class EvidenceError(ValueError):
     """Invalid or unverifiable evidence metadata."""
 
 
+def _validate_public_text(key, value):
+    if not isinstance(value, str) or not value.strip() or len(value) > 512:
+        raise EvidenceError("invalid metadata field: " + key)
+    if not value.isprintable():
+        raise EvidenceError("control character in metadata")
+    if (_URL.search(value) or _IPV4.search(value)
+            or _CREDENTIAL_ASSIGNMENT.search(value)
+            or _BEARER_VALUE.search(value)
+            or _PACKET_BYTES.search(value)
+            or _PRIVATE_KEY.search(value)):
+        raise EvidenceError("sensitive endpoint, credential, or raw-byte marker in " + key)
+    return value.strip()
+
+
 def validate_record(record):
     """Return sanitized, schema-limited metadata for an offline evidence record.
 
-    Hashes are identifiers, not proof of compatibility. This rejects unknown
-    fields to avoid accidentally persisting raw captures or secrets.
+    Hashes are identifiers, not proof of compatibility. Unknown fields and
+    common secret/endpoint/raw-byte forms in free text are rejected to reduce
+    accidental publication of private captures or credentials.
     """
     if not isinstance(record, dict) or set(record) != FIELDS:
         raise EvidenceError("record must have exactly the approved metadata fields")
     result = {}
     for key in ("id", "method", "reproduction", "test_reference", "notes"):
-        value = record[key]
-        if not isinstance(value, str) or not value.strip() or len(value) > 512:
-            raise EvidenceError("invalid metadata field: " + key)
-        if not value.isprintable():
-            raise EvidenceError("control character in metadata")
-        result[key] = value.strip()
+        result[key] = _validate_public_text(key, record[key])
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", result["id"]):
         raise EvidenceError("invalid evidence id")
     for key, choices in (("kind", ALLOWED_KINDS), ("status", ALLOWED_STATUS)):
