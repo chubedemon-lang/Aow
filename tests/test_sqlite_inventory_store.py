@@ -319,7 +319,5 @@ class SqliteInventoryStoreTests(unittest.TestCase):
             self.store.verify_integrity()
         self.db.rollback()
 
-
-
 if __name__ == "__main__":
     unittest.main()
