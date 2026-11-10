@@ -2,14 +2,10 @@
 
 This is a local server-domain integration only. It does not implement AOW
 login, player initialization packets, or original-game progression rules.
-Session tokens must only be issued after trusted account authentication.
-No HTTP route is registered by this facade.
-
 Every operation holds BEGIN IMMEDIATE across session resolution, character
 ownership and player persistence so revocation cannot race a protected change.
-
 Session tokens must only be issued after trusted account authentication.
-No HTTP route is registered here. Character ownership transfer is not supported.
+No HTTP route is registered here; ownership transfer is not supported.
 """
 import sqlite3
 
