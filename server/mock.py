@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import sqlite3
 from pathlib import Path
+from server.strict_json_request import read_json_object
 
 
 def initialize(conn):
@@ -243,12 +244,7 @@ def make_handler(domain):
 
         def do_POST(self):
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                if not 0 < length <= 4096:
-                    return self.respond(400, {"error": "invalid body size"})
-                payload = json.loads(self.rfile.read(length))
-                if not isinstance(payload, dict):
-                    raise ValueError("expected object")
+                payload = read_json_object(self.headers, self.rfile, max_bytes=4096)
                 path = self.path.split("?", 1)[0]
                 if path == "/characters":
                     return self.respond(201, domain.create_character(payload.get("username"), payload.get("name")))

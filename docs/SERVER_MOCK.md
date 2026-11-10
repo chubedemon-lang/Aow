@@ -37,3 +37,7 @@ Tests also cover database reopen/persistence, invalid input, failed consumption,
 - Unit tests cover persistence, insufficient funds, disabled products, invalid requests and concurrent purchases without overspending.
 
 These methods are intentionally **not exposed as HTTP routes**. No client-supplied price or arbitrary wallet-credit request is accepted. Catalog items, currency and protocol are invented local test fixtures and **not AOW game data**. Real integration requires verified item IDs, economy rules, server-side authorization, session ownership and client message schemas.
+
+## Strict synthetic HTTP request parsing
+
+The localhost-only mock now accepts POST bodies only when they have one `Content-Type: application/json`, one decimal `Content-Length` within the 4 KiB limit, UTF-8 encoding, and a JSON object root. It rejects transfer-encoding, compressed bodies, duplicate request headers, duplicate JSON keys (including nested objects), non-finite numbers, invalid UTF-8 and truncated bodies. These are generic HTTP input-safety rules for the synthetic test API; they are not evidence about AOW's transport or serialization.
