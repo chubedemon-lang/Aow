@@ -37,12 +37,34 @@ session insertion commit together.
 The returned opaque token is shown once; only its SHA-256 digest is stored in
 `durable_sessions`. Do not log, serialize, or commit the token.
 
+## Optional authentication throttling
+
+`server/sqlite_auth_rate_limiter.py` provides a persistent fixed-window failure
+counter that can be injected into `SqliteAccountAuthService` through the
+`rate_limiter` argument. It stores only a 32-byte HMAC-SHA256 digest of the
+username bucket, an attempt count and timestamps; it never stores the username
+or the HMAC secret. The secret must contain at least 32 bytes and should be
+loaded from an operator secret manager. Keep it stable across restarts to
+preserve active buckets; rotating it intentionally makes prior buckets
+unreadable.
+
+The limiter records failed credentials, clears the bucket after successful
+authentication in the same transaction as durable session issuance, and
+serializes counter updates with `BEGIN IMMEDIATE`. Its fixed-window and lockout
+settings are bounded and injectable for deterministic tests.
+
+The limiter is per-username only. It does not replace per-source/network rate
+limits, trusted reverse-proxy handling, monitoring, TLS where applicable, or
+other abuse controls. The service still has no HTTP route and remains a local
+synthetic foundation.
+
 ## Hard limits
 
 - Enrollment is a trusted local setup operation, not a public registration API.
-- No HTTP route is added; no rate limiter or transport security is provided.
-  Any future adapter must add per-account and per-source rate limiting,
-  monitoring, TLS where applicable, and abuse controls before exposure.
+- Any future adapter must require a configured limiter, add per-source rate
+  limiting, monitoring, TLS where applicable, and abuse controls before
+  exposure. Do not treat the optional constructor argument as a production
+  deployment policy.
 - This module does not infer the APK's password encoding, hashing, challenge,
   token format, message IDs, field order, handshake, or login sequence.
 - Do not connect it to the APK adapter until authorized offline evidence and a
