@@ -1,6 +1,9 @@
+import json
 import sqlite3
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 from server.mock import Domain
@@ -8,6 +11,7 @@ from server.runtime_safety import RuntimeSafetyError, validate_loopback_bind
 from tools.server_preflight import (
     PreflightError,
     inspect_synthetic_database,
+    main,
     run_preflight,
 )
 
@@ -69,6 +73,30 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
         sqlite3.connect(broken).close()
         with self.assertRaises(PreflightError):
             inspect_synthetic_database(broken)
+
+    def test_rejects_corrupt_sqlite_file(self):
+        broken = Path(self.temp.name) / "corrupt.sqlite3"
+        broken.write_bytes(b"not a sqlite database")
+        with self.assertRaises(PreflightError):
+            inspect_synthetic_database(broken)
+
+    def test_rejects_symlink_database(self):
+        link = Path(self.temp.name) / "linked.sqlite3"
+        try:
+            link.symlink_to(self.database)
+        except (NotImplementedError, OSError):
+            self.skipTest("symlinks are unavailable in this environment")
+        with self.assertRaisesRegex(PreflightError, "symlinks"):
+            inspect_synthetic_database(link)
+
+    def test_cli_reports_blocked_without_opening_database_for_public_bind(self):
+        output = StringIO()
+        missing = Path(self.temp.name) / "must-not-be-created.sqlite3"
+        with redirect_stdout(output):
+            code = main(["--host", "0.0.0.0", "--db", str(missing)])
+        self.assertEqual(code, 2)
+        self.assertFalse(missing.exists())
+        self.assertEqual(json.loads(output.getvalue())["status"], "blocked")
 
     def test_rejects_foreign_key_violations(self):
         with sqlite3.connect(self.database) as connection:
