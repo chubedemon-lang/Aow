@@ -53,6 +53,34 @@ class SqliteSessionStoreTests(unittest.TestCase):
         with self.assertRaises(SessionError):
             self.store.resolve(expired)
 
+    def test_resolve_in_transaction_requires_caller_transaction(self):
+        token = self.store.issue(77)
+        with self.assertRaisesRegex(ValueError, "transaction"):
+            self.store.resolve_in_transaction(token)
+
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.assertEqual(self.store.resolve_in_transaction(token), 77)
+            self.assertTrue(self.db.in_transaction)
+        finally:
+            self.db.rollback()
+
+    def test_resolve_in_transaction_rejects_expired_and_revoked_tokens(self):
+        expired = self.store.issue(78, ttl_seconds=2)
+        revoked = self.store.issue(79)
+        self.assertTrue(self.store.revoke(revoked))
+        self.now += 2
+
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            with self.assertRaisesRegex(SessionError, "expired"):
+                self.store.resolve_in_transaction(expired)
+            with self.assertRaisesRegex(SessionError, "invalid"):
+                self.store.resolve_in_transaction(revoked)
+            self.assertTrue(self.db.in_transaction)
+        finally:
+            self.db.rollback()
+
     def test_revoke_is_idempotent(self):
         token = self.store.issue(9)
         self.assertTrue(self.store.revoke(token))
