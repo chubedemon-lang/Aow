@@ -70,6 +70,11 @@ class AowPrimitiveReader:
         self._offset = 0
 
     @property
+    def offset(self):
+        """Number of payload bytes consumed by this reader."""
+        return self._offset
+
+    @property
     def remaining(self):
         return len(self._data) - self._offset
 
@@ -116,3 +121,9 @@ class AowPrimitiveReader:
             return None
         raw = self._take(code_units * 2)
         return raw.decode("utf-16-be", errors="surrogatepass")
+
+    def require_consumed(self):
+        """Reject trailing bytes after a caller-defined primitive payload."""
+        if self.remaining:
+            raise ValueError("trailing bytes in primitive payload: " + str(self.remaining))
+        return self
