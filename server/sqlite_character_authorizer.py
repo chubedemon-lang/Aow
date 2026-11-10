@@ -9,6 +9,18 @@ from server.sessions import SessionError
 from server.sqlite_session_store import SqliteSessionStore
 
 
+def require_character_schema(connection: sqlite3.Connection) -> None:
+    """Fail before any session/player/map schema is created if ownership is absent."""
+    if not isinstance(connection, sqlite3.Connection):
+        raise TypeError("sqlite connection required")
+    try:
+        connection.execute("SELECT id, account_id FROM characters LIMIT 0")
+    except sqlite3.OperationalError as exc:
+        raise ValueError(
+            "initialized characters(id, account_id) table required"
+        ) from exc
+
+
 class SqliteCharacterAuthorizer:
     """Resolve a durable session and authorize an integer character ID.
 
@@ -21,16 +33,12 @@ class SqliteCharacterAuthorizer:
                  sessions: SqliteSessionStore):
         if not isinstance(connection, sqlite3.Connection):
             raise TypeError("sqlite connection required")
-        if not isinstance(sessions, SqliteSessionStore) or sessions.db is not connection:
+        if (not isinstance(sessions, SqliteSessionStore)
+                or sessions.db is not connection):
             raise ValueError("session store must use the same SQLite connection")
         self.db = connection
         self.sessions = sessions
-        try:
-            self.db.execute("SELECT id, account_id FROM characters LIMIT 0")
-        except sqlite3.OperationalError as exc:
-            raise ValueError(
-                "initialized characters(id, account_id) table required"
-            ) from exc
+        require_character_schema(connection)
 
     def require(self, token: str, character_id: int) -> str:
         """Return the domain's string ID only when the active session owns it."""
