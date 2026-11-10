@@ -1,14 +1,16 @@
 """Session-authorized facade for the synthetic SQLite map-position store.
 
 This is a local server-domain integration only. It is NOT the AOW APK login
-protocol, does not authenticate passwords, and does not establish character
-or map semantics from the original game.
+protocol and does not establish original-game character, map or movement
+semantics. Session tokens must only be issued after trusted account
+authentication. No HTTP route is registered by this facade.
 
-Session tokens must only be issued after a trusted authentication layer has
-verified the account. No HTTP route is registered by this facade.
+Every operation holds BEGIN IMMEDIATE across session resolution, character
+ownership and map persistence so revocation cannot race a protected operation.
 """
 import sqlite3
 
+from server.sqlite_authorized_transaction import authorized_character_transaction
 from server.sqlite_character_authorizer import (
     SqliteCharacterAuthorizer,
     require_character_schema,
@@ -39,35 +41,45 @@ class SqliteAuthorizedMapService:
         self.positions = SqliteMapPositionStore(connection)
 
     def create_position(self, token: str, character_id: int) -> MapPosition:
-        """Create the initial unplaced snapshot for an owned character."""
-        owned_id = self.authorizer.require(token, character_id)
-        return self.positions.create(owned_id)
+        """Create the initial unplaced snapshot atomically with authorization."""
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
+            return self.positions.create(owned_id)
 
     def get_position(self, token: str, character_id: int) -> MapPosition:
-        """Read a position only after resolving and checking session ownership."""
-        owned_id = self.authorizer.require(token, character_id)
-        return self.positions.get(owned_id)
+        """Read a position while holding the authorization transaction."""
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
+            return self.positions.get(owned_id)
 
     def enter(self, token: str, character_id: int, request_id: str,
               expected_revision: int, map_id: int, x: int, y: int
               ) -> MapPositionMutation:
-        owned_id = self.authorizer.require(token, character_id)
-        return self.positions.enter(
-            owned_id, request_id, expected_revision, map_id, x, y
-        )
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
+            return self.positions.enter(
+                owned_id, request_id, expected_revision, map_id, x, y
+            )
 
     def move(self, token: str, character_id: int, request_id: str,
              expected_revision: int, map_id: int, x: int, y: int
              ) -> MapPositionMutation:
-        owned_id = self.authorizer.require(token, character_id)
-        return self.positions.move(
-            owned_id, request_id, expected_revision, map_id, x, y
-        )
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
+            return self.positions.move(
+                owned_id, request_id, expected_revision, map_id, x, y
+            )
 
     def leave(self, token: str, character_id: int, request_id: str,
               expected_revision: int, map_id: int
               ) -> MapPositionMutation:
-        owned_id = self.authorizer.require(token, character_id)
-        return self.positions.leave(
-            owned_id, request_id, expected_revision, map_id
-        )
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
+            return self.positions.leave(
+                owned_id, request_id, expected_revision, map_id
+            )
