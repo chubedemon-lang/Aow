@@ -4,6 +4,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from tools.sqlite_backup import BackupError, create_backup
 
@@ -139,6 +140,40 @@ class SqliteBackupTests(unittest.TestCase):
             create_backup(broken, destination)
         self.assertFalse(destination.exists())
         self.assertEqual(list(self.root.glob(".must-not-publish.sqlite3.*.tmp")), [])
+
+
+    def test_does_not_replace_destination_created_during_publication(self):
+        destination = self.root / "raced-backup.sqlite3"
+
+        def create_competing_file(_temporary, target):
+            Path(target).write_bytes(b"created-by-another-process")
+            raise FileExistsError("destination appeared after preflight")
+
+        with patch("tools.sqlite_backup.os.link", side_effect=create_competing_file):
+            with self.assertRaises(BackupError):
+                create_backup(self.source, destination)
+
+        self.assertEqual(
+            destination.read_bytes(), b"created-by-another-process"
+        )
+        self.assertEqual(
+            list(self.root.glob(".raced-backup.sqlite3.*.tmp")), []
+        )
+
+    def test_rejects_non_sqlite_source_and_cleans_temporary_file(self):
+        invalid = self.root / "not-a-database.sqlite3"
+        invalid.write_bytes(b"not sqlite")
+        destination = self.root / "invalid-copy.sqlite3"
+        with self.assertRaises(BackupError):
+            create_backup(invalid, destination)
+        self.assertFalse(destination.exists())
+        self.assertEqual(list(self.root.glob(".invalid-copy.sqlite3.*.tmp")), [])
+
+    def test_rejects_missing_destination_directory(self):
+        destination = self.root / "missing-directory" / "backup.sqlite3"
+        with self.assertRaises(BackupError):
+            create_backup(self.source, destination)
+        self.assertFalse(destination.parent.exists())
 
     def test_unicode_destination_path(self):
         destination = self.root / "bản-sao.sqlite3"
