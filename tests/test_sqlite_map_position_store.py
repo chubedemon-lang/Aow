@@ -217,5 +217,91 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
         ).fetchone()[0], 0)
 
 
+    def test_integrity_audit_replays_complete_history(self):
+        self.store.create("hero")
+        self.store.enter("hero", "enter-1", 0, 2, 10, -4)
+        self.store.move("hero", "move-1", 1, 2, 12, -3)
+        self.store.leave("hero", "leave-1", 2, 2)
+        self.store.create("alt")
+        self.store.enter("alt", "enter-alt", 0, 7, 0, 0)
+        self.assertEqual(
+            self.store.verify_integrity(),
+            {"snapshots": 2, "mutations": 4},
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_integrity_audit_detects_missing_receipt(self):
+        self.store.create("hero")
+        self.store.enter("hero", "enter", 0, 1, 0, 0)
+        self.db.execute(
+            "DELETE FROM map_position_mutations WHERE request_id='enter'"
+        )
+        with self.assertRaises(MapPositionStoreError):
+            self.store.verify_integrity()
+
+    def test_integrity_audit_detects_tampered_result_snapshot(self):
+        self.store.create("hero")
+        self.store.enter("hero", "enter", 0, 1, 0, 0)
+        self.db.execute(
+            "UPDATE map_position_mutations SET result_json=? WHERE request_id=?",
+            ('{"map_id":1,"x":99,"y":0,"revision":1}', "enter"),
+        )
+        with self.assertRaises(MapPositionStoreError):
+            self.store.verify_integrity()
+
+    def test_integrity_audit_detects_tampered_transition_payload(self):
+        self.store.create("hero")
+        self.store.enter("hero", "enter", 0, 1, 0, 0)
+        self.db.execute(
+            "UPDATE map_position_mutations SET payload_json=? WHERE request_id=?",
+            ('{"operation":"enter","map_id":1,"x":99,"y":0}', "enter"),
+        )
+        with self.assertRaises(MapPositionStoreError):
+            self.store.verify_integrity()
+
+    def test_integrity_audit_rejects_duplicate_json_keys(self):
+        self.store.create("hero")
+        self.store.enter("hero", "enter", 0, 1, 0, 0)
+        self.db.execute(
+            "UPDATE map_position_mutations SET payload_json=? WHERE request_id=?",
+            ('{"operation":"enter","operation":"leave","map_id":1,"x":0,"y":0}', "enter"),
+        )
+        with self.assertRaises(MapPositionStoreError):
+            self.store.verify_integrity()
+
+    def test_integrity_audit_detects_current_snapshot_divergence(self):
+        self.store.create("hero")
+        self.store.enter("hero", "enter", 0, 1, 0, 0)
+        self.db.execute(
+            "UPDATE map_position_snapshots SET revision=2 WHERE character_id='hero'"
+        )
+        with self.assertRaises(MapPositionStoreError):
+            self.store.verify_integrity()
+
+    def test_integrity_audit_detects_foreign_key_orphan(self):
+        self.store.create("hero")
+        self.db.execute("PRAGMA foreign_keys = OFF")
+        self.db.execute(
+            """INSERT INTO map_position_mutations
+               (request_id, character_id, expected_revision, payload_json,
+                result_json, result_revision)
+               VALUES ('orphan', 'missing', 0, '{}', '{}', 1)"""
+        )
+        with self.assertRaises(MapPositionStoreError):
+            self.store.verify_integrity()
+
+    def test_integrity_audit_requires_idle_connection(self):
+        self.store.create("hero")
+        self.db.execute("BEGIN")
+        with self.assertRaises(ValueError):
+            self.store.verify_integrity()
+        self.db.rollback()
+        self.assertEqual(
+            self.store.verify_integrity(),
+            {"snapshots": 1, "mutations": 0},
+        )
+
+
+
 if __name__ == "__main__":
     unittest.main()

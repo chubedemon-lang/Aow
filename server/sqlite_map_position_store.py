@@ -42,6 +42,35 @@ class MapPositionMutation:
     replayed: bool
 
 
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value):
+    raise ValueError("non-finite JSON constant")
+
+
+def _load_json_object(raw, label, max_chars):
+    if not isinstance(raw, str) or len(raw) > max_chars:
+        raise MapPositionStoreError("invalid " + label)
+    try:
+        value = json.loads(
+            raw,
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise MapPositionStoreError("invalid " + label) from exc
+    if type(value) is not dict:
+        raise MapPositionStoreError("invalid " + label)
+    return value
+
+
 class SqliteMapPositionStore:
     """SQLite-backed synthetic map position snapshots.
 
@@ -155,14 +184,137 @@ class SqliteMapPositionStore:
 
     @staticmethod
     def _decode_snapshot(raw):
-        value = json.loads(raw)
-        map_id = value["map_id"]
-        position = None if map_id is None else Position(value["x"], value["y"])
-        return MapPosition(
-            map_id=map_id,
-            position=position,
-            revision=value["revision"],
+        value = _load_json_object(raw, "map-position receipt snapshot", 1024)
+        if set(value) != {"map_id", "x", "y", "revision"}:
+            raise MapPositionStoreError("invalid map-position receipt snapshot")
+        map_id, x, y, revision = (
+            value["map_id"], value["x"], value["y"], value["revision"]
         )
+        if type(revision) is not int or not 0 <= revision <= _MAX_REVISION:
+            raise MapPositionStoreError("invalid receipt revision")
+        if map_id is None:
+            if x is not None or y is not None:
+                raise MapPositionStoreError("inconsistent unplaced receipt")
+            return MapPosition(revision=revision)
+        if type(map_id) is not int or not 0 <= map_id <= _MAX_MAP_ID:
+            raise MapPositionStoreError("invalid receipt map identifier")
+        try:
+            position = Position(x, y)
+            return MapPosition(map_id=map_id, position=position, revision=revision)
+        except MapPositionError as exc:
+            raise MapPositionStoreError("invalid receipt position") from exc
+
+    def verify_integrity(self) -> dict:
+        """Audit SQLite integrity and replay every durable map transition.
+
+        This is a local persistence check, not evidence of AOW map semantics.
+        It requires an idle connection and never repairs or mutates data.
+        """
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+
+        quick_check = self.db.execute("PRAGMA quick_check").fetchall()
+        if quick_check != [("ok",)]:
+            raise MapPositionStoreError("SQLite quick_check failed")
+        foreign_key_errors = self.db.execute(
+            "PRAGMA foreign_key_check"
+        ).fetchall()
+        if foreign_key_errors:
+            raise MapPositionStoreError("map-position foreign key check failed")
+
+        snapshots = {}
+        rows = self.db.execute(
+            """SELECT character_id, map_id, x, y, revision
+               FROM map_position_snapshots ORDER BY character_id"""
+        ).fetchall()
+        for character_id, map_id, x, y, revision in rows:
+            character_id = self._character_id(character_id)
+            if character_id in snapshots:
+                raise MapPositionStoreError("duplicate character snapshot")
+            if type(revision) is not int or not 0 <= revision <= _MAX_REVISION:
+                raise MapPositionStoreError("invalid stored map revision")
+            if map_id is None:
+                if x is not None or y is not None:
+                    raise MapPositionStoreError("inconsistent unplaced snapshot")
+                snapshot = MapPosition(revision=revision)
+            else:
+                if type(map_id) is not int or not 0 <= map_id <= _MAX_MAP_ID:
+                    raise MapPositionStoreError("invalid stored map identifier")
+                try:
+                    snapshot = MapPosition(
+                        map_id=map_id, position=Position(x, y), revision=revision
+                    )
+                except MapPositionError as exc:
+                    raise MapPositionStoreError("invalid stored map position") from exc
+            snapshots[character_id] = snapshot
+
+        replayed = {character_id: MapPosition() for character_id in snapshots}
+        mutation_rows = self.db.execute(
+            """SELECT request_id, character_id, expected_revision, payload_json,
+                      result_json, result_revision
+               FROM map_position_mutations
+               ORDER BY character_id, result_revision, request_id"""
+        ).fetchall()
+        mutation_count = 0
+
+        for (request_id, character_id, expected_revision, payload_json,
+             result_json, result_revision) in mutation_rows:
+            self._request_id(request_id)
+            self._character_id(character_id)
+            if character_id not in replayed:
+                raise MapPositionStoreError("mutation has no character snapshot")
+            if (type(expected_revision) is not int or expected_revision < 0
+                    or expected_revision >= _MAX_REVISION
+                    or type(result_revision) is not int
+                    or result_revision != expected_revision + 1):
+                raise MapPositionStoreError("invalid mutation revision chain")
+
+            current = replayed[character_id]
+            if current.revision != expected_revision:
+                raise MapPositionStoreError("map-position mutation history has a gap")
+
+            payload = _load_json_object(
+                payload_json, "map-position mutation payload", 512
+            )
+            operation = payload.get("operation")
+            try:
+                if operation == "enter":
+                    if set(payload) != {"operation", "map_id", "x", "y"}:
+                        raise MapPositionStoreError("invalid enter mutation payload")
+                    map_id = self._map_id(payload["map_id"])
+                    position = self._position(payload["x"], payload["y"])
+                    expected = current.enter(map_id, position)
+                elif operation == "move":
+                    if set(payload) != {"operation", "map_id", "x", "y"}:
+                        raise MapPositionStoreError("invalid move mutation payload")
+                    map_id = self._map_id(payload["map_id"])
+                    if current.map_id != map_id:
+                        raise MapPositionStoreError("move history changes map unexpectedly")
+                    position = self._position(payload["x"], payload["y"])
+                    expected = current.move(position, expected_revision)
+                elif operation == "leave":
+                    if set(payload) != {"operation", "map_id"}:
+                        raise MapPositionStoreError("invalid leave mutation payload")
+                    map_id = self._map_id(payload["map_id"])
+                    if current.map_id != map_id:
+                        raise MapPositionStoreError("leave history changes map unexpectedly")
+                    expected = current.leave()
+                else:
+                    raise MapPositionStoreError("unknown map-position mutation")
+            except MapPositionError as exc:
+                raise MapPositionStoreError("invalid map-position mutation history") from exc
+
+            recorded = self._decode_snapshot(result_json)
+            if recorded.revision != result_revision or recorded != expected:
+                raise MapPositionStoreError("map-position receipt does not match history")
+            replayed[character_id] = recorded
+            mutation_count += 1
+
+        for character_id, snapshot in snapshots.items():
+            if replayed[character_id] != snapshot:
+                raise MapPositionStoreError("current map snapshot does not match receipts")
+
+        return {"snapshots": len(snapshots), "mutations": mutation_count}
 
     def create(self, character_id: str) -> MapPosition:
         character_id = self._character_id(character_id)
