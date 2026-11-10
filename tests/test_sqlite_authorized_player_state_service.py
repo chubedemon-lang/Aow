@@ -1,8 +1,8 @@
 """Session ownership tests for synthetic durable player state only."""
 import os
 import sqlite3
-import threading
 import tempfile
+import threading
 import unittest
 
 from server.sessions import SessionError
@@ -10,7 +10,6 @@ from server.sqlite_authorized_player_state_service import (
     SqliteAuthorizedPlayerStateService,
 )
 from server.sqlite_player_state_store import PlayerAlreadyExists, PlayerSnapshot
-
 from server.sqlite_session_store import SqliteSessionStore
 
 
@@ -19,7 +18,9 @@ class SqliteAuthorizedPlayerStateServiceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = os.path.join(self.temp.name, "authorized-player.sqlite3")
-        self.db = sqlite3.connect(self.path, timeout=10, isolation_level=None, check_same_thread=False)
+        self.db = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, check_same_thread=False
+        )
         self.addCleanup(self.db.close)
         self.db.execute(
             """CREATE TABLE characters (
