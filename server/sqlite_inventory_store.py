@@ -187,6 +187,209 @@ class SqliteInventoryStore:
             ensure_ascii=True,
         )
 
+    def verify_integrity(self) -> dict:
+        """Audit inventory snapshots and replay every durable mutation receipt.
+
+        The initial create() state has no creation receipt. For a character
+        with mutations, the first receipt is therefore used to derive a
+        candidate revision-zero baseline; every later receipt is replayed
+        against it. This is a consistency audit, not cryptographic tamper
+        evidence. It requires an idle connection and never writes.
+        """
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+
+        if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+            raise InventoryStoreError("SQLite quick_check failed")
+        if self.db.execute("PRAGMA foreign_key_check").fetchall():
+            raise InventoryStoreError("inventory foreign key check failed")
+
+        def reject_constant(_value):
+            raise InventoryStoreError("non-finite JSON value in inventory receipt")
+
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise InventoryStoreError("duplicate JSON key in inventory receipt")
+                result[key] = value
+            return result
+
+        def decode_receipt_snapshot(raw):
+            try:
+                value = json.loads(
+                    raw, object_pairs_hook=unique_object,
+                    parse_constant=reject_constant,
+                )
+            except (TypeError, ValueError) as exc:
+                raise InventoryStoreError("invalid inventory receipt JSON") from exc
+            expected_keys = {
+                "character_id", "capacity", "max_stack", "revision", "items"
+            }
+            if type(value) is not dict or set(value) != expected_keys:
+                raise InventoryStoreError("invalid inventory receipt snapshot")
+            character_id = self._character_id(value["character_id"])
+            capacity = value["capacity"]
+            max_stack = value["max_stack"]
+            revision = value["revision"]
+            items = value["items"]
+            if (type(capacity) is not int or not 1 <= capacity <= _MAX_CAPACITY
+                    or type(max_stack) is not int
+                    or not 1 <= max_stack <= _MAX_STACK
+                    or type(revision) is not int
+                    or not 0 <= revision <= _MAX_REVISION
+                    or type(items) is not list or len(items) > capacity):
+                raise InventoryStoreError("invalid inventory receipt snapshot")
+            decoded = []
+            previous_id = None
+            for pair in items:
+                if type(pair) is not list or len(pair) != 2:
+                    raise InventoryStoreError("invalid inventory receipt item")
+                item_id = self._item_id(pair[0])
+                quantity = pair[1]
+                if (type(quantity) is not int or not 1 <= quantity <= max_stack
+                        or (previous_id is not None and item_id <= previous_id)):
+                    raise InventoryStoreError("invalid inventory receipt item")
+                decoded.append((item_id, quantity))
+                previous_id = item_id
+            return InventorySnapshot(
+                character_id, capacity, max_stack, revision, tuple(decoded)
+            )
+
+        snapshots = {}
+        item_rows = {}
+        for character_id, item_id, quantity in self.db.execute(
+            """SELECT character_id, item_id, quantity
+               FROM inventory_items ORDER BY character_id, item_id"""
+        ):
+            character_id = self._character_id(character_id)
+            item_id = self._item_id(item_id)
+            if type(quantity) is not int or quantity <= 0:
+                raise InventoryStoreError("invalid stored inventory quantity")
+            current = item_rows.setdefault(character_id, [])
+            current.append((item_id, quantity))
+
+        for character_id, capacity, max_stack, revision in self.db.execute(
+            """SELECT character_id, capacity, max_stack, revision
+               FROM inventory_snapshots ORDER BY character_id"""
+        ):
+            character_id = self._character_id(character_id)
+            if character_id in snapshots:
+                raise InventoryStoreError("duplicate inventory snapshot")
+            if (type(capacity) is not int or not 1 <= capacity <= _MAX_CAPACITY
+                    or type(max_stack) is not int
+                    or not 1 <= max_stack <= _MAX_STACK
+                    or type(revision) is not int
+                    or not 0 <= revision <= _MAX_REVISION):
+                raise InventoryStoreError("invalid stored inventory snapshot")
+            items = item_rows.pop(character_id, [])
+            if (len(items) > capacity
+                    or any(quantity > max_stack for _, quantity in items)):
+                raise InventoryStoreError("stored inventory exceeds capacity or stack limit")
+            snapshots[character_id] = InventorySnapshot(
+                character_id, capacity, max_stack, revision, tuple(items)
+            )
+        if item_rows:
+            raise InventoryStoreError("inventory item has no snapshot")
+
+        replayed = {}
+        mutation_rows = self.db.execute(
+            """SELECT request_id, character_id, expected_revision,
+                      payload_json, result_json, result_revision
+               FROM inventory_mutations
+               ORDER BY character_id, result_revision, request_id"""
+        ).fetchall()
+        mutation_count = 0
+
+        for (request_id, character_id, expected_revision, payload_json,
+             result_json, result_revision) in mutation_rows:
+            self._request_id(request_id)
+            character_id = self._character_id(character_id)
+            stored = snapshots.get(character_id)
+            if stored is None:
+                raise InventoryStoreError("mutation has no inventory snapshot")
+            if (type(expected_revision) is not int
+                    or not 0 <= expected_revision < _MAX_REVISION
+                    or type(result_revision) is not int
+                    or result_revision != expected_revision + 1):
+                raise InventoryStoreError("invalid inventory mutation revision")
+
+            try:
+                payload = json.loads(payload_json, parse_constant=reject_constant)
+                normalised = self._normalise_changes(payload)
+            except (TypeError, ValueError) as exc:
+                raise InventoryStoreError("invalid inventory mutation payload") from exc
+            if not normalised or payload != [list(change) for change in normalised]:
+                raise InventoryStoreError("non-canonical inventory mutation payload")
+
+            recorded = decode_receipt_snapshot(result_json)
+            if (recorded.character_id != character_id
+                    or recorded.revision != result_revision
+                    or recorded.capacity != stored.capacity
+                    or recorded.max_stack != stored.max_stack):
+                raise InventoryStoreError("inventory receipt identity or revision mismatch")
+
+            current = replayed.get(character_id)
+            if current is None:
+                if expected_revision != 0:
+                    raise InventoryStoreError("inventory mutation history has a gap")
+                baseline = dict(recorded.items)
+                for item_id, delta in normalised:
+                    previous = baseline.get(item_id, 0) - delta
+                    if not 0 <= previous <= recorded.max_stack:
+                        raise InventoryStoreError("invalid first inventory mutation baseline")
+                    if previous:
+                        baseline[item_id] = previous
+                    else:
+                        baseline.pop(item_id, None)
+                if len(baseline) > recorded.capacity:
+                    raise InventoryStoreError("first inventory baseline exceeds capacity")
+                current = InventorySnapshot(
+                    character_id, recorded.capacity, recorded.max_stack, 0,
+                    tuple(sorted(baseline.items())),
+                )
+            else:
+                if current.revision != expected_revision:
+                    raise InventoryStoreError("inventory mutation history has a gap")
+                candidate = dict(current.items)
+                for item_id, delta in normalised:
+                    updated = candidate.get(item_id, 0) + delta
+                    if not 0 <= updated <= current.max_stack:
+                        raise InventoryStoreError("inventory mutation history exceeds stack limits")
+                    if updated:
+                        candidate[item_id] = updated
+                    else:
+                        candidate.pop(item_id, None)
+                if len(candidate) > current.capacity:
+                    raise InventoryStoreError("inventory mutation history exceeds capacity")
+                expected = InventorySnapshot(
+                    character_id, current.capacity, current.max_stack,
+                    result_revision, tuple(sorted(candidate.items())),
+                )
+                if recorded != expected:
+                    raise InventoryStoreError("inventory receipt does not match mutation history")
+
+            replayed[character_id] = recorded
+            mutation_count += 1
+
+        for character_id, snapshot in snapshots.items():
+            historical = replayed.get(character_id)
+            if historical is None:
+                if snapshot.revision != 0 or snapshot.items:
+                    raise InventoryStoreError(
+                        "inventory snapshot has no creation or mutation history"
+                    )
+            elif historical != snapshot:
+                raise InventoryStoreError(
+                    "current inventory snapshot does not match mutation history"
+                )
+
+        return {
+            "snapshots": len(snapshots),
+            "items": sum(len(snapshot.items) for snapshot in snapshots.values()),
+            "mutations": mutation_count,
+        }
+
     def create(self, character_id: str, *, capacity: int = 20,
                max_stack: int = 99) -> InventorySnapshot:
         character_id = self._character_id(character_id)
