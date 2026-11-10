@@ -3,7 +3,7 @@ import json
 import struct
 import unittest
 
-from tools.il2cpp_native_method_evidence import inspect_bytes
+from tools.il2cpp_native_method_evidence import (\n    _decode_aarch64_bl_target, _summarize_aarch64_calls, inspect_bytes,\n)
 
 
 def make_metadata(method_names, wrong_owner=False, *, image="ScriptsAssembly.dll",
@@ -112,6 +112,8 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertEqual(report["observed_login_session_serializers"], 0)
         self.assertEqual(report["observed_methods_total"], 2)
         self.assertEqual(report["executable_entrypoints"], 2)
+        self.assertEqual(report["observed_serializer_helper_methods"], 0)
+        self.assertEqual(report["serializer_callsite_summary"], [])
         self.assertEqual(report["methods"][0]["target_section"], ".text")
         self.assertEqual(
             [item["method"] for item in report["methods"]],
@@ -195,6 +197,65 @@ class NativeMethodEvidenceTests(unittest.TestCase):
                 self.assertEqual(report["executable_entrypoints"], 1)
                 self.assertEqual(report["methods"][0]["category"], "login_session_serializer")
                 self.assertEqual(report["methods"][0]["method"], method_name)
+
+
+    @staticmethod
+    def _encode_bl(pc, target):
+        delta = target - pc
+        if delta % 4:
+            raise ValueError("unaligned branch target")
+        immediate = delta // 4
+        if not -(1 << 25) <= immediate < (1 << 25):
+            raise ValueError("branch target outside AArch64 BL range")
+        return 0x94000000 | (immediate & 0x03FFFFFF)
+
+    def test_aarch64_bl_decoder_handles_forward_backward_and_non_bl(self):
+        self.assertEqual(
+            _decode_aarch64_bl_target(self._encode_bl(0x1000, 0x1010), 0x1000),
+            0x1010,
+        )
+        self.assertEqual(
+            _decode_aarch64_bl_target(self._encode_bl(0x1000, 0x0FF0), 0x1000),
+            0x0FF0,
+        )
+        self.assertIsNone(_decode_aarch64_bl_target(0xD65F03C0, 0x1000))
+        self.assertIsNone(_decode_aarch64_bl_target(0x94000000, 0x1002))
+
+    def test_direct_serializer_helper_call_summary_is_redacted(self):
+        start = 0x1000
+        words = (
+            self._encode_bl(start, 0x2000),
+            self._encode_bl(start + 4, 0x1800),
+            0xD63F0100,  # blr x8
+            self._encode_bl(start + 12, 0x3000),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_aarch64_calls(
+            code, start,
+            {
+                0x2000: ["com.geargames.serialization.SimpleSerializer::serializeInt"],
+                0x3000: ["com.geargames.serialization.SimpleSerializer::serializeString"],
+            },
+        )
+        self.assertEqual(
+            summary["direct_helper_call_sequence"],
+            [
+                "com.geargames.serialization.SimpleSerializer::serializeInt",
+                "com.geargames.serialization.SimpleSerializer::serializeString",
+            ],
+        )
+        self.assertEqual(summary["direct_calls_not_in_helper_allowlist"], 1)
+        self.assertEqual(summary["indirect_call_count"], 1)
+        rendered = json.dumps(summary)
+        self.assertNotIn("0x1000", rendered)
+        self.assertNotIn("0x2000", rendered)
+        self.assertNotIn("0x3000", rendered)
+
+    def test_direct_call_summary_rejects_misaligned_windows(self):
+        with self.assertRaises(ValueError):
+            _summarize_aarch64_calls(b"\\x00", 0x1000, {})
+        with self.assertRaises(ValueError):
+            _summarize_aarch64_calls(b"\\x00\\x00\\x00\\x00", 0x1002, {})
 
     def test_no_native_addresses_or_instructions_are_emitted(self):
         report = inspect_bytes(

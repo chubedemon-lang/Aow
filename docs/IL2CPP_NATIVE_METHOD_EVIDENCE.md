@@ -93,3 +93,23 @@ The allowlisted native-method analyzer now also maps paired serializer/deseriali
 The authorized offline pass found 20 corresponding methods in `ConvertedAssembly.dll`, each with a relocation-backed pointer into executable code. The analyzer reports network methods and login/session serializer methods as separate categories and does not emit addresses or instructions.
 
 This closes a tooling coverage gap: the prior analyzer allowlist mapped network sender/receiver and dispatcher methods but did not include these serializer/deserializer types. It does **not** recover serializer field order, field types, optionality, message IDs, payload encoding, framing, handshake order, or login semantics. Those remain unknown until native method-body tracing and an authorized redacted wire fixture reproduce them.
+
+
+## LoginRequest primitive-helper callsites — 2026-11-10
+
+A private offline disassembly spot-check of the unchanged APK's `LoginRequestSTSerializer.serialize` and `LoginRequestSTDeserializer.deserialize` entry windows found direct calls to the generic primitive helpers:
+
+| Entry method | Direct helper | Call sites |
+|---|---|---:|
+| LoginRequest serializer | SimpleSerializer.serializeInt | 19 |
+| LoginRequest serializer | SimpleSerializer.serializeString | 16 |
+| LoginRequest serializer | SimpleSerializer.serializeLong | 2 |
+| LoginRequest serializer | SimpleSerializer.serializeBoolean | 1 |
+| LoginRequest deserializer | SimpleDeserializer.deserializeInt | 14 |
+| LoginRequest deserializer | SimpleDeserializer.deserializeString | 16 |
+| LoginRequest deserializer | SimpleDeserializer.deserializeLong | 2 |
+| LoginRequest deserializer | SimpleDeserializer.deserializeBoolean | 1 |
+
+The analyzer now summarizes these direct AArch64 `BL` callsites by helper name, and separately counts indirect `BLR` calls and direct calls outside the helper allowlist. The scan window is bounded by the next distinct relocation-backed executable entry in the same ELF section and is explicitly an entry window, not a formally recovered function boundary.
+
+These are callsite counts, **not** field counts. They do not establish which property getter feeds each helper, the field order, optionality, wire IDs, byte encoding, framing, handshake sequence, or login semantics. No raw instructions, native addresses, APK bytes, or packet data are emitted or committed.
