@@ -8,9 +8,11 @@
 - Persists only the SHA-256 token digest, account id, creation time and expiry time.
 - Uses epoch time so expiry survives process restarts; tests inject a deterministic clock.
 - Uses `BEGIN IMMEDIATE` for issue, resolve/expiry cleanup, revocation and purge operations.
+- Evaluates the clock after acquiring the write lock, so waiting for SQLite does not bypass expiry.
 - Enforces expiry at the exact boundary (`now >= expires_at`).
 - Revocation is idempotent: the first call returns true; later calls return false.
 - Concurrent revocation against separate SQLite connections has one winner.
+- Rejects an already-active caller transaction instead of committing work owned by the caller.
 
 ## Integration requirements
 
@@ -18,10 +20,10 @@ The caller must authenticate the account before calling `issue`; this method is 
 
 The store intentionally has no foreign key to the mock `accounts` table, so it can be tested independently. Account existence and authentication remain the responsibility of a future verified auth layer. This module does not replace the existing process-local `SessionManager` or connect to the synthetic HTTP API.
 
-Run:
+Run the focused test and full suite:
 
 ```sh
-python -m unittest tests.test_sqlite_session_store -v
+python -m unittest discover -s tests -p 'test_sqlite_session_store.py' -v
 python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
