@@ -50,3 +50,8 @@ python -m unittest discover -s tests -p 'test_sqlite_session_store.py' -v
 python -m unittest discover -s tests -p 'test_sqlite_authorized_map_service.py' -v
 python -m unittest discover -s tests -p 'test_sqlite_authorized_player_state_service.py' -v
 ~~~
+
+
+## Synthetic credential boundary
+
+`server/sqlite_account_auth_service.py` provides local PBKDF2-HMAC-SHA256 credential enrollment and verification for synthetic accounts. It issues a durable session only after re-reading the credential under `BEGIN IMMEDIATE`, using `SqliteSessionStore.issue_in_transaction` so credential verification and session insertion cannot be separated by a credential change. Enrollment is a trusted local setup operation; there is no HTTP route, rate limiter, APK password format, or APK login integration. See [SQLITE_ACCOUNT_AUTH_SERVICE.md](SQLITE_ACCOUNT_AUTH_SERVICE.md).
