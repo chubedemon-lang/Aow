@@ -10,6 +10,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from server.combat import Battle, Fighter
+from server.sqlite_authorized_transaction import authorized_character_transaction
 from server.sessions import SessionError
 from server.sqlite_character_authorizer import (
     SqliteCharacterAuthorizer,
@@ -212,16 +213,6 @@ class SqliteAuthorizedCombatService:
         event = CombatEvent(**value["event"])
         return snapshot, event
 
-    def _begin_authorized(self, token, character_id):
-        if self.db.in_transaction:
-            raise ValueError("connection must not have an active transaction")
-        self.db.execute("BEGIN IMMEDIATE")
-        try:
-            return self.authorizer.require_in_transaction(token, character_id)
-        except BaseException:
-            self.db.rollback()
-            raise
-
     def create(self, token: str, character_id: int, battle_id: str,
                battle: Battle) -> CombatSnapshot:
         """Create a new synthetic battle for an owned participating character."""
@@ -230,43 +221,41 @@ class SqliteAuthorizedCombatService:
             raise CombatStoreError("battle snapshot required")
         if battle.turn != 0 or battle.first.hp <= 0 or battle.second.hp <= 0:
             raise CombatStoreError("new battle must start with living fighters")
-        participant_ids = (battle.first.fighter_id, battle.second.fighter_id)
-        if participant_ids.count(character_id) != 1:
-            raise SessionError("character does not own this battle")
 
-        owned_id = self._begin_authorized(token, character_id)
-        try:
-            self.db.execute(
-                """INSERT INTO combat_battles
-                   (battle_id, owner_character_id,
-                    first_id, first_hp, first_attack, first_defense,
-                    second_id, second_hp, second_attack, second_defense,
-                    next_actor, turn, revision, winner_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)""",
-                (
-                    battle_id, owned_id,
-                    battle.first.fighter_id, battle.first.hp,
-                    battle.first.attack, battle.first.defense,
-                    battle.second.fighter_id, battle.second.hp,
-                    battle.second.attack, battle.second.defense,
-                    battle.next_actor, battle.turn,
-                ),
-            )
-            self.db.commit()
-        except sqlite3.IntegrityError as exc:
-            self.db.rollback()
-            raise CombatAlreadyExists("battle already exists") from exc
-        except BaseException:
-            self.db.rollback()
-            raise
-        return CombatSnapshot(battle_id, owned_id, battle, 0)
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
+            participant_ids = (battle.first.fighter_id, battle.second.fighter_id)
+            if participant_ids.count(character_id) != 1:
+                raise SessionError("character does not own this battle")
+            try:
+                self.db.execute(
+                    """INSERT INTO combat_battles
+                       (battle_id, owner_character_id,
+                        first_id, first_hp, first_attack, first_defense,
+                        second_id, second_hp, second_attack, second_defense,
+                        next_actor, turn, revision, winner_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)""",
+                    (
+                        battle_id, owned_id,
+                        battle.first.fighter_id, battle.first.hp,
+                        battle.first.attack, battle.first.defense,
+                        battle.second.fighter_id, battle.second.hp,
+                        battle.second.attack, battle.second.defense,
+                        battle.next_actor, battle.turn,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise CombatAlreadyExists("battle already exists") from exc
+            return CombatSnapshot(battle_id, owned_id, battle, 0)
 
     def get(self, token: str, character_id: int,
             battle_id: str) -> CombatSnapshot:
         """Read a battle only for the character that created it."""
         battle_id = self._identifier(battle_id, "battle identifier")
-        owned_id = self._begin_authorized(token, character_id)
-        try:
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
             row = self.db.execute(
                 """SELECT battle_id, owner_character_id,
                           first_id, first_hp, first_attack, first_defense,
@@ -279,12 +268,7 @@ class SqliteAuthorizedCombatService:
                 raise CombatNotFound("battle not found")
             if row[1] != owned_id:
                 raise SessionError("character does not own this battle")
-            snapshot = self._snapshot_from_row(row)
-            self.db.commit()
-            return snapshot
-        except BaseException:
-            self.db.rollback()
-            raise
+            return self._snapshot_from_row(row)
 
     def attack(self, token: str, character_id: int, battle_id: str,
                request_id: str, expected_revision: int,
@@ -301,13 +285,14 @@ class SqliteAuthorizedCombatService:
             raise CombatStoreError("invalid expected revision")
         if type(actor_id) is not int or not 1 <= actor_id <= 1_000_000:
             raise CombatStoreError("invalid actor identifier")
-        owned_id = self._begin_authorized(token, character_id)
-        payload_json = json.dumps(
-            [battle_id, owned_id, expected_revision, actor_id],
-            separators=(",", ":"),
-        )
 
-        try:
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
+            payload_json = json.dumps(
+                [battle_id, owned_id, expected_revision, actor_id],
+                separators=(",", ":"),
+            )
             row = self.db.execute(
                 """SELECT battle_id, owner_character_id,
                           first_id, first_hp, first_attack, first_defense,
@@ -335,7 +320,6 @@ class SqliteAuthorizedCombatService:
                         "request id reused with different combat action"
                     )
                 snapshot, event = self._decode_result(previous[4])
-                self.db.commit()
                 return CombatMutation(snapshot, event, True)
 
             current = self._snapshot_from_row(row)
@@ -374,8 +358,4 @@ class SqliteAuthorizedCombatService:
                     payload_json, result_json,
                 ),
             )
-            self.db.commit()
             return CombatMutation(updated, event, False)
-        except BaseException:
-            self.db.rollback()
-            raise
