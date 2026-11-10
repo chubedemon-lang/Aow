@@ -1,0 +1,223 @@
+"""Regression tests for durable synthetic inventory; not APK item tests."""
+import os
+import sqlite3
+import tempfile
+import threading
+import unittest
+from concurrent.futures import ThreadPoolExecutor
+
+from server.sqlite_inventory_store import (
+    InventoryAlreadyExists,
+    InventoryNotFound,
+    InventoryOperationConflict,
+    InventoryRevisionConflict,
+    InventoryStoreError,
+    SqliteInventoryStore,
+)
+
+
+class SqliteInventoryStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = os.path.join(self.temp.name, "inventory.sqlite3")
+        self.db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        self.store = SqliteInventoryStore(self.db)
+        self.addCleanup(self.db.close)
+
+    def test_create_and_read_empty_inventory(self):
+        expected = self.store.create("hero", capacity=3, max_stack=10)
+        self.assertEqual(self.store.get("hero"), expected)
+        self.assertEqual(expected.items, ())
+        self.assertEqual(expected.revision, 0)
+
+    def test_duplicate_and_missing_inventory(self):
+        self.store.create("hero")
+        with self.assertRaises(InventoryAlreadyExists):
+            self.store.create("hero")
+        with self.assertRaises(InventoryNotFound):
+            self.store.get("missing")
+
+    def test_atomic_mutation_and_revision(self):
+        self.store.create("hero", capacity=3, max_stack=10)
+        result = self.store.apply("hero", "grant-1", 0, [("potion", 5)])
+        self.assertFalse(result.replayed)
+        self.assertEqual(result.snapshot.count("potion"), 5)
+        self.assertEqual(result.snapshot.revision, 1)
+        result = self.store.apply("hero", "use-1", 1, [("potion", -2)])
+        self.assertEqual(result.snapshot.count("potion"), 3)
+        self.assertEqual(result.snapshot.revision, 2)
+
+    def test_duplicate_deltas_are_aggregated_and_order_independent(self):
+        self.store.create("hero", max_stack=10)
+        result = self.store.apply(
+            "hero", "batch-1", 0, [("potion", 3), ("ore", 2), ("potion", 2)]
+        )
+        self.assertEqual(result.snapshot.items, (("ore", 2), ("potion", 5)))
+        replay = self.store.apply(
+            "hero", "batch-1", 0, [("potion", 2), ("ore", 2), ("potion", 3)]
+        )
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.snapshot, result.snapshot)
+
+    def test_exact_retry_returns_original_receipt_after_later_mutation(self):
+        self.store.create("hero", max_stack=20)
+        first = self.store.apply("hero", "grant-1", 0, [("potion", 5)])
+        self.store.apply("hero", "use-1", 1, [("potion", -2)])
+        replay = self.store.apply("hero", "grant-1", 0, [("potion", 5)])
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.snapshot, first.snapshot)
+        self.assertEqual(self.store.get("hero").count("potion"), 3)
+        self.assertEqual(self.store.get("hero").revision, 2)
+
+    def test_request_id_cannot_be_reused_for_another_payload_or_character(self):
+        self.store.create("hero")
+        self.store.create("alt")
+        self.store.apply("hero", "same-id", 0, [("potion", 1)])
+        with self.assertRaises(InventoryOperationConflict):
+            self.store.apply("hero", "same-id", 0, [("potion", 2)])
+        with self.assertRaises(InventoryOperationConflict):
+            self.store.apply("alt", "same-id", 0, [("potion", 1)])
+
+    def test_stale_revision_is_rejected_without_receipt(self):
+        self.store.create("hero")
+        self.store.apply("hero", "first", 0, [("potion", 1)])
+        with self.assertRaises(InventoryRevisionConflict):
+            self.store.apply("hero", "stale", 0, [("ore", 1)])
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM inventory_mutations WHERE request_id='stale'"
+            ).fetchone()[0],
+            0,
+        )
+        self.assertEqual(self.store.get("hero").items, (("potion", 1),))
+
+    def test_underflow_stack_and_capacity_fail_atomically(self):
+        self.store.create("hero", capacity=1, max_stack=3)
+        self.store.apply("hero", "first", 0, [("potion", 2)])
+        before = self.store.get("hero")
+        cases = [
+            ("underflow", [("potion", -3)]),
+            ("stack-overflow", [("potion", 2)]),
+            ("capacity", [("ore", 1)]),
+        ]
+        for request_id, changes in cases:
+            with self.subTest(request_id=request_id), self.assertRaises(InventoryStoreError):
+                self.store.apply("hero", request_id, 1, changes)
+            self.assertEqual(self.store.get("hero"), before)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM inventory_mutations").fetchone()[0],
+            1,
+        )
+
+    def test_cancelled_batch_is_rejected_without_revision_change(self):
+        self.store.create("hero")
+        with self.assertRaisesRegex(InventoryStoreError, "empty"):
+            self.store.apply("hero", "cancel", 0, [("potion", 2), ("potion", -2)])
+        self.assertEqual(self.store.get("hero").revision, 0)
+
+    def test_invalid_inputs_do_not_mutate(self):
+        self.store.create("hero")
+        invalid = [
+            ("", 0, [("potion", 1)]),
+            ("bad", True, [("potion", 1)]),
+            ("bad", -1, [("potion", 1)]),
+            ("bad", 0, None),
+            ("bad", 0, [("bad item", 1)]),
+            ("bad", 0, [("potion", True)]),
+            ("bad", 0, [("potion", 0)]),
+            ("bad", 0, [("potion", 2**31)]),
+            ("bad", 0, [("potion", 1, 2)]),
+        ]
+        for request_id, revision, changes in invalid:
+            with self.subTest(request_id=request_id, changes=changes), self.assertRaises(InventoryStoreError):
+                self.store.apply("hero", request_id, revision, changes)
+        for kwargs in ({"capacity": 0}, {"capacity": True},
+                       {"max_stack": 0}, {"max_stack": False},
+                       {"capacity": 4097}, {"max_stack": 2**31}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(InventoryStoreError):
+                self.store.create("other", **kwargs)
+        self.assertEqual(self.store.get("hero").revision, 0)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM inventory_mutations").fetchone()[0],
+            0,
+        )
+
+    def test_batch_limit_is_enforced(self):
+        self.store.create("hero")
+        with self.assertRaises(InventoryStoreError):
+            self.store.apply("hero", "large", 0, [("potion", 1)] * 4097)
+        self.assertEqual(self.store.get("hero").revision, 0)
+
+    def test_inventory_and_receipts_survive_reopen(self):
+        self.store.create("hero")
+        expected = self.store.apply("hero", "persist", 0, [("potion", 4)])
+        self.db.close()
+        reopened = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        self.addCleanup(reopened.close)
+        store = SqliteInventoryStore(reopened)
+        self.assertEqual(store.get("hero"), expected.snapshot)
+        replay = store.apply("hero", "persist", 0, [("potion", 4)])
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.snapshot, expected.snapshot)
+
+    def test_concurrent_same_request_has_one_mutation(self):
+        self.store.create("hero", max_stack=20)
+        barrier = threading.Barrier(8)
+
+        def apply_once(_):
+            connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+            try:
+                store = SqliteInventoryStore(connection)
+                barrier.wait(timeout=5)
+                return store.apply("hero", "same", 0, [("potion", 2)])
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(apply_once, range(8)))
+        self.assertEqual(sum(not result.replayed for result in results), 1)
+        self.assertEqual(sum(result.replayed for result in results), 7)
+        self.assertTrue(all(result.snapshot == results[0].snapshot for result in results))
+        self.assertEqual(self.store.get("hero").count("potion"), 2)
+        self.assertEqual(self.store.get("hero").revision, 1)
+
+    def test_concurrent_distinct_requests_use_revision_guard(self):
+        self.store.create("hero", max_stack=20)
+        barrier = threading.Barrier(2)
+
+        def apply_once(request_id):
+            connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+            try:
+                store = SqliteInventoryStore(connection)
+                barrier.wait(timeout=5)
+                try:
+                    return store.apply("hero", request_id, 0, [("potion", 1)])
+                except InventoryRevisionConflict:
+                    return None
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(apply_once, ("left", "right")))
+        self.assertEqual(sum(result is not None for result in results), 1)
+        self.assertEqual(self.store.get("hero").count("potion"), 1)
+        self.assertEqual(self.store.get("hero").revision, 1)
+
+    def test_constructor_does_not_commit_callers_transaction(self):
+        self.db.execute("CREATE TABLE caller_work (value INTEGER)")
+        self.db.commit()
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_work VALUES (1)")
+        with self.assertRaises(ValueError):
+            SqliteInventoryStore(self.db)
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM caller_work").fetchone()[0],
+            0,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
