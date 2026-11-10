@@ -6,14 +6,8 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-from server.sqlite_inventory_store import (
-    InventoryStoreError,
-    SqliteInventoryStore,
-)
-from server.sqlite_player_state_store import (
-    PlayerStoreError,
-    SqlitePlayerStateStore,
-)
+from server.sqlite_inventory_store import SqliteInventoryStore
+from server.sqlite_player_state_store import SqlitePlayerStateStore
 from server.sqlite_shop_store import (
     ShopInsufficientFunds,
     ShopOffer,
@@ -110,7 +104,7 @@ class SqliteShopStoreTests(unittest.TestCase):
         with self.assertRaises(ShopRevisionConflict):
             self.shop.purchase("hero", "stale-inventory", 1, 0, "potion-pack")
         self.assertEqual(self.players.get("hero").currency, 100)
-        self.assertEqual(self.inventory.get("hero").count("potion"), 2)
+        self.assertEqual(self.inventory.get("hero").count("herb"), 1)
 
     def test_exact_retry_returns_original_result_after_later_mutations(self):
         first = self.shop.purchase("hero", "stable-request", 0, 0, "potion-pack", 1)
@@ -121,7 +115,7 @@ class SqliteShopStoreTests(unittest.TestCase):
         self.assertEqual(replay.player, first.player)
         self.assertEqual(replay.inventory, first.inventory)
         self.assertEqual(self.players.get("hero").currency, 93)
-        self.assertEqual(self.inventory.get("hero").count("herb"), 1)
+        self.assertEqual(self.inventory.get("hero").count("potion"), 2)
 
     def test_retry_survives_offer_removal_and_repricing(self):
         original = self.shop.purchase("hero", "catalog-change", 0, 0, "potion-pack", 1)
