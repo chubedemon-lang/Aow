@@ -14,6 +14,9 @@ session tables.
 - The owned character must be exactly one of the two fighters.
 - Reads and mutations require an active durable session for the owning account
   and the same character that created the battle.
+- The combat facade begins an IMMEDIATE transaction and checks the session and
+  character ownership inside that same transaction, so token revocation cannot
+  slip between authorization and the battle operation.
 - A different character owned by the same account cannot read another
   character's battle.
 - Ownership transfer is not supported.
