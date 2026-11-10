@@ -1,8 +1,8 @@
 """Ownership tests for the isolated synthetic SQLite quest-award facade."""
 import os
 import sqlite3
-import threading
 import tempfile
+import threading
 import unittest
 
 from server.sessions import SessionError
@@ -10,7 +10,6 @@ from server.quest_award_ledger import RewardConflict
 from server.sqlite_authorized_quest_award_service import (
     SqliteAuthorizedQuestAwardService,
 )
-
 from server.sqlite_session_store import SqliteSessionStore
 
 
@@ -19,7 +18,9 @@ class SqliteAuthorizedQuestAwardServiceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = os.path.join(self.temp.name, "authorized-quest.sqlite3")
-        self.db = sqlite3.connect(self.path, timeout=10, isolation_level=None, check_same_thread=False)
+        self.db = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, check_same_thread=False
+        )
         self.addCleanup(self.db.close)
         self.db.execute(
             """CREATE TABLE characters (
