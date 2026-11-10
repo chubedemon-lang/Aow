@@ -78,8 +78,15 @@ class SqliteSessionStore:
             raise SessionError("invalid session")
         return hashlib.sha256(token.encode("ascii")).digest()
 
-    def issue(self, account_id: int, ttl_seconds=None) -> str:
-        """Issue a random bearer token after trusted account authentication."""
+    def issue_in_transaction(self, account_id: int, ttl_seconds=None) -> str:
+        """Insert a session without opening or committing the caller's transaction.
+
+        The caller must hold a transaction across the authentication decision
+        and this insert. Prefer BEGIN IMMEDIATE so credential changes and
+        session issuance serialize. The caller owns commit/rollback.
+        """
+        if not self.db.in_transaction:
+            raise ValueError("active SQLite transaction required")
         if (type(account_id) is not int
                 or not 1 <= account_id <= _MAX_ACCOUNT_ID):
             raise ValueError("invalid account id")
@@ -87,20 +94,24 @@ class SqliteSessionStore:
         self._validate_ttl(ttl)
         token = secrets.token_urlsafe(32)
         digest = self._digest(token)
+        now = self._now()
+        self.db.execute(
+            "INSERT INTO durable_sessions "
+            "(token_hash, account_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (digest, account_id, now, now + ttl),
+        )
+        return token
 
+    def issue(self, account_id: int, ttl_seconds=None) -> str:
+        """Issue a random bearer token after trusted account authentication."""
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            now = self._now()
-            self.db.execute(
-                "INSERT INTO durable_sessions "
-                "(token_hash, account_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-                (digest, account_id, now, now + ttl),
-            )
+            token = self.issue_in_transaction(account_id, ttl_seconds)
             self.db.commit()
+            return token
         except BaseException:
             self.db.rollback()
             raise
-        return token
 
     def resolve(self, token: str) -> int:
         """Resolve an active token to its account id; expired rows are removed."""
