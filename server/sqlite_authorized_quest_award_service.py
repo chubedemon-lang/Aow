@@ -2,14 +2,17 @@
 
 This is a local persistence boundary only. It does not verify quest completion,
 implement AOW quest packets, or establish original-game reward rules. The
-trusted quest domain must validate completion before calling grant_quest_once.
-Session tokens must only be issued after trusted account authentication.
-Character ownership transfer is not supported.
+trusted quest domain must validate completion before granting a reward.
+Every operation holds BEGIN IMMEDIATE across session resolution, ownership and
+the reward-ledger operation so revocation cannot race a grant or balance read.
+The reward ledger remains separate from authoritative inventory. Session
+tokens must only be issued after trusted account authentication. No HTTP route
+is registered here; ownership transfer is not supported.
 """
 import sqlite3
 
 from server.quest_award_ledger import QuestAwardLedger
-from server.sessions import SessionError
+from server.sqlite_authorized_transaction import authorized_character_transaction
 from server.sqlite_character_authorizer import (
     SqliteCharacterAuthorizer,
     require_character_schema,
@@ -21,13 +24,7 @@ _MAX_TTL_SECONDS = 31_536_000
 
 
 class SqliteAuthorizedQuestAwardService:
-    """Gate synthetic quest-award reads and writes by durable session ownership.
-
-    The reward ledger remains separate from the authoritative inventory store.
-    This facade prevents cross-account access but does not prove that a quest
-    was completed; callers must perform that check in their trusted quest
-    domain before granting a reward. No HTTP route is registered here.
-    """
+    """Gate synthetic quest-award reads and writes by durable session ownership."""
 
     def __init__(self, connection: sqlite3.Connection, *,
                  ttl_seconds: int = 900, clock=None):
@@ -35,7 +32,6 @@ class SqliteAuthorizedQuestAwardService:
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")
-        # Fail before creating session or reward tables on an uninitialized DB.
         require_character_schema(connection)
         if (type(ttl_seconds) is not int
                 or not 1 <= ttl_seconds <= _MAX_TTL_SECONDS):
@@ -51,18 +47,17 @@ class SqliteAuthorizedQuestAwardService:
     def grant_quest_once(self, token: str, character_id: int,
                          request_id: str, quest_id: int,
                          item_id: str, quantity: int) -> bool:
-        """Persist one synthetic award after caller-verified quest completion.
-
-        Identical retries return False. Reusing the request ID with another
-        payload, or attempting a second award for the same character/quest/item,
-        raises RewardConflict. Authorization is checked again on every retry.
-        """
-        owned_id = self.authorizer.require(token, character_id)
-        return self._ledger.grant_quest_once(
-            request_id, owned_id, quest_id, item_id, quantity
-        )
+        """Persist one synthetic award after caller-verified quest completion."""
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
+            return self._ledger.grant_quest_once(
+                request_id, owned_id, quest_id, item_id, quantity
+            )
 
     def balance(self, token: str, character_id: int, item_id: str) -> int:
         """Read the isolated synthetic reward balance for an owned character."""
-        owned_id = self.authorizer.require(token, character_id)
-        return self._ledger.balance(owned_id, item_id)
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
+            return self._ledger.balance(owned_id, item_id)

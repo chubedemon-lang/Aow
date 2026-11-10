@@ -2,6 +2,7 @@
 import os
 import sqlite3
 import tempfile
+import threading
 import unittest
 
 from server.sessions import SessionError
@@ -9,14 +10,17 @@ from server.quest_award_ledger import RewardConflict
 from server.sqlite_authorized_quest_award_service import (
     SqliteAuthorizedQuestAwardService,
 )
+from server.sqlite_session_store import SqliteSessionStore
 
 
 class SqliteAuthorizedQuestAwardServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        path = os.path.join(self.temp.name, "authorized-quest.sqlite3")
-        self.db = sqlite3.connect(path, timeout=10, isolation_level=None)
+        self.path = os.path.join(self.temp.name, "authorized-quest.sqlite3")
+        self.db = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, check_same_thread=False
+        )
         self.addCleanup(self.db.close)
         self.db.execute(
             """CREATE TABLE characters (
@@ -127,6 +131,71 @@ class SqliteAuthorizedQuestAwardServiceTests(unittest.TestCase):
         self.assertNotIn("durable_sessions", tables)
         self.assertNotIn("reward_balances", tables)
         self.assertNotIn("quest_award_keys", tables)
+
+
+
+    def test_session_revocation_serializes_with_quest_award(self):
+        entered = threading.Event()
+        release = threading.Event()
+        revoke_started = threading.Event()
+        revoke_done = threading.Event()
+        outcome = {}
+        original_grant = self.service._ledger.grant_quest_once
+
+        def paused_grant(*args, **kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("test did not release quest award")
+            return original_grant(*args, **kwargs)
+
+        self.service._ledger.grant_quest_once = paused_grant
+
+        def grant():
+            try:
+                outcome["granted"] = self.service.grant_quest_once(
+                    self.owner_token, 101, "atomic-revoke-quest",
+                    9, "gem", 2,
+                )
+            except BaseException as exc:
+                outcome["grant_error"] = exc
+
+        def revoke():
+            connection = sqlite3.connect(
+                self.path, timeout=10, isolation_level=None
+            )
+            try:
+                sessions = SqliteSessionStore(
+                    connection, ttl_seconds=30, clock=lambda: self.now[0]
+                )
+                revoke_started.set()
+                outcome["revoked"] = sessions.revoke(self.owner_token)
+            except BaseException as exc:
+                outcome["revoke_error"] = exc
+            finally:
+                connection.close()
+                revoke_done.set()
+
+        grant_thread = threading.Thread(target=grant)
+        revoke_thread = threading.Thread(target=revoke)
+        grant_thread.start()
+        self.assertTrue(entered.wait(5))
+        revoke_thread.start()
+        self.assertTrue(revoke_started.wait(5))
+        try:
+            self.assertFalse(revoke_done.wait(0.2))
+        finally:
+            release.set()
+        grant_thread.join(5)
+        revoke_thread.join(5)
+        self.assertFalse(grant_thread.is_alive())
+        self.assertFalse(revoke_thread.is_alive())
+        self.assertNotIn("grant_error", outcome)
+        self.assertNotIn("revoke_error", outcome)
+        self.assertTrue(outcome["revoked"])
+        self.assertTrue(outcome["granted"])
+        self.assertEqual(self.service._ledger.balance("101", "gem"), 2)
+        with self.assertRaises(SessionError):
+            self.service.balance(self.owner_token, 101, "gem")
 
 
 if __name__ == "__main__":

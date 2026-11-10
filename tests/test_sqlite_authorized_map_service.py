@@ -2,20 +2,24 @@
 import os
 import sqlite3
 import tempfile
+import threading
 import unittest
 
 from server.sessions import SessionError
 from server.sqlite_authorized_map_service import SqliteAuthorizedMapService
 from server.sqlite_map_position_store import MapPositionAlreadyExists
 from server.synthetic_map_position import MapPosition, Position
+from server.sqlite_session_store import SqliteSessionStore
 
 
 class SqliteAuthorizedMapServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        path = os.path.join(self.temp.name, "authorized-map.sqlite3")
-        self.db = sqlite3.connect(path, timeout=10, isolation_level=None)
+        self.path = os.path.join(self.temp.name, "authorized-map.sqlite3")
+        self.db = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, check_same_thread=False
+        )
         self.addCleanup(self.db.close)
         self.db.execute(
             """CREATE TABLE characters (
@@ -154,6 +158,73 @@ class SqliteAuthorizedMapServiceTests(unittest.TestCase):
             ).fetchone()[0],
             0,
         )
+
+
+
+    def test_session_revocation_serializes_with_map_movement(self):
+        self.service.create_position(self.owner_token, 101)
+        self.service.enter(self.owner_token, 101, "before-move", 0, 1, 0, 0)
+        entered = threading.Event()
+        release = threading.Event()
+        revoke_started = threading.Event()
+        revoke_done = threading.Event()
+        outcome = {}
+        original_move = self.service.positions.move
+
+        def paused_move(*args, **kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("test did not release map movement")
+            return original_move(*args, **kwargs)
+
+        self.service.positions.move = paused_move
+
+        def move():
+            try:
+                outcome["mutation"] = self.service.move(
+                    self.owner_token, 101, "atomic-revoke-move",
+                    1, 1, 2, 3,
+                )
+            except BaseException as exc:
+                outcome["mutation_error"] = exc
+
+        def revoke():
+            connection = sqlite3.connect(
+                self.path, timeout=10, isolation_level=None
+            )
+            try:
+                sessions = SqliteSessionStore(
+                    connection, ttl_seconds=30, clock=lambda: self.now[0]
+                )
+                revoke_started.set()
+                outcome["revoked"] = sessions.revoke(self.owner_token)
+            except BaseException as exc:
+                outcome["revoke_error"] = exc
+            finally:
+                connection.close()
+                revoke_done.set()
+
+        mutation_thread = threading.Thread(target=move)
+        revoke_thread = threading.Thread(target=revoke)
+        mutation_thread.start()
+        self.assertTrue(entered.wait(5))
+        revoke_thread.start()
+        self.assertTrue(revoke_started.wait(5))
+        try:
+            self.assertFalse(revoke_done.wait(0.2))
+        finally:
+            release.set()
+        mutation_thread.join(5)
+        revoke_thread.join(5)
+        self.assertFalse(mutation_thread.is_alive())
+        self.assertFalse(revoke_thread.is_alive())
+        self.assertNotIn("mutation_error", outcome)
+        self.assertNotIn("revoke_error", outcome)
+        self.assertTrue(outcome["revoked"])
+        self.assertEqual(outcome["mutation"].snapshot, MapPosition(1, Position(2, 3), 2))
+        self.assertEqual(self.service.positions.get("101"), MapPosition(1, Position(2, 3), 2))
+        with self.assertRaises(SessionError):
+            self.service.get_position(self.owner_token, 101)
 
 
 if __name__ == "__main__":

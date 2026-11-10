@@ -29,7 +29,9 @@ class QuestAwardLedger(SqliteRewardLedger):
             raise ValueError("invalid quest")
         if type(quantity) is not int or quantity <= 0:
             raise ValueError("invalid quantity")
-        self.db.execute("BEGIN IMMEDIATE")
+        owns_transaction = not self.db.in_transaction
+        if owns_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
         try:
             key = self.db.execute(
                 "SELECT request_id, quantity FROM quest_award_keys WHERE player_id=? AND quest_id=? AND item_id=?",
@@ -42,7 +44,8 @@ class QuestAwardLedger(SqliteRewardLedger):
                     (request_id,)).fetchone()
                 if receipt != (player_id, quest_id, item_id, quantity):
                     raise RewardConflict("inconsistent receipt")
-                self.db.commit()
+                if owns_transaction:
+                    self.db.commit()
                 return False
             receipt = self.db.execute(
                 "SELECT player_id,quest_id,item_id,quantity FROM reward_receipts WHERE request_id=?",
@@ -57,8 +60,10 @@ class QuestAwardLedger(SqliteRewardLedger):
                 ON CONFLICT(player_id,item_id)
                 DO UPDATE SET quantity=quantity+excluded.quantity""",
                             (player_id, item_id, quantity))
-            self.db.commit()
+            if owns_transaction:
+                self.db.commit()
             return True
         except BaseException:
-            self.db.rollback()
+            if owns_transaction:
+                self.db.rollback()
             raise

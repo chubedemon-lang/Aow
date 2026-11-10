@@ -2,6 +2,7 @@
 import os
 import sqlite3
 import tempfile
+import threading
 import unittest
 
 from server.sessions import SessionError
@@ -9,14 +10,17 @@ from server.sqlite_authorized_player_state_service import (
     SqliteAuthorizedPlayerStateService,
 )
 from server.sqlite_player_state_store import PlayerAlreadyExists, PlayerSnapshot
+from server.sqlite_session_store import SqliteSessionStore
 
 
 class SqliteAuthorizedPlayerStateServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        path = os.path.join(self.temp.name, "authorized-player.sqlite3")
-        self.db = sqlite3.connect(path, timeout=10, isolation_level=None)
+        self.path = os.path.join(self.temp.name, "authorized-player.sqlite3")
+        self.db = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, check_same_thread=False
+        )
         self.addCleanup(self.db.close)
         self.db.execute(
             """CREATE TABLE characters (
@@ -152,6 +156,72 @@ class SqliteAuthorizedPlayerStateServiceTests(unittest.TestCase):
             ).fetchone()[0],
             0,
         )
+
+
+
+    def test_session_revocation_serializes_with_player_state_mutation(self):
+        self.service.create_snapshot(self.owner_token, 101, currency=10)
+        entered = threading.Event()
+        release = threading.Event()
+        revoke_started = threading.Event()
+        revoke_done = threading.Event()
+        outcome = {}
+        original_apply = self.service.players.apply
+
+        def paused_apply(*args, **kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("test did not release player-state mutation")
+            return original_apply(*args, **kwargs)
+
+        self.service.players.apply = paused_apply
+
+        def mutate():
+            try:
+                outcome["mutation"] = self.service.apply(
+                    self.owner_token, 101, "atomic-revoke-player",
+                    0, experience_delta=5,
+                )
+            except BaseException as exc:
+                outcome["mutation_error"] = exc
+
+        def revoke():
+            connection = sqlite3.connect(
+                self.path, timeout=10, isolation_level=None
+            )
+            try:
+                sessions = SqliteSessionStore(
+                    connection, ttl_seconds=30, clock=lambda: self.now[0]
+                )
+                revoke_started.set()
+                outcome["revoked"] = sessions.revoke(self.owner_token)
+            except BaseException as exc:
+                outcome["revoke_error"] = exc
+            finally:
+                connection.close()
+                revoke_done.set()
+
+        mutation_thread = threading.Thread(target=mutate)
+        revoke_thread = threading.Thread(target=revoke)
+        mutation_thread.start()
+        self.assertTrue(entered.wait(5))
+        revoke_thread.start()
+        self.assertTrue(revoke_started.wait(5))
+        try:
+            self.assertFalse(revoke_done.wait(0.2))
+        finally:
+            release.set()
+        mutation_thread.join(5)
+        revoke_thread.join(5)
+        self.assertFalse(mutation_thread.is_alive())
+        self.assertFalse(revoke_thread.is_alive())
+        self.assertNotIn("mutation_error", outcome)
+        self.assertNotIn("revoke_error", outcome)
+        self.assertTrue(outcome["revoked"])
+        self.assertEqual(outcome["mutation"].snapshot.experience, 5)
+        self.assertEqual(self.service.players.get("101").experience, 5)
+        with self.assertRaises(SessionError):
+            self.service.get_snapshot(self.owner_token, 101)
 
 
 if __name__ == "__main__":

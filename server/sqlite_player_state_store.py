@@ -45,8 +45,8 @@ class SqlitePlayerStateStore:
     """SQLite-backed player snapshots with optimistic revisions and idempotency.
 
     Every mutation and its receipt commit in one BEGIN IMMEDIATE transaction.
-    The supplied connection must be idle before construction and before each
-    mutation; this store never commits a transaction owned by its caller.
+    Mutations start their own transaction when called standalone, or join an
+    existing caller-owned transaction without committing or rolling it back.
     """
 
     def __init__(self, connection: sqlite3.Connection):
@@ -128,7 +128,9 @@ class SqlitePlayerStateStore:
             raise PlayerStoreError("invalid currency")
 
         snapshot = PlayerSnapshot(character_id, level, experience, currency, 0)
-        self.db.execute("BEGIN IMMEDIATE")
+        owns_transaction = not self.db.in_transaction
+        if owns_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
         try:
             try:
                 self.db.execute(
@@ -139,10 +141,12 @@ class SqlitePlayerStateStore:
                 )
             except sqlite3.IntegrityError as exc:
                 raise PlayerAlreadyExists("player snapshot already exists") from exc
-            self.db.commit()
+            if owns_transaction:
+                self.db.commit()
             return snapshot
         except BaseException:
-            self.db.rollback()
+            if owns_transaction:
+                self.db.rollback()
             raise
 
     def get(self, character_id: str) -> PlayerSnapshot:
@@ -188,7 +192,9 @@ class SqlitePlayerStateStore:
             character_id, expected_revision, level,
             experience_delta, currency_delta,
         )
-        self.db.execute("BEGIN IMMEDIATE")
+        owns_transaction = not self.db.in_transaction
+        if owns_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
         try:
             previous = self.db.execute(
                 """SELECT character_id, expected_revision, requested_level,
@@ -206,7 +212,8 @@ class SqlitePlayerStateStore:
                     character_id, int(previous[5]), int(previous[6]),
                     int(previous[7]), int(previous[8]),
                 )
-                self.db.commit()
+                if owns_transaction:
+                    self.db.commit()
                 return PlayerMutation(replay, True)
 
             row = self.db.execute(
@@ -250,8 +257,10 @@ class SqlitePlayerStateStore:
                 (request_id, *request, updated.level, updated.experience,
                  updated.currency, updated.revision),
             )
-            self.db.commit()
+            if owns_transaction:
+                self.db.commit()
             return PlayerMutation(updated, False)
         except BaseException:
-            self.db.rollback()
+            if owns_transaction:
+                self.db.rollback()
             raise
