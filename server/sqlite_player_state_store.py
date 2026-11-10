@@ -161,6 +161,139 @@ class SqlitePlayerStateStore:
             raise PlayerNotFound("player snapshot not found")
         return self._snapshot(row)
 
+    def verify_integrity(self) -> dict:
+        """Audit snapshots against their durable mutation receipts without writes.
+
+        The initial create() values have no separate creation receipt, so this
+        audit can verify revision zero and every subsequent mutation chain, but
+        cannot independently prove the original baseline against external
+        tampering. It never repairs data.
+        """
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+
+        if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+            raise PlayerStoreError("SQLite quick_check failed")
+        if self.db.execute("PRAGMA foreign_key_check").fetchall():
+            raise PlayerStoreError("player-state foreign key check failed")
+
+        snapshots = {}
+        rows = self.db.execute(
+            """SELECT character_id, level, experience, currency, revision
+               FROM player_state_snapshots ORDER BY character_id"""
+        ).fetchall()
+        for character_id, level, experience, currency, revision in rows:
+            character_id = self._character_id(character_id)
+            if character_id in snapshots:
+                raise PlayerStoreError("duplicate player snapshot")
+            if (type(level) is not int or not 1 <= level <= _MAX_LEVEL
+                    or type(experience) is not int
+                    or not 0 <= experience <= _MAX_EXPERIENCE
+                    or type(currency) is not int
+                    or not 0 <= currency <= _MAX_CURRENCY
+                    or type(revision) is not int
+                    or not 0 <= revision <= _MAX_REVISION):
+                raise PlayerStoreError("invalid stored player snapshot")
+            snapshots[character_id] = PlayerSnapshot(
+                character_id, level, experience, currency, revision
+            )
+
+        replayed = {}
+        mutation_rows = self.db.execute(
+            """SELECT request_id, character_id, expected_revision,
+                      requested_level, experience_delta, currency_delta,
+                      result_level, result_experience, result_currency,
+                      result_revision
+               FROM player_state_mutations
+               ORDER BY character_id, result_revision, request_id"""
+        ).fetchall()
+        mutation_count = 0
+
+        for (request_id, character_id, expected_revision, requested_level,
+             experience_delta, currency_delta, result_level, result_experience,
+             result_currency, result_revision) in mutation_rows:
+            self._request_id(request_id)
+            character_id = self._character_id(character_id)
+            if character_id not in snapshots:
+                raise PlayerStoreError("mutation has no player snapshot")
+            if (type(expected_revision) is not int
+                    or not 0 <= expected_revision < _MAX_REVISION
+                    or type(result_revision) is not int
+                    or result_revision != expected_revision + 1):
+                raise PlayerStoreError("invalid player mutation revision")
+            if requested_level is not None and (
+                type(requested_level) is not int
+                or not 1 <= requested_level <= _MAX_LEVEL
+            ):
+                raise PlayerStoreError("invalid requested player level")
+            if (type(experience_delta) is not int
+                    or not -_MAX_EXPERIENCE <= experience_delta <= _MAX_EXPERIENCE
+                    or type(currency_delta) is not int
+                    or not -_MAX_CURRENCY <= currency_delta <= _MAX_CURRENCY):
+                raise PlayerStoreError("invalid player mutation delta")
+            if (type(result_level) is not int
+                    or not 1 <= result_level <= _MAX_LEVEL
+                    or type(result_experience) is not int
+                    or not 0 <= result_experience <= _MAX_EXPERIENCE
+                    or type(result_currency) is not int
+                    or not 0 <= result_currency <= _MAX_CURRENCY):
+                raise PlayerStoreError("invalid player mutation result")
+
+            current = replayed.get(character_id)
+            if current is None:
+                if expected_revision != 0:
+                    raise PlayerStoreError("player mutation history has a gap")
+                baseline_experience = result_experience - experience_delta
+                baseline_currency = result_currency - currency_delta
+                if (not 0 <= baseline_experience <= _MAX_EXPERIENCE
+                        or not 0 <= baseline_currency <= _MAX_CURRENCY):
+                    raise PlayerStoreError("invalid first player mutation baseline")
+                if (requested_level is not None
+                        and result_level != requested_level):
+                    raise PlayerStoreError("first player mutation level mismatch")
+                # The first receipt does not store the original level when a
+                # level override is requested. Its resulting level is still
+                # independently checked against that requested value.
+                current = PlayerSnapshot(
+                    character_id, result_level, result_experience,
+                    result_currency, result_revision,
+                )
+            else:
+                if current.revision != expected_revision:
+                    raise PlayerStoreError("player mutation history has a gap")
+                expected_level = (
+                    current.level if requested_level is None else requested_level
+                )
+                expected_experience = current.experience + experience_delta
+                expected_currency = current.currency + currency_delta
+                if (not 0 <= expected_experience <= _MAX_EXPERIENCE
+                        or not 0 <= expected_currency <= _MAX_CURRENCY):
+                    raise PlayerStoreError("player mutation history overflows")
+                if (result_level, result_experience, result_currency) != (
+                    expected_level, expected_experience, expected_currency
+                ):
+                    raise PlayerStoreError("player mutation receipt does not match history")
+                current = PlayerSnapshot(
+                    character_id, result_level, result_experience,
+                    result_currency, result_revision,
+                )
+            replayed[character_id] = current
+            mutation_count += 1
+
+        for character_id, snapshot in snapshots.items():
+            historical = replayed.get(character_id)
+            if historical is None:
+                if snapshot.revision != 0:
+                    raise PlayerStoreError(
+                        "player snapshot revision has no mutation history"
+                    )
+            elif historical != snapshot:
+                raise PlayerStoreError(
+                    "current player snapshot does not match mutation history"
+                )
+
+        return {"snapshots": len(snapshots), "mutations": mutation_count}
+
     def apply(self, character_id: str, request_id: str, expected_revision: int,
               *, level=None, experience_delta: int = 0,
               currency_delta: int = 0) -> PlayerMutation:
