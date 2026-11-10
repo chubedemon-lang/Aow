@@ -236,7 +236,7 @@ def _match_modules(elf, images):
             for module_address in by_addend.get(name_address, ()):
                 if not _contains(relro, module_address, 24):
                     continue
-                module_offset = relro["offset"] + module_address - relro["address"]
+                module_offset = module_address - relro["address"]
                 native_count = struct.unpack_from("<I", relro_data, module_offset + 8)[0]
                 if native_count != image["method_count"]:
                     count_mismatches.append(native_count)
