@@ -159,5 +159,28 @@ class SqliteSessionStoreTests(unittest.TestCase):
             self.store.resolve(token)
 
 
+    def test_issue_in_transaction_requires_caller_transaction(self):
+        with self.assertRaisesRegex(ValueError, "transaction"):
+            self.store.issue_in_transaction(44)
+
+    def test_issue_in_transaction_joins_and_respects_caller_rollback(self):
+        self.db.execute("BEGIN IMMEDIATE")
+        token = self.store.issue_in_transaction(45)
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        with self.assertRaises(SessionError):
+            self.store.resolve(token)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            0,
+        )
+
+    def test_issue_in_transaction_is_committed_by_caller(self):
+        self.db.execute("BEGIN IMMEDIATE")
+        token = self.store.issue_in_transaction(46, ttl_seconds=10)
+        self.db.commit()
+        self.assertEqual(self.store.resolve(token), 46)
+
+
 if __name__ == "__main__":
     unittest.main()
