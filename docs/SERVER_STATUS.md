@@ -6,9 +6,10 @@
 
 - Local-only Python mock HTTP API and SQLite domain for synthetic account/character creation and movement.
 - Synthetic SQLite inventory and player-state stores plus an atomic shop purchase store. A purchase debits player currency, grants inventory, advances both revisions, writes both mutation-ledger rows and a durable idempotency receipt in one BEGIN IMMEDIATE transaction; tests cover concurrent duplicate requests and rollback. Offer IDs, items and prices remain synthetic. These methods are not exposed as authenticated HTTP routes.
-- Process-local session lifecycle and a separate durable SQLite bearer-session store. The durable store hashes opaque tokens, enforces expiry/revocation and survives process restarts, but it is not wired into the HTTP API and does not authenticate passwords or APK login.
+- Process-local session lifecycle and a separate durable SQLite bearer-session store. The durable store hashes opaque tokens, enforces expiry/revocation and survives process restarts, but it does not authenticate passwords or APK login.
+- New `SqliteAuthorizedMapService` facade composes the durable session store with the map-position store and checks `characters.account_id` ownership before each map operation. It is a local Python domain service, not an authenticated HTTP route; ownership transfer is not supported.
 - Separate durable SQLite player snapshots with optimistic revisions and idempotent mutation receipts. The store is not yet wired into account/character ownership or the HTTP API.
-- Separate durable SQLite synthetic map-position snapshots with map-bound enter/move/leave transitions, optimistic revisions and idempotent receipts. This primitive is not wired into authenticated character ownership and does not establish AOW map or movement rules.
+- Separate durable SQLite synthetic map-position snapshots with map-bound enter/move/leave transitions, optimistic revisions and idempotent receipts. The underlying store remains a persistence primitive and does not establish AOW map or movement rules.
 - SQLite reward/quest ledgers and synthetic map/movement/combat/quest modules with local regression tests.
 - Offline APK inventory, protocol-candidate and IL2CPP metadata/type/codegen analysis tools. They make no network requests and do not modify the APK.
 - GitHub Actions for synthetic server tests, protocol discovery tests and repository quality checks.
