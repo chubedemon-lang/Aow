@@ -1,15 +1,14 @@
 """Session ownership gate tests use only synthetic local SQLite records."""
 import os
 import sqlite3
-import threading
 import tempfile
+import threading
 import unittest
 
 from server.sessions import SessionError
 from server.sqlite_authorized_map_service import SqliteAuthorizedMapService
 from server.sqlite_map_position_store import MapPositionAlreadyExists
 from server.synthetic_map_position import MapPosition, Position
-
 from server.sqlite_session_store import SqliteSessionStore
 
 
@@ -18,7 +17,9 @@ class SqliteAuthorizedMapServiceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = os.path.join(self.temp.name, "authorized-map.sqlite3")
-        self.db = sqlite3.connect(self.path, timeout=10, isolation_level=None, check_same_thread=False)
+        self.db = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, check_same_thread=False
+        )
         self.addCleanup(self.db.close)
         self.db.execute(
             """CREATE TABLE characters (
