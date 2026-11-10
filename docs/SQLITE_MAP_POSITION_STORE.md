@@ -1,0 +1,43 @@
+# Durable synthetic map-position store
+
+## Scope
+
+This module persists the repository's synthetic MapPosition domain object. It is an independent server persistence primitive, not an AOW map ID catalog, coordinate system, movement packet, collision model, or client contract.
+
+Map IDs and coordinate values are supplied by the caller. The module does not authenticate a character, prove session ownership, or expose an HTTP route.
+
+## Operations
+
+SqliteMapPositionStore supports:
+
+- create(character_id): create an unplaced snapshot at revision 0.
+- enter(character_id, request_id, expected_revision, map_id, x, y): enter one synthetic map from the unplaced state.
+- move(character_id, request_id, expected_revision, map_id, x, y): update a position only when the current map matches the supplied map ID.
+- leave(character_id, request_id, expected_revision, map_id): leave only the currently occupied map.
+- get(character_id): read the durable immutable snapshot.
+
+Every successful transition increments the revision exactly once.
+
+## Transaction and retry semantics
+
+Each transition and its receipt are committed in one SQLite BEGIN IMMEDIATE transaction. A request ID is globally unique within this store:
+
+- An exact retry returns the original committed snapshot, even if later transitions have advanced the current state.
+- Reusing a request ID for another character, operation, expected revision, map, or coordinate is rejected.
+- A stale revision, invalid map transition, or mismatched map ID leaves both the snapshot and receipt table unchanged.
+- Separate SQLite connections serialize writers; tests cover duplicate and competing concurrent requests.
+- The store refuses to take over a caller-owned transaction.
+
+The connection is supplied by the caller and remains caller-owned.
+
+## Validation
+
+Run the focused suite:
+
+    python -m unittest tests.test_sqlite_map_position_store -v
+
+The repository-wide GitHub Actions suites also run on pull requests.
+
+## Explicit non-goals
+
+This store does not establish AOW map identifiers, coordinate units, spawn rules, movement speed, collision/bounds, map transfer semantics, wire serialization, packet framing, or APK compatibility. It must not be treated as evidence for the original game's protocol. A future verified adapter must authenticate and authorize character ownership before invoking this domain store.

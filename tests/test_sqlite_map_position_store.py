@@ -1,0 +1,221 @@
+"""Regression tests for durable synthetic map positions, not APK map rules."""
+import os
+import sqlite3
+import tempfile
+import threading
+import unittest
+from concurrent.futures import ThreadPoolExecutor
+
+from server.sqlite_map_position_store import (
+    MapPositionAlreadyExists,
+    MapPositionNotFound,
+    MapPositionOperationConflict,
+    MapPositionRevisionConflict,
+    MapPositionStoreError,
+    SqliteMapPositionStore,
+)
+from server.synthetic_map_position import MapPosition, Position
+
+
+class SqliteMapPositionStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = os.path.join(self.temp.name, "map-position.sqlite3")
+        self.db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        self.store = SqliteMapPositionStore(self.db)
+        self.addCleanup(self.db.close)
+
+    def test_create_and_read_unplaced_snapshot(self):
+        snapshot = self.store.create("hero")
+        self.assertEqual(snapshot, MapPosition())
+        self.assertEqual(self.store.get("hero"), snapshot)
+
+    def test_duplicate_and_missing_snapshot(self):
+        self.store.create("hero")
+        with self.assertRaises(MapPositionAlreadyExists):
+            self.store.create("hero")
+        with self.assertRaises(MapPositionNotFound):
+            self.store.get("missing")
+
+    def test_enter_move_leave_lifecycle(self):
+        self.store.create("hero")
+        entered = self.store.enter("hero", "enter-1", 0, 0, 10, -4)
+        self.assertFalse(entered.replayed)
+        self.assertEqual(entered.snapshot,
+                         MapPosition(0, Position(10, -4), 1))
+        moved = self.store.move("hero", "move-1", 1, 0, -7, 20)
+        self.assertEqual(moved.snapshot,
+                         MapPosition(0, Position(-7, 20), 2))
+        left = self.store.leave("hero", "leave-1", 2, 0)
+        self.assertEqual(left.snapshot, MapPosition(revision=3))
+        self.assertEqual(self.store.get("hero"), left.snapshot)
+
+    def test_enter_twice_move_outside_or_leave_wrong_map_rejected(self):
+        self.store.create("hero")
+        self.store.enter("hero", "enter", 0, 4, 0, 0)
+        with self.assertRaises(MapPositionStoreError):
+            self.store.enter("hero", "enter-again", 1, 5, 1, 1)
+        with self.assertRaises(MapPositionStoreError):
+            self.store.move("hero", "wrong-map", 1, 5, 1, 1)
+        with self.assertRaises(MapPositionStoreError):
+            self.store.leave("hero", "wrong-leave", 1, 5)
+        self.assertEqual(self.store.get("hero"),
+                         MapPosition(4, Position(0, 0), 1))
+
+    def test_stale_revision_is_rejected_without_receipt(self):
+        self.store.create("hero")
+        self.store.enter("hero", "enter", 0, 1, 0, 0)
+        with self.assertRaises(MapPositionRevisionConflict):
+            self.store.move("hero", "stale", 0, 1, 2, 3)
+        self.assertEqual(self.db.execute(
+            "SELECT count(*) FROM map_position_mutations WHERE request_id='stale'"
+        ).fetchone()[0], 0)
+        self.assertEqual(self.store.get("hero").revision, 1)
+
+    def test_exact_retry_returns_original_receipt_after_later_transition(self):
+        self.store.create("hero")
+        first = self.store.enter("hero", "same", 0, 1, 2, 3)
+        self.store.move("hero", "later", 1, 1, 8, 9)
+        replay = self.store.enter("hero", "same", 0, 1, 2, 3)
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.snapshot, first.snapshot)
+        self.assertEqual(self.store.get("hero"),
+                         MapPosition(1, Position(8, 9), 2))
+
+    def test_request_id_cannot_be_reused_for_different_transition(self):
+        self.store.create("hero")
+        self.store.create("alt")
+        self.store.enter("hero", "same", 0, 1, 0, 0)
+        with self.assertRaises(MapPositionOperationConflict):
+            self.store.enter("hero", "same", 0, 1, 1, 0)
+        with self.assertRaises(MapPositionOperationConflict):
+            self.store.enter("alt", "same", 0, 1, 0, 0)
+
+    def test_operation_name_is_part_of_idempotency_payload(self):
+        self.store.create("hero")
+        self.store.enter("hero", "same-operation-key", 0, 1, 0, 0)
+        with self.assertRaises(MapPositionOperationConflict):
+            self.store.move("hero", "same-operation-key", 0, 1, 1, 1)
+
+    def test_invalid_identifiers_maps_coordinates_and_revisions(self):
+        for character_id in ("", " hero", "hero ", "x" * 129, None):
+            with self.assertRaises(MapPositionStoreError):
+                self.store.create(character_id)
+        self.store.create("hero")
+        invalid_calls = [
+            ("bad-map", True, 0, 0),
+            ("bad-map-negative", -1, 0, 0),
+            ("bad-map-large", 2**31, 0, 0),
+            ("bad-x", 1, True, 0),
+            ("bad-y", 1, 0, 1.5),
+        ]
+        for request_id, map_id, x, y in invalid_calls:
+            with self.subTest(request_id=request_id):
+                with self.assertRaises(MapPositionStoreError):
+                    self.store.enter("hero", request_id, 0, map_id, x, y)
+        with self.assertRaises(MapPositionStoreError):
+            self.store.enter("hero", "bad-revision", True, 1, 0, 0)
+        with self.assertRaises(MapPositionStoreError):
+            self.store.enter("hero", "", 0, 1, 0, 0)
+        self.assertEqual(self.store.get("hero"), MapPosition())
+
+    def test_reopen_preserves_position_and_receipts(self):
+        self.store.create("hero")
+        result = self.store.enter("hero", "persist", 0, 9, -10, 11)
+        self.db.close()
+        reopened = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        self.addCleanup(reopened.close)
+        store = SqliteMapPositionStore(reopened)
+        self.assertEqual(store.get("hero"), result.snapshot)
+        replay = store.enter("hero", "persist", 0, 9, -10, 11)
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.snapshot, result.snapshot)
+
+    def test_concurrent_duplicate_transition_commits_once(self):
+        self.store.create("hero")
+        barrier = threading.Barrier(8)
+
+        def enter_once(_):
+            connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+            try:
+                store = SqliteMapPositionStore(connection)
+                barrier.wait(timeout=5)
+                return store.enter("hero", "same", 0, 1, 5, 6)
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(enter_once, range(8)))
+        self.assertEqual(sum(not result.replayed for result in results), 1)
+        self.assertEqual(sum(result.replayed for result in results), 7)
+        self.assertTrue(all(result.snapshot == results[0].snapshot
+                            for result in results))
+        self.assertEqual(self.store.get("hero").revision, 1)
+
+    def test_concurrent_distinct_transitions_use_revision_guard(self):
+        self.store.create("hero")
+        barrier = threading.Barrier(2)
+
+        def enter_once(request_id, map_id):
+            connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+            try:
+                store = SqliteMapPositionStore(connection)
+                barrier.wait(timeout=5)
+                try:
+                    return store.enter("hero", request_id, 0, map_id, 0, 0)
+                except MapPositionRevisionConflict:
+                    return None
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(
+                lambda pair: enter_once(*pair),
+                (("left", 1), ("right", 2)),
+            ))
+        self.assertEqual(sum(result is not None for result in results), 1)
+        self.assertEqual(self.store.get("hero").revision, 1)
+
+    def test_maximum_revision_is_terminal(self):
+        self.store.create("hero")
+        self.db.execute(
+            "UPDATE map_position_snapshots SET revision=? WHERE character_id=?",
+            (2**63 - 2, "hero"),
+        )
+        result = self.store.enter("hero", "last-transition", 2**63 - 2, 1, 0, 0)
+        self.assertEqual(result.snapshot.revision, 2**63 - 1)
+        with self.assertRaises(MapPositionStoreError):
+            self.store.move("hero", "overflow", 2**63 - 1, 1, 1, 1)
+
+    def test_mutation_does_not_take_over_callers_transaction(self):
+        self.store.create("hero")
+        self.db.execute("CREATE TABLE caller_work (value INTEGER)")
+        self.db.commit()
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_work VALUES (1)")
+        with self.assertRaises(ValueError):
+            self.store.enter("hero", "blocked", 0, 1, 0, 0)
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertEqual(self.db.execute(
+            "SELECT count(*) FROM caller_work"
+        ).fetchone()[0], 0)
+        self.assertEqual(self.store.get("hero"), MapPosition())
+
+    def test_constructor_does_not_commit_callers_transaction(self):
+        self.db.execute("CREATE TABLE caller_work (value INTEGER)")
+        self.db.commit()
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_work VALUES (1)")
+        with self.assertRaises(ValueError):
+            SqliteMapPositionStore(self.db)
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertEqual(self.db.execute(
+            "SELECT count(*) FROM caller_work"
+        ).fetchone()[0], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
