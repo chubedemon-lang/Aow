@@ -8,6 +8,8 @@ on:
       - 'tests/test_protocol_candidates.py'
       - 'tools/il2cpp_metadata_inventory.py'
       - 'tests/test_il2cpp_metadata_inventory.py'
+      - 'tools/il2cpp_type_inventory.py'
+      - 'tests/test_il2cpp_type_inventory.py'
       - 'docs/PROTOCOL.md'
       - 'docs/IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md'
       - '.github/workflows/protocol-tests.yml'
@@ -22,8 +24,10 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile offline analysis tools
-        run: python -m py_compile tools/protocol_candidates.py tools/il2cpp_metadata_inventory.py
+        run: python -m py_compile tools/protocol_candidates.py tools/il2cpp_metadata_inventory.py tools/il2cpp_type_inventory.py
       - name: Protocol candidate scanner tests (synthetic input only)
         run: python -m unittest discover -s tests -p 'test_protocol_candidates.py' -v
       - name: IL2CPP metadata inventory tests (synthetic fixtures only)
         run: python -m unittest discover -s tests -p 'test_il2cpp_metadata_inventory.py' -v
+      - name: IL2CPP type inventory tests (synthetic fixtures only)
+        run: python -m unittest discover -s tests -p 'test_il2cpp_type_inventory.py' -v

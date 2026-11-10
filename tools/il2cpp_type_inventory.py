@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""Read-only IL2CPP v31 type/field/method name inventory for an authorized APK."""
+from __future__ import annotations
+
+import argparse
+import json
+import struct
+from pathlib import Path
+
+from tools.il2cpp_metadata_inventory import (
+    METADATA_MAGIC,
+    SUPPORTED_METADATA_VERSION,
+    MetadataInventoryError,
+    _read_metadata,
+)
+
+HEADER_MIN_BYTES = 256
+STRING_HEAP_PAIR_OFFSET = 24
+METHODS_PAIR_OFFSET = 0x30
+FIELDS_PAIR_OFFSET = 0x60
+TYPE_DEFINITIONS_PAIR_OFFSET = 0xA0
+TYPE_DEFINITION_STRIDE = 0x58
+METHOD_DEFINITION_STRIDE = 0x24
+FIELD_DEFINITION_STRIDE = 0x0C
+
+MESSAGE_NAMES = (
+    "LoginRequest", "LoginAnswer", "RegistrationRequest", "RegistrationAnswer",
+    "SessionRestoreRequest", "SessionRestoreAnswer", "LoginToBattleRequest",
+    "LoginToBattleAnswer", "BattleSessionRestoreRequest",
+    "BattleSessionRestoreAnswer", "CheckSocket", "Ping",
+)
+MESSAGE_TYPE_FIELD_ALLOWLIST = frozenset({
+    "LOGIN_REQUEST", "LOGIN_ANSWER", "REGISTRATION_REQUEST", "REGISTRATION_ANSWER",
+    "SESSION_RESTORE_REQUEST", "SESSION_RESTORE_ANSWER",
+    "LOGIN_TO_BATTLE_REQUEST", "LOGIN_TO_BATTLE_ANSWER",
+    "BATTLE_SESSION_RESTORE_REQUEST", "BATTLE_SESSION_RESTORE_ANSWER",
+    "PING", "CHECK_SOCKET", "BATTLE_LOAD_PROGRESS_REQUEST",
+    "BATTLE_LOAD_PROGRESS_ANSWER", "START_BATTLE_NOTIFICATION",
+    "BATTLE_FINISH_NOTIFICATION", "SHOP_BOX_REQUEST", "SHOP_BOX_ANSWER",
+    "JOIN_PVE_MISSION_REQUEST", "JOIN_PVE_MISSION_ANSWER",
+    "JOIN_PVP_MISSION_REQUEST", "JOIN_PVP_MISSION_ANSWER",
+    "GO_TO_BATTLE_NOTIFICATION", "GO_TO_BATTLE_PROPOSAL",
+    "GO_TO_BATTLE_CONFIRMATION", "BATTLE_AI_COMMAND_UNITS_MOVE",
+    "BATTLE_AI_COMMAND_UNITS_STOP", "BATTLE_AI_COMMAND_UNITS_SPEC",
+    "BATTLE_AI_COMMAND_BUILDING_SET", "LOBBY_CREATE_REQUEST",
+    "LOBBY_CREATE_ANSWER", "MAP_BUNDLE_CI_REQUEST", "MAP_BUNDLE_CI_ANSWER",
+})
+
+TARGET_TYPES = {
+    ("com.geargames.aow.messages", name) for name in MESSAGE_NAMES
+}
+TARGET_TYPES.add(("com.geargames.aow.messages", "MessageTypes"))
+TARGET_TYPES.update({
+    ("com.geargames.common.network", name) for name in (
+        "INetwork", "Network", "NetworkSettings", "NetworkSocket",
+        "Sender", "Receiver", "MessageDispatcher", "MessageHelper",
+    )
+})
+TARGET_TYPES.add(("", "NetworkSocketStream"))
+TARGET_TYPES.update({
+    ("com.geargames.common.serialization", "IClientMessageSerializer"),
+    ("com.geargames.common.serialization", "IClientMessageDeserializer"),
+    ("com.geargames.serialization", "MessageMeta"),
+})
+TARGET_TYPES.update({
+    ("com.geargames.aow.config", name) for name in (
+        "RemoteServerAddresses", "ServerAddressHelper",
+        "ClientServerAddressConfiguration", "ClientServerPreset",
+    )
+})
+TARGET_TYPES.update({
+    ("com.geargames.unity.network", name) for name in (
+        "CSAbstractSessionRestore`2", "CSMainSessionRestore",
+        "CSBattleSessionRestore", "CSMainSessionRestoreAnswerReceiver",
+        "CSBattleSessionRestoreAnswerReceiver",
+        "CSAbstractSessionRestoreAnswerReceiver",
+        "SessionRestoreStatusConverter",
+    )
+})
+for _message_name in MESSAGE_NAMES:
+    TARGET_TYPES.add((
+        "com.geargames.serialization.serializers",
+        _message_name + "STSerializer",
+    ))
+    TARGET_TYPES.add((
+        "com.geargames.serialization.serializers",
+        _message_name + "STDeserializer",
+    ))
+
+
+def _checked_section(metadata: bytes, pair_offset: int, stride: int, name: str):
+    offset, size = struct.unpack_from("<II", metadata, pair_offset)
+    if (
+        offset < HEADER_MIN_BYTES
+        or offset + size < offset
+        or offset + size > len(metadata)
+        or size % stride
+    ):
+        raise MetadataInventoryError(f"invalid {name} table bounds or record size")
+    return offset, size, size // stride
+
+
+def _read_heap_string(heap: bytes, index: int) -> str:
+    if not 0 <= index < len(heap):
+        raise MetadataInventoryError("metadata string index out of bounds")
+    end = heap.find(b"\x00", index)
+    if end < 0:
+        raise MetadataInventoryError("unterminated metadata string")
+    try:
+        return heap[index:end].decode("utf-8", "strict")
+    except UnicodeDecodeError as exc:
+        raise MetadataInventoryError("invalid UTF-8 metadata string") from exc
+
+
+def inspect_type_tables(apk_path: str | Path) -> dict:
+    """Return allowlisted type, field-name and method-name associations."""
+    metadata, apk_size, apk_sha256 = _read_metadata(Path(apk_path))
+    if len(metadata) < HEADER_MIN_BYTES:
+        raise MetadataInventoryError("metadata v31 header is truncated")
+    magic, version = struct.unpack_from("<II", metadata, 0)
+    if magic != METADATA_MAGIC:
+        raise MetadataInventoryError("invalid IL2CPP metadata magic")
+    if version != SUPPORTED_METADATA_VERSION:
+        raise MetadataInventoryError("unsupported IL2CPP metadata version")
+
+    string_offset, string_size = struct.unpack_from(
+        "<II", metadata, STRING_HEAP_PAIR_OFFSET
+    )
+    if (
+        string_offset < HEADER_MIN_BYTES
+        or string_size <= 0
+        or string_offset + string_size > len(metadata)
+    ):
+        raise MetadataInventoryError("invalid metadata string-heap bounds")
+    heap = metadata[string_offset:string_offset + string_size]
+
+    methods_offset, methods_size, method_count = _checked_section(
+        metadata, METHODS_PAIR_OFFSET, METHOD_DEFINITION_STRIDE, "method"
+    )
+    fields_offset, fields_size, field_count = _checked_section(
+        metadata, FIELDS_PAIR_OFFSET, FIELD_DEFINITION_STRIDE, "field"
+    )
+    types_offset, types_size, type_count = _checked_section(
+        metadata, TYPE_DEFINITIONS_PAIR_OFFSET, TYPE_DEFINITION_STRIDE, "type definition"
+    )
+
+    summaries = []
+    for type_index in range(type_count):
+        type_pos = types_offset + type_index * TYPE_DEFINITION_STRIDE
+        name_index, namespace_index = struct.unpack_from("<II", metadata, type_pos)
+        name = _read_heap_string(heap, name_index)
+        namespace = _read_heap_string(heap, namespace_index)
+        if (namespace, name) not in TARGET_TYPES:
+            continue
+
+        field_start, method_start = struct.unpack_from("<ii", metadata, type_pos + 0x20)
+        method_n, _property_n, field_n = struct.unpack_from(
+            "<HHH", metadata, type_pos + 0x40
+        )
+        if field_n and (field_start < 0 or field_start + field_n > field_count):
+            raise MetadataInventoryError("target type field range out of bounds")
+        if method_n and (method_start < 0 or method_start + method_n > method_count):
+            raise MetadataInventoryError("target type method range out of bounds")
+
+        field_names = []
+        for field_index in range(field_start, field_start + field_n):
+            field_pos = fields_offset + field_index * FIELD_DEFINITION_STRIDE
+            field_name_index = struct.unpack_from("<I", metadata, field_pos)[0]
+            field_names.append(_read_heap_string(heap, field_name_index))
+
+        method_names = []
+        for method_index in range(method_start, method_start + method_n):
+            method_pos = methods_offset + method_index * METHOD_DEFINITION_STRIDE
+            method_name_index = struct.unpack_from("<I", metadata, method_pos)[0]
+            declaring_type = struct.unpack_from("<i", metadata, method_pos + 4)[0]
+            if declaring_type != type_index:
+                raise MetadataInventoryError("target method declaring-type mismatch")
+            method_names.append(_read_heap_string(heap, method_name_index))
+
+        field_names_complete = True
+        if namespace == "com.geargames.aow.messages" and name == "MessageTypes":
+            field_names = [
+                field_name for field_name in field_names
+                if field_name in MESSAGE_TYPE_FIELD_ALLOWLIST
+            ]
+            field_names_complete = False
+
+        summaries.append({
+            "namespace": namespace,
+            "name": name,
+            "field_count": field_n,
+            "field_names": field_names,
+            "field_names_complete": field_names_complete,
+            "method_count": method_n,
+            "method_names": method_names,
+            "method_owner_matches": True,
+        })
+
+    summaries.sort(key=lambda item: (item["namespace"], item["name"]))
+    return {
+        "apk_size_bytes": apk_size,
+        "apk_sha256": apk_sha256,
+        "metadata_version": version,
+        "metadata_table_counts": {
+            "type_definitions": type_count,
+            "methods": method_count,
+            "fields": field_count,
+        },
+        "observed_type_definitions": summaries,
+        "interpretation": (
+            "Static metadata type/field/method name associations only. Field types, "
+            "method bodies, serialization order, numeric message IDs, wire framing, "
+            "transport activation, and APK compatibility are not established."
+        ),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Read-only, offline IL2CPP v31 type/field/method inventory."
+    )
+    parser.add_argument("apk", help="Path to an authorized local APK")
+    parser.add_argument("--output", help="Optional local JSON report path")
+    args = parser.parse_args()
+    report = json.dumps(inspect_type_tables(args.apk), indent=2, ensure_ascii=True)
+    if args.output:
+        Path(args.output).write_text(report + "\n", encoding="utf-8")
+    else:
+        print(report)
+
+
+if __name__ == "__main__":
+    main()
