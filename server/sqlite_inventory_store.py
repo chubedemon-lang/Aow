@@ -62,7 +62,8 @@ class SqliteInventoryStore:
     """SQLite inventory snapshots with optimistic revisions and idempotency.
 
     Mutations and their receipts commit in one BEGIN IMMEDIATE transaction.
-    The supplied connection must be idle before construction and mutation.
+    The supplied connection must be idle before construction. Mutations join an
+    existing caller-owned transaction and never commit or roll it back.
     """
 
     def __init__(self, connection: sqlite3.Connection):
@@ -193,9 +194,9 @@ class SqliteInventoryStore:
             raise InventoryStoreError("invalid inventory capacity")
         if type(max_stack) is not int or not 1 <= max_stack <= _MAX_STACK:
             raise InventoryStoreError("invalid inventory stack limit")
-        if self.db.in_transaction:
-            raise ValueError("connection must not have an active transaction")
-        self.db.execute("BEGIN IMMEDIATE")
+        owns_transaction = not self.db.in_transaction
+        if owns_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
         try:
             try:
                 self.db.execute(
@@ -205,10 +206,12 @@ class SqliteInventoryStore:
                 )
             except sqlite3.IntegrityError as exc:
                 raise InventoryAlreadyExists("inventory already exists") from exc
-            self.db.commit()
+            if owns_transaction:
+                self.db.commit()
             return InventorySnapshot(character_id, capacity, max_stack, 0, ())
         except BaseException:
-            self.db.rollback()
+            if owns_transaction:
+                self.db.rollback()
             raise
 
     def get(self, character_id: str) -> InventorySnapshot:
@@ -245,10 +248,9 @@ class SqliteInventoryStore:
             [list(change) for change in normalised],
             separators=(",", ":"), ensure_ascii=True,
         )
-        if self.db.in_transaction:
-            raise ValueError("connection must not have an active transaction")
-
-        self.db.execute("BEGIN IMMEDIATE")
+        owns_transaction = not self.db.in_transaction
+        if owns_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
         try:
             previous = self.db.execute(
                 "SELECT character_id, expected_revision, payload_json, result_json "
@@ -262,7 +264,8 @@ class SqliteInventoryStore:
                         "request id reused with different inventory mutation"
                     )
                 snapshot = self._decode_snapshot(previous[3])
-                self.db.commit()
+                if owns_transaction:
+                    self.db.commit()
                 return InventoryMutation(snapshot, True)
 
             header = self.db.execute(
@@ -331,8 +334,10 @@ class SqliteInventoryStore:
                 (request_id, character_id, expected_revision, payload_json,
                  result_json, updated_revision),
             )
-            self.db.commit()
+            if owns_transaction:
+                self.db.commit()
             return InventoryMutation(snapshot, False)
         except BaseException:
-            self.db.rollback()
+            if owns_transaction:
+                self.db.rollback()
             raise

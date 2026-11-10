@@ -4,13 +4,13 @@ This is a local server-domain integration only. It does not implement AOW
 inventory packets, item catalogs, equipment rules, or original-game semantics.
 Item IDs and inventory limits remain synthetic caller-supplied values.
 
-Session tokens must only be issued after a trusted authentication layer has
-verified the account. No HTTP route is registered by this facade. Character
-ownership transfer is not supported; if added, it must be serialized with
-inventory mutations and authorization.
+Every operation holds one BEGIN IMMEDIATE transaction across session
+resolution, character ownership and the underlying inventory operation. This
+serializes session revocation with inventory reads and mutations.
 """
 import sqlite3
 
+from server.sqlite_authorized_transaction import authorized_character_transaction
 from server.sqlite_character_authorizer import (
     SqliteCharacterAuthorizer,
     require_character_schema,
@@ -51,21 +51,27 @@ class SqliteAuthorizedInventoryService:
     def create(self, token: str, character_id: int, *,
                capacity: int = 20,
                max_stack: int = 99) -> InventorySnapshot:
-        """Create an inventory only for a character owned by the active session."""
-        owned_id = self.authorizer.require(token, character_id)
-        return self._inventory.create(
-            owned_id, capacity=capacity, max_stack=max_stack
-        )
+        """Create an inventory atomically with its session authorization."""
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
+            return self._inventory.create(
+                owned_id, capacity=capacity, max_stack=max_stack
+            )
 
     def get(self, token: str, character_id: int) -> InventorySnapshot:
-        """Read an inventory only after resolving session ownership."""
-        owned_id = self.authorizer.require(token, character_id)
-        return self._inventory.get(owned_id)
+        """Read an inventory while holding the authorization transaction."""
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
+            return self._inventory.get(owned_id)
 
     def apply(self, token: str, character_id: int, request_id: str,
               expected_revision: int, changes) -> InventoryMutation:
-        """Apply item deltas once; authorization is repeated before receipt replay."""
-        owned_id = self.authorizer.require(token, character_id)
-        return self._inventory.apply(
-            owned_id, request_id, expected_revision, changes
-        )
+        """Apply item deltas once; authorization and receipt replay are atomic."""
+        with authorized_character_transaction(
+            self.db, self.authorizer, token, character_id
+        ) as owned_id:
+            return self._inventory.apply(
+                owned_id, request_id, expected_revision, changes
+            )
