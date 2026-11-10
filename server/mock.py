@@ -8,6 +8,7 @@ import json
 import sqlite3
 from pathlib import Path
 from server.strict_json_request import read_json_object
+from server.runtime_safety import validate_loopback_bind
 
 
 def initialize(conn):
@@ -266,11 +267,14 @@ def make_handler(domain):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default="aow_mock.sqlite3")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="literal IPv4 loopback address only")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
+    host, port = validate_loopback_bind(args.host, args.port)
     domain = Domain(Path(args.db))
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(domain))
-    print(f"Synthetic AOW domain API on http://127.0.0.1:{args.port} (NOT APK compatible)")
+    server = ThreadingHTTPServer((host, port), make_handler(domain))
+    print(f"Synthetic AOW domain API on http://{host}:{port} (NOT APK compatible)")
     server.serve_forever()
 
 
