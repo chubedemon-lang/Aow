@@ -3,7 +3,9 @@ import json
 import struct
 import unittest
 
-from tools.il2cpp_native_method_evidence import (\n    _decode_aarch64_bl_target, _summarize_aarch64_calls, inspect_bytes,\n)
+from tools.il2cpp_native_method_evidence import (
+    _decode_aarch64_bl_target, _summarize_aarch64_calls, inspect_bytes,
+)
 
 
 def make_metadata(method_names, wrong_owner=False, *, image="ScriptsAssembly.dll",
@@ -253,9 +255,9 @@ class NativeMethodEvidenceTests(unittest.TestCase):
 
     def test_direct_call_summary_rejects_misaligned_windows(self):
         with self.assertRaises(ValueError):
-            _summarize_aarch64_calls(b"\\x00", 0x1000, {})
+            _summarize_aarch64_calls(bytes([0]), 0x1000, {})
         with self.assertRaises(ValueError):
-            _summarize_aarch64_calls(b"\\x00\\x00\\x00\\x00", 0x1002, {})
+            _summarize_aarch64_calls(bytes(4), 0x1002, {})
 
     def test_no_native_addresses_or_instructions_are_emitted(self):
         report = inspect_bytes(
