@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from server.combat import Battle, Fighter
 from server.sessions import SessionError
+from server.sqlite_session_store import SqliteSessionStore
 from server.sqlite_authorized_combat_service import (
     CombatAlreadyExists,
     CombatNotFound,
@@ -290,6 +291,61 @@ class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
         self.assertNotIn("combat_battles", tables)
         self.assertNotIn("combat_mutations", tables)
 
+
+
+    def test_session_revocation_serializes_with_combat_attack(self):
+        self.create_battle()
+        revoke_started = threading.Event()
+        revoke_done = threading.Event()
+        outcome = {}
+        original_snapshot = self.service._snapshot_from_row
+
+        def revoke():
+            connection = sqlite3.connect(
+                self.path, timeout=10, isolation_level=None
+            )
+            try:
+                sessions = SqliteSessionStore(
+                    connection, ttl_seconds=30, clock=lambda: self.now[0]
+                )
+                revoke_started.set()
+                outcome["revoked"] = sessions.revoke(self.owner_token)
+            except BaseException as exc:
+                outcome["revoke_error"] = exc
+            finally:
+                connection.close()
+                revoke_done.set()
+
+        revoke_thread = threading.Thread(target=revoke)
+
+        def pause_inside_authorized_attack(row):
+            revoke_thread.start()
+            if not revoke_started.wait(5):
+                raise TimeoutError("revocation thread did not start")
+            if revoke_done.wait(0.2):
+                raise AssertionError("session revocation bypassed combat transaction")
+            return original_snapshot(row)
+
+        self.service._snapshot_from_row = pause_inside_authorized_attack
+        mutation = self.service.attack(
+            self.owner_token, 101, "battle-1", "atomic-revoke-combat", 0, 101
+        )
+        self.service._snapshot_from_row = original_snapshot
+        revoke_thread.join(5)
+
+        self.assertFalse(revoke_thread.is_alive())
+        self.assertNotIn("revoke_error", outcome)
+        self.assertTrue(outcome["revoked"])
+        self.assertFalse(mutation.replayed)
+        self.assertEqual(mutation.snapshot.revision, 1)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT revision FROM combat_battles WHERE battle_id='battle-1'"
+            ).fetchone()[0],
+            1,
+        )
+        with self.assertRaises(SessionError):
+            self.service.get(self.owner_token, 101, "battle-1")
 
 if __name__ == "__main__":
     unittest.main()
