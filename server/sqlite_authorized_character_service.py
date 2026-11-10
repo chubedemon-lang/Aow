@@ -33,7 +33,7 @@ def _has_unique_single_column(connection, table: str, column: str) -> bool:
     if primary_key_columns == [column]:
         return True
     for index in connection.execute(f'PRAGMA index_list("{table}")'):
-        if int(index[2]) != 1:
+        if int(index[2]) != 1 or (len(index) > 4 and int(index[4]) != 0):
             continue
         index_name = str(index[1]).replace('"', '""')
         quoted = '"' + index_name + '"'
