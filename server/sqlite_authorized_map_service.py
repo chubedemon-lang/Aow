@@ -4,13 +4,15 @@ This is a local server-domain integration only. It is NOT the AOW APK login
 protocol, does not authenticate passwords, and does not establish character
 or map semantics from the original game.
 
-The connection must already contain the repository's synthetic
-`characters(id, account_id)` ownership table. Session tokens must only be
-issued after a trusted authentication layer has verified the account.
+Session tokens must only be issued after a trusted authentication layer has
+verified the account. No HTTP route is registered by this facade.
 """
 import sqlite3
 
-from server.sqlite_character_authorizer import SqliteCharacterAuthorizer
+from server.sqlite_character_authorizer import (
+    SqliteCharacterAuthorizer,
+    require_character_schema,
+)
 from server.sqlite_map_position_store import (
     MapPositionMutation,
     SqliteMapPositionStore,
@@ -20,11 +22,7 @@ from server.synthetic_map_position import MapPosition
 
 
 class SqliteAuthorizedMapService:
-    """Authorize every map operation against a durable synthetic session.
-
-    No HTTP route is registered here. Callers remain responsible for trusted
-    account authentication before issuing a session via `sessions.issue()`.
-    """
+    """Authorize every map operation against a durable synthetic session."""
 
     def __init__(self, connection: sqlite3.Connection, *,
                  ttl_seconds: int = 900, clock=None):
@@ -32,6 +30,7 @@ class SqliteAuthorizedMapService:
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")
+        require_character_schema(connection)
         self.db = connection
         self.sessions = SqliteSessionStore(
             connection, ttl_seconds=ttl_seconds, clock=clock
