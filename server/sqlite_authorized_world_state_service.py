@@ -16,16 +16,10 @@ from server.sqlite_authorized_character_service import (
 )
 from server.sqlite_authorized_transaction import authorized_character_transaction
 from server.sqlite_character_authorizer import SqliteCharacterAuthorizer
-from server.sqlite_map_position_store import (
-    MapPosition,
-    MapPositionNotFound,
-    SqliteMapPositionStore,
-)
-from server.sqlite_player_state_store import (
-    PlayerSnapshot,
-    PlayerNotFound,
-    SqlitePlayerStateStore,
-)
+from server.sqlite_map_position_store import SqliteMapPositionStore
+from server.sqlite_player_state_store import SqlitePlayerStateStore
+from server.synthetic_map_position import MapPosition
+from server.synthetic_player_state import PlayerSnapshot
 from server.sqlite_session_store import SqliteSessionStore
 
 
