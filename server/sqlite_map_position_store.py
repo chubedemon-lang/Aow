@@ -335,8 +335,7 @@ class SqliteMapPositionStore:
                     "map-position snapshot already exists"
                 ) from exc
             if owns_transaction:
-                if owns_transaction:
-                    self.db.commit()
+                self.db.commit()
             return MapPosition()
         except BaseException:
             if owns_transaction:
@@ -383,7 +382,6 @@ class SqliteMapPositionStore:
                     )
                 snapshot = self._decode_snapshot(previous[3])
                 if owns_transaction:
-                if owns_transaction:
                     self.db.commit()
                 return MapPositionMutation(snapshot, True)
 
@@ -426,8 +424,7 @@ class SqliteMapPositionStore:
                  self._encode_snapshot(updated), updated.revision),
             )
             if owns_transaction:
-                if owns_transaction:
-                    self.db.commit()
+                self.db.commit()
             return MapPositionMutation(updated, False)
         except MapPositionError as exc:
             if owns_transaction:
