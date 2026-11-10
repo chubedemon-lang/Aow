@@ -9,7 +9,11 @@ from dataclasses import dataclass
 import sqlite3
 
 from server.sessions import SessionError
+from server.sqlite_map_position_store import SqliteMapPositionStore
+from server.sqlite_player_state_store import SqlitePlayerStateStore
 from server.sqlite_session_store import SqliteSessionStore
+from server.synthetic_map_position import MapPosition
+from server.synthetic_player_state import PlayerSnapshot
 
 
 class CharacterAlreadyExists(ValueError):
@@ -23,6 +27,15 @@ class CharacterSnapshot:
     map_id: str
     x: int
     y: int
+
+
+@dataclass(frozen=True)
+class CharacterBootstrapSnapshot:
+    """Synthetic character plus its initial durable player and map snapshots."""
+
+    character: CharacterSnapshot
+    player_state: PlayerSnapshot
+    map_position: MapPosition
 
 
 def _has_unique_single_column(connection, table: str, column: str) -> bool:
@@ -108,6 +121,8 @@ class SqliteAuthorizedCharacterService:
         self.sessions = SqliteSessionStore(
             connection, ttl_seconds=ttl_seconds, clock=clock
         )
+        self._bootstrap_player_store = None
+        self._bootstrap_map_store = None
 
     @staticmethod
     def _validate_name(name: str) -> str:
@@ -149,56 +164,111 @@ class SqliteAuthorizedCharacterService:
             y=int(row[4]),
         )
 
+    def _create_in_transaction(self, token: str, name: str) -> CharacterSnapshot:
+        """Insert a character and wallet inside the caller's active transaction."""
+        account_id = self.sessions.resolve_in_transaction(token)
+        account = self.db.execute(
+            "SELECT 1 FROM accounts WHERE id = ?", (account_id,)
+        ).fetchone()
+        if account is None:
+            raise SessionError("account unavailable")
+        existing = self.db.execute(
+            "SELECT 1 FROM characters WHERE account_id = ?", (account_id,)
+        ).fetchone()
+        if existing is not None:
+            raise CharacterAlreadyExists(
+                "character already exists for this account"
+            )
+
+        cursor = self.db.execute(
+            """INSERT INTO characters
+               (account_id, name, map_id, x, y)
+               VALUES (?, ?, ?, 0, 0)""",
+            (account_id, name, self.default_map_id),
+        )
+        character_id = int(cursor.lastrowid)
+        self.db.execute(
+            "INSERT INTO wallets(character_id, balance) VALUES (?, 0)",
+            (character_id,),
+        )
+        row = self.db.execute(
+            "SELECT id, name, map_id, x, y FROM characters WHERE id = ?",
+            (character_id,),
+        ).fetchone()
+        return self._character(row)
+
+    def _raise_character_integrity_error(self, token: str,
+                                         error: sqlite3.IntegrityError) -> None:
+        """Preserve the public duplicate-character error after rolling back."""
+        try:
+            account_id = self.sessions.resolve(token)
+        except SessionError:
+            raise
+        if self.db.execute(
+            "SELECT 1 FROM characters WHERE account_id = ?", (account_id,)
+        ).fetchone() is not None:
+            raise CharacterAlreadyExists(
+                "character already exists for this account"
+            ) from error
+        raise error
+
+    def _ensure_bootstrap_stores(self):
+        """Prepare optional synthetic stores before opening the bootstrap transaction."""
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+        if self._bootstrap_player_store is None:
+            self._bootstrap_player_store = SqlitePlayerStateStore(self.db)
+        if self._bootstrap_map_store is None:
+            self._bootstrap_map_store = SqliteMapPositionStore(self.db)
+        return self._bootstrap_player_store, self._bootstrap_map_store
+
     def create(self, token: str, name: str) -> CharacterSnapshot:
         """Create a character and zero-balance wallet atomically for the session."""
         name = self._validate_name(name)
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            account_id = self.sessions.resolve_in_transaction(token)
-            account = self.db.execute(
-                "SELECT 1 FROM accounts WHERE id = ?", (account_id,)
-            ).fetchone()
-            if account is None:
-                raise SessionError("account unavailable")
-            existing = self.db.execute(
-                "SELECT 1 FROM characters WHERE account_id = ?", (account_id,)
-            ).fetchone()
-            if existing is not None:
-                raise CharacterAlreadyExists(
-                    "character already exists for this account"
-                )
-
-            cursor = self.db.execute(
-                """INSERT INTO characters
-                   (account_id, name, map_id, x, y)
-                   VALUES (?, ?, ?, 0, 0)""",
-                (account_id, name, self.default_map_id),
-            )
-            character_id = int(cursor.lastrowid)
-            self.db.execute(
-                "INSERT INTO wallets(character_id, balance) VALUES (?, 0)",
-                (character_id,),
-            )
-            row = self.db.execute(
-                "SELECT id, name, map_id, x, y FROM characters WHERE id = ?",
-                (character_id,),
-            ).fetchone()
-            snapshot = self._character(row)
+            snapshot = self._create_in_transaction(token, name)
             self.db.commit()
             return snapshot
         except sqlite3.IntegrityError as exc:
             self.db.rollback()
-            try:
-                account_id = self.sessions.resolve(token)
-            except SessionError:
-                raise
-            if self.db.execute(
-                "SELECT 1 FROM characters WHERE account_id = ?", (account_id,)
-            ).fetchone() is not None:
-                raise CharacterAlreadyExists(
-                    "character already exists for this account"
-                ) from exc
+            self._raise_character_integrity_error(token, exc)
+        except BaseException:
+            self.db.rollback()
             raise
+
+    def create_with_initial_state(
+        self, token: str, name: str, *, level: int = 1, experience: int = 0
+    ) -> CharacterBootstrapSnapshot:
+        """Atomically create a synthetic character, player snapshot and unplaced map row.
+
+        The character's legacy map_id field remains the configured synthetic
+        placeholder. The authoritative map-position snapshot starts unplaced;
+        a later authorized map.enter() call performs the first map transition.
+        No AOW starter values, map IDs or player-init rules are inferred.
+        """
+        name = self._validate_name(name)
+        player_store, map_store = self._ensure_bootstrap_stores()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            character = self._create_in_transaction(token, name)
+            player_state = player_store.create(
+                str(character.character_id),
+                level=level,
+                experience=experience,
+                currency=0,
+            )
+            map_position = map_store.create(str(character.character_id))
+            result = CharacterBootstrapSnapshot(
+                character=character,
+                player_state=player_state,
+                map_position=map_position,
+            )
+            self.db.commit()
+            return result
+        except sqlite3.IntegrityError as exc:
+            self.db.rollback()
+            self._raise_character_integrity_error(token, exc)
         except BaseException:
             self.db.rollback()
             raise

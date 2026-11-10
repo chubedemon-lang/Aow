@@ -6,6 +6,18 @@ import threading
 import unittest
 
 from server.sessions import SessionError
+from server.sqlite_authorized_map_service import SqliteAuthorizedMapService
+from server.sqlite_map_position_store import (
+    MapPositionAlreadyExists,
+    SqliteMapPositionStore,
+)
+from server.sqlite_player_state_store import (
+    PlayerAlreadyExists,
+    PlayerStoreError,
+    SqlitePlayerStateStore,
+)
+from server.synthetic_map_position import MapPosition, Position
+from server.synthetic_player_state import PlayerSnapshot
 from server.sqlite_authorized_character_service import (
     CharacterAlreadyExists,
     CharacterSnapshot,
@@ -77,6 +89,136 @@ class SqliteAuthorizedCharacterServiceTests(unittest.TestCase):
         self.assertEqual(
             self.db.execute("SELECT count(*) FROM wallets").fetchone()[0],
             1,
+        )
+
+    def test_bootstrap_creates_player_and_unplaced_map_state_for_later_entry(self):
+        bootstrap = self.service.create_with_initial_state(
+            self.owner_token, "Alice", level=2, experience=17
+        )
+        self.assertEqual(
+            bootstrap.character,
+            CharacterSnapshot(1, "Alice", "test_map", 0, 0),
+        )
+        self.assertEqual(
+            bootstrap.player_state,
+            PlayerSnapshot("1", 2, 17, 0, 0),
+        )
+        self.assertEqual(bootstrap.map_position, MapPosition())
+        self.assertEqual(
+            self.db.execute(
+                "SELECT balance FROM wallets WHERE character_id=1"
+            ).fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM player_state_snapshots WHERE character_id='1'"
+            ).fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_snapshots WHERE character_id='1'"
+            ).fetchone()[0],
+            1,
+        )
+
+        map_service = SqliteAuthorizedMapService(
+            self.db, ttl_seconds=30, clock=lambda: self.now[0]
+        )
+        entered = map_service.enter(
+            self.owner_token, 1, "first-entry", 0, 7, 10, -4
+        )
+        self.assertEqual(
+            entered.snapshot, MapPosition(7, Position(10, -4), 1)
+        )
+
+        with self.assertRaises(CharacterAlreadyExists):
+            self.service.create_with_initial_state(self.owner_token, "Second")
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 1
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM player_state_snapshots").fetchone()[0],
+            1,
+        )
+
+    def test_bootstrap_rolls_back_character_wallet_and_map_if_player_insert_fails(self):
+        SqlitePlayerStateStore(self.db)
+        SqliteMapPositionStore(self.db)
+        self.db.execute(
+            """CREATE TRIGGER reject_bootstrap_player
+               BEFORE INSERT ON player_state_snapshots
+               BEGIN SELECT RAISE(ABORT, 'player snapshot unavailable'); END"""
+        )
+        with self.assertRaises(PlayerAlreadyExists):
+            self.service.create_with_initial_state(self.owner_token, "Alice")
+        for table in (
+            "characters", "wallets", "player_state_snapshots",
+            "map_position_snapshots",
+        ):
+            self.assertEqual(
+                self.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0],
+                0,
+                table,
+            )
+
+    def test_bootstrap_rolls_back_all_rows_if_map_insert_fails(self):
+        SqlitePlayerStateStore(self.db)
+        SqliteMapPositionStore(self.db)
+        self.db.execute(
+            """CREATE TRIGGER reject_bootstrap_map
+               BEFORE INSERT ON map_position_snapshots
+               BEGIN SELECT RAISE(ABORT, 'map snapshot unavailable'); END"""
+        )
+        with self.assertRaises(MapPositionAlreadyExists):
+            self.service.create_with_initial_state(self.owner_token, "Alice")
+        for table in (
+            "characters", "wallets", "player_state_snapshots",
+            "map_position_snapshots",
+        ):
+            self.assertEqual(
+                self.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0],
+                0,
+                table,
+            )
+
+    def test_invalid_initial_player_values_roll_back_character_and_wallet(self):
+        with self.assertRaises(PlayerStoreError):
+            self.service.create_with_initial_state(
+                self.owner_token, "Alice", level=0
+            )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 0
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM wallets").fetchone()[0], 0
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM player_state_snapshots").fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM map_position_snapshots").fetchone()[0],
+            0,
+        )
+
+    def test_bootstrap_rejects_an_existing_caller_transaction_without_committing_it(self):
+        self.db.execute("BEGIN IMMEDIATE")
+        self.db.execute(
+            "INSERT INTO accounts(id, username) VALUES (3, 'carol')"
+        )
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            self.service.create_with_initial_state(self.owner_token, "Alice")
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertIsNone(
+            self.db.execute(
+                "SELECT id FROM accounts WHERE id=3"
+            ).fetchone()
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 0
         )
 
     def test_foreign_and_unknown_character_ids_share_one_error(self):
