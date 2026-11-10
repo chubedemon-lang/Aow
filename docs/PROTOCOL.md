@@ -47,3 +47,8 @@ Observed message-related identifier strings include `LoginRequest`, `LoginAnswer
 **Interpretation limit:** these are static metadata strings and table associations, not recovered method bodies or a wire specification. They do not establish message IDs, field layouts, payload encoding, framing, byte order, transport choice, endpoint selection, application handshake order, authentication semantics, or compatibility with the APK. In particular, names such as `NetworkSocket` and `TransportType` do not prove a specific active protocol. No extracted host/IP values are published and no remote host was contacted.
 
 See [the detailed offline type/field/method inventory](IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md) for table counts, login/session field names, and framing-related identifiers. Keep APK bytes and local reports outside this public repository.
+
+
+## Raw IL2CPP signature indexes — 2026-11-10
+
+The offline type inventory now preserves raw field, method-return, and parameter type indexes plus metadata tokens from the version-31 tables. This narrows the next investigation to the native type-registration data in `libil2cpp.so`, but does not resolve those indexes into managed type names. Metadata tokens are not wire message IDs. No field order, payload layout, framing rule, or active transport is inferred from these values.

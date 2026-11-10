@@ -18,11 +18,13 @@ HEADER_MIN_BYTES = 256
 MAX_STRING_HEAP_BYTES = 64 * 1024**2
 STRING_HEAP_PAIR_OFFSET = 24
 METHODS_PAIR_OFFSET = 0x30
+PARAMETERS_PAIR_OFFSET = 0x58
 FIELDS_PAIR_OFFSET = 0x60
 TYPE_DEFINITIONS_PAIR_OFFSET = 0xA0
 TYPE_DEFINITION_STRIDE = 0x58
 METHOD_DEFINITION_STRIDE = 0x24
 FIELD_DEFINITION_STRIDE = 0x0C
+PARAMETER_DEFINITION_STRIDE = 0x0C
 
 MESSAGE_NAMES = (
     "LoginRequest", "LoginAnswer", "RegistrationRequest", "RegistrationAnswer",
@@ -139,6 +141,9 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
     methods_offset, methods_size, method_count = _checked_section(
         metadata, METHODS_PAIR_OFFSET, METHOD_DEFINITION_STRIDE, "method"
     )
+    parameters_offset, parameters_size, parameter_count = _checked_section(
+        metadata, PARAMETERS_PAIR_OFFSET, PARAMETER_DEFINITION_STRIDE, "parameter"
+    )
     fields_offset, fields_size, field_count = _checked_section(
         metadata, FIELDS_PAIR_OFFSET, FIELD_DEFINITION_STRIDE, "field"
     )
@@ -164,37 +169,94 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
         if method_n and (method_start < 0 or method_start + method_n > method_count):
             raise MetadataInventoryError("target type method range out of bounds")
 
-        field_names = []
+        field_records = []
         for field_index in range(field_start, field_start + field_n):
             field_pos = fields_offset + field_index * FIELD_DEFINITION_STRIDE
             field_name_index = struct.unpack_from("<I", metadata, field_pos)[0]
-            field_names.append(_read_heap_string(heap, field_name_index))
+            field_type_index = struct.unpack_from("<i", metadata, field_pos + 4)[0]
+            field_token = struct.unpack_from("<I", metadata, field_pos + 8)[0]
+            field_records.append({
+                "name": _read_heap_string(heap, field_name_index),
+                "type_index": field_type_index,
+                "metadata_token": field_token,
+            })
 
         method_names = []
+        method_records = []
         for method_index in range(method_start, method_start + method_n):
             method_pos = methods_offset + method_index * METHOD_DEFINITION_STRIDE
             method_name_index = struct.unpack_from("<I", metadata, method_pos)[0]
             declaring_type = struct.unpack_from("<i", metadata, method_pos + 4)[0]
             if declaring_type != type_index:
                 raise MetadataInventoryError("target method declaring-type mismatch")
-            method_names.append(_read_heap_string(heap, method_name_index))
+            return_type_index = struct.unpack_from("<i", metadata, method_pos + 8)[0]
+            return_parameter_token = struct.unpack_from("<I", metadata, method_pos + 12)[0]
+            parameter_start = struct.unpack_from("<i", metadata, method_pos + 16)[0]
+            generic_container_index = struct.unpack_from("<i", metadata, method_pos + 20)[0]
+            method_token = struct.unpack_from("<I", metadata, method_pos + 24)[0]
+            flags, iflags, slot, method_parameter_count = struct.unpack_from(
+                "<HHHH", metadata, method_pos + 28
+            )
+            parameters = []
+            if method_parameter_count:
+                if (
+                    parameter_start < 0
+                    or parameter_start + method_parameter_count > parameter_count
+                ):
+                    raise MetadataInventoryError("target method parameter range out of bounds")
+                for parameter_index in range(
+                    parameter_start, parameter_start + method_parameter_count
+                ):
+                    parameter_pos = (
+                        parameters_offset + parameter_index * PARAMETER_DEFINITION_STRIDE
+                    )
+                    parameter_name_index = struct.unpack_from(
+                        "<I", metadata, parameter_pos
+                    )[0]
+                    parameter_token = struct.unpack_from(
+                        "<I", metadata, parameter_pos + 4
+                    )[0]
+                    parameter_type_index = struct.unpack_from(
+                        "<i", metadata, parameter_pos + 8
+                    )[0]
+                    parameters.append({
+                        "name": _read_heap_string(heap, parameter_name_index),
+                        "type_index": parameter_type_index,
+                        "metadata_token": parameter_token,
+                    })
+            method_name = _read_heap_string(heap, method_name_index)
+            method_names.append(method_name)
+            method_records.append({
+                "name": method_name,
+                "return_type_index": return_type_index,
+                "return_parameter_token": return_parameter_token,
+                "generic_container_index": generic_container_index,
+                "metadata_token": method_token,
+                "flags": flags,
+                "iflags": iflags,
+                "slot": slot,
+                "parameters": parameters,
+            })
 
         field_names_complete = True
         if namespace == "com.geargames.aow.messages" and name == "MessageTypes":
-            field_names = [
-                field_name for field_name in field_names
-                if field_name in MESSAGE_TYPE_FIELD_ALLOWLIST
+            field_records = [
+                field for field in field_records
+                if field["name"] in MESSAGE_TYPE_FIELD_ALLOWLIST
             ]
             field_names_complete = False
+        field_names = [field["name"] for field in field_records]
 
         summaries.append({
             "namespace": namespace,
             "name": name,
             "field_count": field_n,
             "field_names": field_names,
+            "field_records": field_records,
             "field_names_complete": field_names_complete,
             "method_count": method_n,
             "method_names": method_names,
+            "method_records": method_records,
             "method_owner_matches": True,
         })
 
@@ -210,9 +272,10 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
         },
         "observed_type_definitions": summaries,
         "interpretation": (
-            "Static metadata type/field/method name associations only. Field types, "
-            "method bodies, serialization order, numeric message IDs, wire framing, "
-            "transport activation, and APK compatibility are not established."
+            "Static metadata type/field/method associations and raw type indexes only. "
+            "Native type-index resolution, method bodies, serialization order, numeric "
+            "message IDs, wire framing, transport activation, and APK compatibility "
+            "are not established."
         ),
     }
 
