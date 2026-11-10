@@ -9,6 +9,7 @@
 - Process-local session lifecycle and a separate durable SQLite bearer-session store. The durable store hashes opaque tokens, enforces expiry/revocation and survives process restarts, but it does not authenticate passwords or APK login.
 - Shared SqliteCharacterAuthorizer resolves a durable session and checks characters.account_id ownership for a synthetic character ID.
 - SqliteAuthorizedShopService checks the durable session and characters.account_id before every synthetic shop purchase, including idempotent receipt replay; its low-level store is kept private by the facade. This remains a local domain service, not an authenticated HTTP route or AOW shop contract.
+- SqliteAuthorizedInventoryService checks the durable session and characters.account_id before inventory create/read/apply operations, including idempotent mutation replay; its low-level store is kept private by the facade. This remains a local domain service, not an authenticated HTTP route or AOW item contract.
 - SqliteAuthorizedMapService checks session ownership before map-position create/read/enter/move/leave operations.
 - SqliteAuthorizedPlayerStateService checks session ownership before player snapshot create/read/apply operations. Both are local Python domain services, not authenticated HTTP routes; ownership transfer is not supported.
 - Separate durable SQLite player snapshots with optimistic revisions and idempotent mutation receipts. The store remains a domain persistence primitive and does not establish AOW player initialization or progression rules.
