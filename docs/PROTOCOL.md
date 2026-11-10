@@ -1,14 +1,15 @@
 # AOW protocol evidence ledger
 
-**Current status: unknown.** Unity IL2CPP and Addressables are present. Offline metadata now identifies a client message serializer/deserializer layer and socket sender/receiver abstractions, but no verified wire transport, packet framing, server host, authentication flow, or wire captures are available here.
+**Current status: unknown.** Unity IL2CPP and Addressables are present. Offline metadata and native inspection identify a client message serializer/deserializer layer, primitive payload operations, and socket sender/receiver abstractions. No verified outer frame, active wire transport, server host, authentication flow, or client packet capture is available here.
 
 | Component | Verified evidence | Status |
 |---|---|---|
 | Endpoint discovery | Address configuration type names only; no values published | Unknown |
 | Transport | Socket/TCP-related metadata identifiers | Active transport unverified |
 | Framing | `HeaderLength`, header/stream buffers, zipped/encrypted/decrypted buffer identifiers | Layout and rules unknown |
+| Primitive serialization | Native helper bodies indicate big-endian 16/32/64-bit values, UTF-16 code-unit strings and one-byte boolean/byte operations; isolated codec and synthetic vectors exist | Primitive payload layer only |
+| Message schema | Message type registry and paired serializer/deserializer type definitions | Field order, optionality and wire IDs unknown |
 | Handshake | Login/registration/session type names | Application handshake sequence unknown |
-| Serialization | Message type registry and paired serializer/deserializer type definitions | Wire encoding and field order unknown |
 | Compression/encryption | Zipped/encrypted/decrypted buffer and crypto-provider identifiers | Algorithms and activation rules unknown |
 | Login/session | Login, registration, and session-restore fields/methods identified | Wire semantics unknown |
 | Player initialization | Not established | Unknown |
@@ -48,11 +49,9 @@ Observed message-related identifier strings include `LoginRequest`, `LoginAnswer
 
 See [the detailed offline type/field/method inventory](IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md) for table counts, login/session field names, and framing-related identifiers. Keep APK bytes and local reports outside this public repository.
 
-
 ## Raw IL2CPP signature indexes — 2026-11-10
 
 The offline type inventory now preserves raw field, method-return, and parameter type indexes plus metadata tokens from the version-31 tables. This narrows the next investigation to the native type-registration data in `libil2cpp.so`, but does not resolve those indexes into managed type names. Metadata tokens are not wire message IDs. No field order, payload layout, framing rule, or active transport is inferred from these values.
-
 
 ## MessageTypes default metadata — 2026-11-10
 
@@ -78,7 +77,6 @@ The version-31 method table provides additional name/parameter associations for 
 
 These are metadata method names and parameter-name associations only. They do not expose method bodies, prove invocation order, identify active transport, or define the bytes written to the socket. The next step is to map these metadata methods to native method pointers and inspect the code paths without publishing proprietary binaries or private captures.
 
-
 ## Native method-pointer mapping — 2026-11-10
 
 The offline codegen inventory tool now matches metadata image names to native codegen module records in the authorized arm64 IL2CPP library:
@@ -95,8 +93,20 @@ This supersedes the earlier “next step” statement that native method-pointer
 ### Protocol conclusions remain unchanged
 
 - MessageTypes fields/defaults are stored as IL2CPP I4 values, but their active use as wire message IDs is not yet proven.
-- The NetworkSettings header/buffer metadata and Receiver stream-buffer methods are identified, but the effective header length, header fields, byte order, framing, compression/encryption order and message field serialization order remain unknown.
+- The NetworkSettings header/buffer metadata and Receiver stream-buffer methods are identified, but the effective header length, header fields, framing, compression/encryption order and message field serialization order remain unknown.
 - TCP/socket-related identifiers and a stream abstraction are present, but the active transport path and endpoint selection are not yet proven.
 - LoginRequest and SessionRestore serializer/deserializer native entry points are mapped, but no complete request/response byte sequence or handshake order has been reproduced.
 
-The next reverse-engineering target is now the native body and call sequence of the sender/receiver and login serializers, using only local authorized analysis. Do not infer a wire format from class names or method signatures, and do not contact extracted endpoints.
+## Primitive payload encoding — 2026-11-10
+
+Private read-only inspection of the native `SimpleSerializer` and `SimpleDeserializer` method bodies provides static evidence for primitive payload operations:
+
+- `serializeChar` writes the high byte before the low byte; `deserializeChar`/`deserializeShort` combine two bytes high-first.
+- `serializeInt` emits the high 16-bit half before the low half; `deserializeInt` reconstructs the value in the same order.
+- `serializeLong` emits four 16-bit chunks from most-significant to least-significant; `deserializeLong` combines two 32-bit halves high-first.
+- `serializeString` writes a 16-bit UTF-16 code-unit count followed by code units. Null is emitted as `0xFFFF`; lengths `>= 0x8000` are rejected. The deserializer treats any length with bit 15 set as null.
+- `serializeBoolean` writes the low bit as one byte; `deserializeBoolean` is true only when the byte equals `1`. Byte operations use a one-byte path.
+
+The isolated `server/aow_primitive_codec.py` implementation has synthetic known-vector tests and is intentionally not connected to network handlers. These findings describe primitive payload helpers only. They do not establish LoginRequest field order, optionality, outer framing/header, message IDs, compression/encryption, active transport, handshake sequence or APK compatibility.
+
+No APK bytes, native addresses, raw instructions, endpoint values or packet captures are committed.

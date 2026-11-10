@@ -19,18 +19,20 @@
 - SQLite reward/quest ledgers and synthetic map/movement/combat/quest modules with local regression tests.
 - A session-authorized SQLite combat facade persists deterministic synthetic battle snapshots and turn events with optimistic revisions and idempotent receipts; actor selection remains a trusted server-coordinator responsibility, and no HTTP/AOW route is exposed.
 - Offline APK inventory, protocol-candidate and IL2CPP metadata/type/codegen analysis tools. They make no network requests and do not modify the APK.
+- An isolated primitive payload codec mirrors the statically inspected SimpleSerializer/SimpleDeserializer operations: big-endian 16/32/64-bit values, UTF-16 code-unit strings, and one-byte boolean/byte values. Synthetic known-vector tests cover its behavior. It is not connected to network handlers and does not implement a packet frame or message schema.
 - GitHub Actions for synthetic server tests, protocol discovery tests and repository quality checks.
 
 ## Verified APK evidence
 
 - The authorized APK is Unity 6 / IL2CPP, metadata version 31, with Addressables.
 - Static IL2CPP registration analysis maps 165/165 metadata images to native codegen modules and 197,631 metadata method definitions to 197,631 native method-pointer slots.
-- This is static registration evidence only. It does not establish the active transport, packet framing, byte order, message IDs on the wire, serializer field order, endpoint choice, handshake sequence or APK/server compatibility.
+- Private read-only native method-body inspection provides static evidence for primitive serializer byte order and string/boolean behavior, as documented in docs/AOW_PRIMITIVE_SERIALIZATION.md.
+- This remains primitive payload evidence only. It does not establish active transport, outer framing, message IDs on the wire, LoginRequest field order, endpoint choice, handshake sequence or APK/server compatibility.
 
 ## Not implemented or not verified
 
 - Production authentication, password verification, account registration/login routes, authorization and secure session integration.
-- Verified transport, framing, serializer/deserializer contract, handshake, version negotiation or endpoint selection for the unchanged APK.
+- Verified transport, outer framing, complete message serializer/deserializer contract, handshake, version negotiation or endpoint selection for the unchanged APK.
 - APK connectivity or an end-to-end login → player initialization → map join → movement flow.
 - Authoritative AOW item catalog, economy, combat/skills, quest rules, matchmaking or production anti-cheat.
 - A production deployment bundle. The current mock API binds only to localhost and is deliberately not suitable for public exposure.
