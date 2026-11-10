@@ -212,13 +212,19 @@ class SqliteAuthorizedCombatService:
         event = CombatEvent(**value["event"])
         return snapshot, event
 
-    def _require_owner(self, token, character_id):
-        return self.authorizer.require(token, character_id)
+    def _begin_authorized(self, token, character_id):
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            return self.authorizer.require_in_transaction(token, character_id)
+        except BaseException:
+            self.db.rollback()
+            raise
 
     def create(self, token: str, character_id: int, battle_id: str,
                battle: Battle) -> CombatSnapshot:
         """Create a new synthetic battle for an owned participating character."""
-        owned_id = self._require_owner(token, character_id)
         battle_id = self._identifier(battle_id, "battle identifier")
         if not isinstance(battle, Battle):
             raise CombatStoreError("battle snapshot required")
@@ -228,8 +234,8 @@ class SqliteAuthorizedCombatService:
         if participant_ids.count(character_id) != 1:
             raise SessionError("character does not own this battle")
 
+        owned_id = self._begin_authorized(token, character_id)
         try:
-            self.db.execute("BEGIN IMMEDIATE")
             self.db.execute(
                 """INSERT INTO combat_battles
                    (battle_id, owner_character_id,
@@ -258,21 +264,27 @@ class SqliteAuthorizedCombatService:
     def get(self, token: str, character_id: int,
             battle_id: str) -> CombatSnapshot:
         """Read a battle only for the character that created it."""
-        owned_id = self._require_owner(token, character_id)
         battle_id = self._identifier(battle_id, "battle identifier")
-        row = self.db.execute(
-            """SELECT battle_id, owner_character_id,
-                      first_id, first_hp, first_attack, first_defense,
-                      second_id, second_hp, second_attack, second_defense,
-                      next_actor, turn, revision, winner_id
-               FROM combat_battles WHERE battle_id=?""",
-            (battle_id,),
-        ).fetchone()
-        if row is None:
-            raise CombatNotFound("battle not found")
-        if row[1] != owned_id:
-            raise SessionError("character does not own this battle")
-        return self._snapshot_from_row(row)
+        owned_id = self._begin_authorized(token, character_id)
+        try:
+            row = self.db.execute(
+                """SELECT battle_id, owner_character_id,
+                          first_id, first_hp, first_attack, first_defense,
+                          second_id, second_hp, second_attack, second_defense,
+                          next_actor, turn, revision, winner_id
+                   FROM combat_battles WHERE battle_id=?""",
+                (battle_id,),
+            ).fetchone()
+            if row is None:
+                raise CombatNotFound("battle not found")
+            if row[1] != owned_id:
+                raise SessionError("character does not own this battle")
+            snapshot = self._snapshot_from_row(row)
+            self.db.commit()
+            return snapshot
+        except BaseException:
+            self.db.rollback()
+            raise
 
     def attack(self, token: str, character_id: int, battle_id: str,
                request_id: str, expected_revision: int,
@@ -282,7 +294,6 @@ class SqliteAuthorizedCombatService:
         Authorization is checked before receipt replay. The request receipt,
         updated battle snapshot and event are committed atomically.
         """
-        owned_id = self._require_owner(token, character_id)
         battle_id = self._identifier(battle_id, "battle identifier")
         request_id = self._identifier(request_id, "request identifier")
         if (type(expected_revision) is not int
@@ -290,14 +301,12 @@ class SqliteAuthorizedCombatService:
             raise CombatStoreError("invalid expected revision")
         if type(actor_id) is not int or not 1 <= actor_id <= 1_000_000:
             raise CombatStoreError("invalid actor identifier")
+        owned_id = self._begin_authorized(token, character_id)
         payload_json = json.dumps(
             [battle_id, owned_id, expected_revision, actor_id],
             separators=(",", ":"),
         )
 
-        if self.db.in_transaction:
-            raise ValueError("connection must not have an active transaction")
-        self.db.execute("BEGIN IMMEDIATE")
         try:
             row = self.db.execute(
                 """SELECT battle_id, owner_character_id,
