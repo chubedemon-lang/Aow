@@ -27,9 +27,15 @@ class EvidenceManifestTests(unittest.TestCase):
         self.assertIs(ALLOWED_KINDS, ALLOWED_TOPICS)
         self.assertIn("player", ALLOWED_KINDS)
         self.assertIn("map", ALLOWED_KINDS)
+        self.assertIn("serialization", ALLOWED_KINDS)
 
     def test_accepts_synthetic_unverified_metadata(self):
         self.assertEqual(validate_record(sample())["status"], "unverified")
+
+    def test_accepts_unverified_primitive_serialization_metadata(self):
+        item = validate_record(sample(kind="serialization"))
+        self.assertEqual(item["kind"], "serialization")
+        self.assertEqual(item["status"], "unverified")
 
     def test_rejects_raw_capture_field(self):
         with self.assertRaises(EvidenceError):
