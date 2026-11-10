@@ -12,6 +12,7 @@
 - SqliteAuthorizedInventoryService checks the durable session and characters.account_id before inventory create/read/apply operations, including idempotent mutation replay; its low-level store is kept private by the facade. This remains a local domain service, not an authenticated HTTP route or AOW item contract.
 - SqliteAuthorizedMapService checks session ownership before map-position create/read/enter/move/leave operations.
 - SqliteAuthorizedPlayerStateService checks session ownership before player snapshot create/read/apply operations. Both are local Python domain services, not authenticated HTTP routes; ownership transfer is not supported.
+- SqliteAuthorizedQuestAwardService checks durable session ownership before synthetic quest-award ledger grants and balance reads. It does not validate quest completion and its reward ledger is separate from authoritative inventory; callers must not treat it as a complete quest/inventory transaction or an AOW quest contract.
 - Separate durable SQLite player snapshots with optimistic revisions and idempotent mutation receipts. The store remains a domain persistence primitive and does not establish AOW player initialization or progression rules.
 - Separate durable SQLite synthetic map-position snapshots with map-bound enter/move/leave transitions, optimistic revisions and idempotent receipts. The underlying store remains a persistence primitive and does not establish AOW map or movement rules.
 - SQLite reward/quest ledgers and synthetic map/movement/combat/quest modules with local regression tests.
