@@ -75,8 +75,9 @@ class SqliteMapPositionStore:
     """SQLite-backed synthetic map position snapshots.
 
     Every enter/move/leave transition and its receipt commit in one
-    BEGIN IMMEDIATE transaction. The supplied connection must be idle
-    before construction and before every mutation.
+    BEGIN IMMEDIATE transaction. The supplied connection must be idle before
+    construction. Mutations may join a caller-owned transaction without
+    committing or rolling it back.
     """
 
     def __init__(self, connection: sqlite3.Connection):
@@ -318,9 +319,9 @@ class SqliteMapPositionStore:
 
     def create(self, character_id: str) -> MapPosition:
         character_id = self._character_id(character_id)
-        if self.db.in_transaction:
-            raise ValueError("connection must not have an active transaction")
-        self.db.execute("BEGIN IMMEDIATE")
+        owns_transaction = not self.db.in_transaction
+        if owns_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
         try:
             try:
                 self.db.execute(
@@ -333,10 +334,13 @@ class SqliteMapPositionStore:
                 raise MapPositionAlreadyExists(
                     "map-position snapshot already exists"
                 ) from exc
-            self.db.commit()
+            if owns_transaction:
+                if owns_transaction:
+                    self.db.commit()
             return MapPosition()
         except BaseException:
-            self.db.rollback()
+            if owns_transaction:
+                self.db.rollback()
             raise
 
     def get(self, character_id: str) -> MapPosition:
@@ -361,10 +365,9 @@ class SqliteMapPositionStore:
             separators=(",", ":"),
             ensure_ascii=True,
         )
-        if self.db.in_transaction:
-            raise ValueError("connection must not have an active transaction")
-
-        self.db.execute("BEGIN IMMEDIATE")
+        owns_transaction = not self.db.in_transaction
+        if owns_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
         try:
             previous = self.db.execute(
                 """SELECT character_id, expected_revision, payload_json, result_json
@@ -379,7 +382,9 @@ class SqliteMapPositionStore:
                         "request id reused with a different map transition"
                     )
                 snapshot = self._decode_snapshot(previous[3])
-                self.db.commit()
+                if owns_transaction:
+                if owns_transaction:
+                    self.db.commit()
                 return MapPositionMutation(snapshot, True)
 
             row = self.db.execute(
@@ -420,13 +425,17 @@ class SqliteMapPositionStore:
                 (request_id, character_id, expected_revision, payload_json,
                  self._encode_snapshot(updated), updated.revision),
             )
-            self.db.commit()
+            if owns_transaction:
+                if owns_transaction:
+                    self.db.commit()
             return MapPositionMutation(updated, False)
         except MapPositionError as exc:
-            self.db.rollback()
+            if owns_transaction:
+                self.db.rollback()
             raise MapPositionStoreError(str(exc)) from exc
         except BaseException:
-            self.db.rollback()
+            if owns_transaction:
+                self.db.rollback()
             raise
 
     def enter(self, character_id: str, request_id: str, expected_revision: int,
