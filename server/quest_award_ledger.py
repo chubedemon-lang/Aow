@@ -45,8 +45,7 @@ class QuestAwardLedger(SqliteRewardLedger):
                 if receipt != (player_id, quest_id, item_id, quantity):
                     raise RewardConflict("inconsistent receipt")
                 if owns_transaction:
-                    if owns_transaction:
-                self.db.commit()
+                    self.db.commit()
                 return False
             receipt = self.db.execute(
                 "SELECT player_id,quest_id,item_id,quantity FROM reward_receipts WHERE request_id=?",
