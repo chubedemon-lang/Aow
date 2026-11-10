@@ -5,7 +5,10 @@ login, player initialization packets, or original-game progression rules.
 """
 import sqlite3
 
-from server.sqlite_character_authorizer import SqliteCharacterAuthorizer
+from server.sqlite_character_authorizer import (
+    SqliteCharacterAuthorizer,
+    require_character_schema,
+)
 from server.sqlite_player_state_store import (
     PlayerMutation,
     PlayerSnapshot,
@@ -15,11 +18,7 @@ from server.sqlite_session_store import SqliteSessionStore
 
 
 class SqliteAuthorizedPlayerStateService:
-    """Authorize every player snapshot operation against a durable session.
-
-    Session tokens must only be issued after trusted account authentication.
-    This facade adds no HTTP route and does not verify credentials.
-    """
+    """Authorize every player snapshot operation against a durable session."""
 
     def __init__(self, connection: sqlite3.Connection, *,
                  ttl_seconds: int = 900, clock=None):
@@ -27,6 +26,7 @@ class SqliteAuthorizedPlayerStateService:
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")
+        require_character_schema(connection)
         self.db = connection
         self.sessions = SqliteSessionStore(
             connection, ttl_seconds=ttl_seconds, clock=clock
