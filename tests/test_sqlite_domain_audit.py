@@ -1,6 +1,5 @@
 """Regression tests for the read-only synthetic SQLite domain audit."""
 import json
-import os
 import sqlite3
 import tempfile
 import unittest
@@ -74,7 +73,9 @@ class SqliteDomainAuditTests(unittest.TestCase):
         )
         connection.commit()
         connection.close()
-        with self.assertRaisesRegex(DomainAuditError, "map_position schema is incomplete"):
+        with self.assertRaisesRegex(
+            DomainAuditError, "map_position schema is incomplete"
+        ):
             inspect_domain_database(partial)
 
     def test_corrupt_map_receipt_fails_closed(self):
@@ -82,11 +83,16 @@ class SqliteDomainAuditTests(unittest.TestCase):
         connection.execute(
             "UPDATE map_position_mutations SET payload_json=? "
             "WHERE request_id='enter-1'",
-            ('{"operation":"enter","operation":"leave","map_id":7,"x":10,"y":-4}',),
+            (
+                '{"operation":"enter","operation":"leave",'
+                '"map_id":7,"x":10,"y":-4}',
+            ),
         )
         connection.commit()
         connection.close()
-        with self.assertRaisesRegex(DomainAuditError, "map_position integrity audit failed"):
+        with self.assertRaisesRegex(
+            DomainAuditError, "map_position integrity audit failed"
+        ):
             inspect_domain_database(self.path)
 
     def test_rejects_corrupt_database_file(self):
