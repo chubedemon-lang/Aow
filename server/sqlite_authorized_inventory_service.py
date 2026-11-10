@@ -6,10 +6,9 @@ Item IDs and inventory limits remain synthetic caller-supplied values.
 
 Every operation holds one BEGIN IMMEDIATE transaction across session
 resolution, character ownership and the underlying inventory operation. This
-serializes session revocation with inventory reads and mutations.
-
-Session tokens must only be issued after trusted account authentication.
-No HTTP route is registered here. Character ownership transfer is not supported.
+serializes session revocation with inventory reads and mutations. Session tokens
+must only be issued after trusted account authentication. No HTTP route is
+registered here; character ownership transfer is not supported.
 """
 import sqlite3
 
