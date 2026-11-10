@@ -142,3 +142,10 @@ The read-only v31 inventory now records, for allowlisted message and network typ
 These values are copied from the v31 metadata records after table-bound and owner/range checks. **They are not resolved managed types.** The type indexes refer to the native IL2CPP type-registration layer and cannot be converted into names from the metadata tables alone. The metadata tokens are managed metadata identifiers, not AOW wire message IDs. The raw indexes do not reveal serializer field order or prove the runtime path is active.
 
 The public tool emits only the targeted message/network type records and the existing allowlisted `MessageTypes` field names. Original APK bytes, native library bytes, extracted assets, and full local analysis output remain private.
+
+
+## Field-default metadata linkage
+
+The v31 inventory also exposes the raw field-default table association for each allowlisted field: the default-value type index and byte offset into the metadata default-data blob. These are metadata references only; the public inventory does not decode or publish constant values. The default-data byte offset is validated against the bounded data section, and duplicate/out-of-range field-default records are rejected.
+
+A separate authorized local analysis resolved the inspected arm64 IL2CPP native type-registration table and found the `MessageTypes` field and default-value type references both use IL2CPP type code `I4`. This establishes their metadata storage type as 32-bit integer, not their on-wire encoding or runtime use. Numeric constants are intentionally kept out of this public repository; they remain candidates until the active message-dispatch/serialization path is independently confirmed.
