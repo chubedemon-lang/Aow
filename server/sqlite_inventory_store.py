@@ -187,7 +187,6 @@ class SqliteInventoryStore:
             ensure_ascii=True,
         )
 
-
     def verify_integrity(self) -> dict:
         """Audit inventory snapshots and replay every durable mutation receipt.
 
