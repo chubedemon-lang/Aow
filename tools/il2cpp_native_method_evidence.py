@@ -294,6 +294,178 @@ def _decode_aarch64_b_target(word, pc):
     return pc + (immediate << 2)
 
 
+
+def _decode_aarch64_adrp(word, pc):
+    """Decode ADRP into (destination register, page address); otherwise None."""
+    if (type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+            or type(pc) is not int or pc < 0 or pc % 4):
+        return None
+    if (word & 0x9F000000) != 0x90000000:
+        return None
+    immediate = (((word >> 5) & 0x7FFFF) << 2) | ((word >> 29) & 0x3)
+    if immediate & (1 << 20):
+        immediate -= 1 << 21
+    destination = word & 0x1F
+    if destination == 31:
+        return None
+    return destination, (pc & ~0xFFF) + (immediate << 12)
+
+
+def _decode_aarch64_add_imm64(word):
+    """Decode 64-bit ADD-immediate without flags as (rd, rn, immediate)."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    if (word & 0xFF800000) != 0x91000000:
+        return None
+    destination = word & 0x1F
+    source = (word >> 5) & 0x1F
+    immediate = (word >> 10) & 0xFFF
+    if word & (1 << 22):
+        immediate <<= 12
+    if destination == 31 or source == 31:
+        return None
+    return destination, source, immediate
+
+
+def _decode_aarch64_ldr_x_unsigned(word):
+    """Decode 64-bit unsigned-offset LDR as (rt, rn, byte_offset)."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    if (word & 0xFFC00000) != 0xF9400000:
+        return None
+    target = word & 0x1F
+    base = (word >> 5) & 0x1F
+    offset = ((word >> 10) & 0xFFF) * 8
+    if target == 31 or base == 31:
+        return None
+    return target, base, offset
+
+
+def _decode_aarch64_blr_register(word):
+    """Return the BLR source register, or None for another instruction."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    if (word & 0xFFFFFC1F) != 0xD63F0000:
+        return None
+    return (word >> 5) & 0x1F
+
+
+def _decode_aarch64_br_register(word):
+    """Return the BR source register, or None for another instruction."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    if (word & 0xFFFFFC1F) != 0xD61F0000:
+        return None
+    return (word >> 5) & 0x1F
+
+
+def _relocated_indirect_call_events(code, start_va, relocations):
+    """Resolve only contiguous ADRP/ADD/LDR/BLR-or-BR relocation-backed chains.
+
+    Any unrecognized instruction clears the small abstract register state.
+    This deliberately misses ordinary virtual calls and runtime-computed
+    pointers rather than guessing their targets.
+    """
+    if not isinstance(code, bytes) or len(code) % 4:
+        raise ValueError("AArch64 code window must be a multiple of four bytes")
+    if type(start_va) is not int or start_va < 0 or start_va % 4:
+        raise ValueError("AArch64 code window start must be an aligned address")
+    if not isinstance(relocations, dict):
+        raise ValueError("relocations must be a mapping")
+
+    registers = {}
+    events = []
+    for offset in range(0, len(code), 4):
+        word = struct.unpack_from("<I", code, offset)[0]
+        pc = start_va + offset
+
+        adrp = _decode_aarch64_adrp(word, pc)
+        if adrp is not None:
+            destination, page = adrp
+            registers[destination] = page
+            continue
+
+        add = _decode_aarch64_add_imm64(word)
+        if add is not None:
+            destination, source, immediate = add
+            if source in registers:
+                registers[destination] = registers[source] + immediate
+            else:
+                registers.pop(destination, None)
+            continue
+
+        load = _decode_aarch64_ldr_x_unsigned(word)
+        if load is not None:
+            target_register, base_register, offset_bytes = load
+            base = registers.get(base_register)
+            relocation = relocations.get(base + offset_bytes) if base is not None else None
+            if (isinstance(relocation, tuple) and len(relocation) == 2
+                    and relocation[0] == R_AARCH64_RELATIVE
+                    and type(relocation[1]) is int and relocation[1] >= 0):
+                registers[target_register] = relocation[1]
+            else:
+                registers.pop(target_register, None)
+            continue
+
+        call_register = _decode_aarch64_blr_register(word)
+        if call_register is not None:
+            events.append(("call", registers.get(call_register)))
+            registers.clear()
+            continue
+
+        tail_register = _decode_aarch64_br_register(word)
+        if tail_register is not None:
+            events.append(("tail", registers.get(tail_register)))
+            registers.clear()
+            continue
+
+        if word != 0xD503201F:
+            registers.clear()
+    return events
+
+
+def _relocated_indirect_call_targets(code, start_va, relocations):
+    """Return internal candidate targets; callers must not publish raw addresses."""
+    return {
+        target
+        for _kind, target in _relocated_indirect_call_events(
+            code, start_va, relocations
+        )
+        if target is not None
+    }
+
+
+def _summarize_relocated_indirect_calls(code, start_va, relocations, method_targets):
+    """Resolve statically loaded indirect calls to unique metadata method labels."""
+    calls = Counter()
+    tails = Counter()
+    unresolved_calls = 0
+    unresolved_tails = 0
+    ambiguous_calls = 0
+    ambiguous_tails = 0
+    for kind, target in _relocated_indirect_call_events(code, start_va, relocations):
+        labels = method_targets.get(target, ()) if target is not None else ()
+        if len(labels) == 1:
+            (calls if kind == "call" else tails)[labels[0]] += 1
+        elif len(labels) > 1:
+            if kind == "call":
+                ambiguous_calls += 1
+            else:
+                ambiguous_tails += 1
+        elif kind == "call":
+            unresolved_calls += 1
+        else:
+            unresolved_tails += 1
+    return {
+        "resolved_indirect_method_call_counts": dict(sorted(calls.items())),
+        "resolved_indirect_tail_method_call_counts": dict(sorted(tails.items())),
+        "unresolved_indirect_call_count": unresolved_calls,
+        "unresolved_indirect_tail_call_count": unresolved_tails,
+        "ambiguous_indirect_call_count": ambiguous_calls,
+        "ambiguous_indirect_tail_call_count": ambiguous_tails,
+    }
+
+
 def _summarize_aarch64_calls(code, start_va, helper_targets):
     """Summarize direct calls to allowlisted serializer helpers without addresses."""
     if not isinstance(code, bytes) or len(code) % 4:
@@ -505,6 +677,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
     )
     serializer_windows = []
     direct_targets = set()
+    indirect_targets = set()
     for method in methods:
         if method["category"] != "login_session_serializer":
             continue
@@ -522,14 +695,21 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             (method, section_name, target, window_bytes, truncated, code)
         )
         direct_targets.update(_direct_branch_targets(code, target))
+        indirect_targets.update(
+            _relocated_indirect_call_targets(code, target, relocations)
+        )
 
     method_targets = _all_method_targets(
-        metadata, info, tables, relocations, executable, direct_targets
+        metadata, info, tables, relocations, executable,
+        direct_targets | indirect_targets,
     )
     callsite_summary = []
     for method, section_name, target, window_bytes, truncated, code in serializer_windows:
         summary = _summarize_aarch64_calls(code, target, helper_targets)
         named_summary = _summarize_named_method_calls(code, target, method_targets)
+        indirect_summary = _summarize_relocated_indirect_calls(
+            code, target, relocations, method_targets
+        )
         callsite_summary.append({
             "type": method["type"],
             "method": method["method"],
@@ -539,6 +719,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "entry_window_truncated": truncated,
             **summary,
             **named_summary,
+            **indirect_summary,
         })
     callsite_summary.sort(key=lambda x: (x["type"], x["method"]))
 

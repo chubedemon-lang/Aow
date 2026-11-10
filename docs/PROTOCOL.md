@@ -115,3 +115,12 @@ No APK bytes, native addresses, raw instructions, endpoint values or packet capt
 ## Synthetic credential authentication boundary — 2026-11-10
 
 The repository now contains a local-only PBKDF2-HMAC-SHA256 credential verifier that can issue a durable synthetic session after rechecking the credential in the same SQLite write transaction. This is a server-domain security primitive, **not** evidence of the APK's password encoding, hash/challenge algorithm, login message fields, handshake, or token format. It is not exposed as an HTTP route and must not be connected to an APK adapter until those client-facing semantics are established from authorized offline evidence and a redacted reproducible fixture.
+
+
+## Conservative relocation-backed indirect-call analysis — 2026-11-11
+
+The offline native-method analyzer now has an additional **tool capability** for a narrow AArch64 pattern: a contiguous ADRP, optional 64-bit ADD immediate, 64-bit unsigned-offset LDR, then BLR or BR. The loaded pointer is accepted only when the corresponding ELF relocation is R_AARCH64_RELATIVE, and the target must also match a unique metadata-backed executable method entry before a method label is reported.
+
+The scanner clears its tracked register state on any unrecognized instruction (except NOP). Missing/non-relative relocations, ambiguous metadata targets, ordinary virtual calls and runtime-computed pointers remain unresolved. Output contains method labels and aggregate counts only; no native addresses or instruction words are emitted.
+
+This change adds synthetic instruction/relocation tests only. **No new APK analysis was run for this change**, so existing unresolved indirect-call counts (including the previously recorded LoginRequest serializer/deserializer counts) are unchanged until the tool is run successfully against the exact authorized APK fingerprint. This narrow resolver is not a general AArch64 decompiler and does not establish field order, framing, message IDs, handshake, or APK compatibility.
