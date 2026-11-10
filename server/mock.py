@@ -66,6 +66,8 @@ class Domain:
             return {"id": char_id, "name": name, "map_id": "test_map", "x": 0, "y": 0}
 
     def get_character(self, character_id):
+        if type(character_id) is not int or character_id < 1:
+            raise ValueError("invalid character id")
         with self.connect() as db:
             row = db.execute("SELECT id,name,map_id,x,y FROM characters WHERE id=?", (character_id,)).fetchone()
             if row is None:
@@ -73,6 +75,8 @@ class Domain:
             return dict(row)
 
     def move(self, character_id, x, y):
+        if type(character_id) is not int or character_id < 1:
+            raise ValueError("invalid character id")
         if type(x) is not int or type(y) is not int or abs(x) > 10000 or abs(y) > 10000:
             raise ValueError("invalid coordinates")
         with self.connect() as db:
@@ -223,11 +227,15 @@ def make_handler(domain):
             self.wfile.write(data)
 
         def do_GET(self):
-            if self.path == "/health":
+            path = self.path.split("?", 1)[0]
+            if path == "/health":
                 return self.respond(200, {"status": "ok", "protocol": "synthetic-test-only"})
-            if self.path.startswith("/characters/"):
+            parts = path.split("/")
+            if len(parts) == 3 and parts[1] == "characters":
                 try:
-                    character_id = int(self.path.split("/")[-1])
+                    if not parts[2].isascii() or not parts[2].isdigit():
+                        return self.respond(404, {"error": "not found"})
+                    character_id = int(parts[2])
                     return self.respond(200, domain.get_character(character_id))
                 except (ValueError, KeyError):
                     return self.respond(404, {"error": "not found"})
@@ -241,10 +249,14 @@ def make_handler(domain):
                 payload = json.loads(self.rfile.read(length))
                 if not isinstance(payload, dict):
                     raise ValueError("expected object")
-                if self.path == "/characters":
+                path = self.path.split("?", 1)[0]
+                if path == "/characters":
                     return self.respond(201, domain.create_character(payload.get("username"), payload.get("name")))
-                if self.path.startswith("/characters/") and self.path.endswith("/move"):
-                    character_id = int(self.path.split("/")[2])
+                parts = path.split("/")
+                if len(parts) == 4 and parts[1] == "characters" and parts[3] == "move":
+                    if not parts[2].isascii() or not parts[2].isdigit():
+                        return self.respond(404, {"error": "not found"})
+                    character_id = int(parts[2])
                     return self.respond(200, domain.move(character_id, payload.get("x"), payload.get("y")))
                 return self.respond(404, {"error": "not found"})
             except (ValueError, TypeError, json.JSONDecodeError):
