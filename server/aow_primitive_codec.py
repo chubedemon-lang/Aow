@@ -66,7 +66,9 @@ class AowPrimitiveReader:
     def __init__(self, data):
         if not isinstance(data, (bytes, bytearray, memoryview)):
             raise TypeError("reader data must be bytes-like")
-        self._data = memoryview(data).cast("B")
+        # Preserve immutable bytes without copying; snapshot mutable and strided inputs.
+        raw = data if type(data) is bytes else bytes(data)
+        self._data = memoryview(raw)
         self._offset = 0
 
     @property
