@@ -121,6 +121,72 @@ class SqliteDomainAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(DomainAuditError, "symlinks"):
             inspect_domain_database(link)
 
+    def test_read_only_audit_classifies_legacy_player_schema_without_migration(self):
+        legacy = Path(self.temp.name) / "legacy-player.sqlite3"
+        connection = sqlite3.connect(legacy)
+        connection.execute(
+            """CREATE TABLE player_state_snapshots (
+                character_id TEXT PRIMARY KEY,
+                level INTEGER NOT NULL,
+                experience INTEGER NOT NULL,
+                currency INTEGER NOT NULL,
+                revision INTEGER NOT NULL
+            )"""
+        )
+        connection.execute(
+            """CREATE TABLE player_state_mutations (
+                request_id TEXT PRIMARY KEY,
+                character_id TEXT NOT NULL,
+                expected_revision INTEGER NOT NULL,
+                requested_level INTEGER,
+                experience_delta INTEGER NOT NULL,
+                currency_delta INTEGER NOT NULL,
+                result_level INTEGER NOT NULL,
+                result_experience INTEGER NOT NULL,
+                result_currency INTEGER NOT NULL,
+                result_revision INTEGER NOT NULL
+            )"""
+        )
+        connection.execute(
+            "INSERT INTO player_state_snapshots VALUES ('legacy', 3, 17, 45, 1)"
+        )
+        connection.execute(
+            """INSERT INTO player_state_mutations VALUES
+               ('legacy-1', 'legacy', 0, NULL, 5, 5, 3, 17, 45, 1)"""
+        )
+        connection.commit()
+        connection.close()
+
+        before = legacy.read_bytes()
+        result = inspect_domain_database(legacy)
+        self.assertEqual(
+            result["audits"]["player_state"],
+            {
+                "snapshots": 1,
+                "mutations": 1,
+                "anchored_snapshots": 0,
+                "legacy_unanchored_snapshots": 1,
+            },
+        )
+        self.assertEqual(legacy.read_bytes(), before)
+
+        read_only = sqlite3.connect(legacy.as_uri() + "?mode=ro", uri=True)
+        try:
+            columns = {
+                row[1] for row in read_only.execute(
+                    "PRAGMA table_info(player_state_snapshots)"
+                )
+            }
+            tables = {
+                row[0] for row in read_only.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+        finally:
+            read_only.close()
+        self.assertNotIn("baseline_version", columns)
+        self.assertNotIn("player_state_creations", tables)
+
     def test_cli_emits_machine_readable_success(self):
         output = StringIO()
         with redirect_stdout(output):
