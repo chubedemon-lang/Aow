@@ -68,6 +68,44 @@ class OfflineFrameProbeTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 FrameSpec(1, "big", max_chunk_bytes=value)
 
+    def test_default_payload_cap_fits_length_field(self):
+        self.assertEqual(FrameSpec(1, "big").max_payload, 255)
+        self.assertEqual(
+            FrameSpec(1, "big", includes_header=True).max_payload, 254
+        )
+        self.assertEqual(FrameSpec(2, "big").max_payload, 65535)
+        self.assertEqual(
+            FrameSpec(2, "big", includes_header=True).max_payload, 65533
+        )
+        self.assertEqual(FrameSpec(4, "big").max_payload, 1024 * 1024)
+
+    def test_payload_limit_must_fit_length_field(self):
+        valid_specs = (
+            (1, False, 255),
+            (1, True, 254),
+            (2, False, 65535),
+            (2, True, 65533),
+            (4, False, 16 * 1024 * 1024),
+        )
+        for length_bytes, includes_header, max_payload in valid_specs:
+            with self.subTest(length_bytes=length_bytes,
+                              includes_header=includes_header,
+                              max_payload=max_payload):
+                FrameSpec(length_bytes, "big", includes_header, max_payload)
+
+        invalid_specs = (
+            (1, False, 256),
+            (1, True, 255),
+            (2, False, 65536),
+            (2, True, 65534),
+        )
+        for length_bytes, includes_header, max_payload in invalid_specs:
+            with self.subTest(length_bytes=length_bytes,
+                              includes_header=includes_header,
+                              max_payload=max_payload):
+                with self.assertRaisesRegex(ValueError, "unrepresentable"):
+                    FrameSpec(length_bytes, "big", includes_header, max_payload)
+
     def test_reject_unbounded_or_ambiguous_config(self):
         for args in ((3, "big"), (2, "middle")):
             with self.assertRaises(ValueError):
