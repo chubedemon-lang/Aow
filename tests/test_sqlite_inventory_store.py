@@ -319,5 +319,72 @@ class SqliteInventoryStoreTests(unittest.TestCase):
             self.store.verify_integrity()
         self.db.rollback()
 
+
+    def test_replay_rejects_duplicate_json_keys_in_receipt_snapshot(self):
+        self.store.create("hero")
+        self.store.apply("hero", "tampered-duplicate", 0, [("potion", 1)])
+        self.db.execute(
+            "UPDATE inventory_mutations SET result_json=? WHERE request_id=?",
+            ('{"character_id":"hero","character_id":"hero","capacity":20,'
+             '"max_stack":99,"revision":1,"items":[["potion",1]]}',
+             "tampered-duplicate"),
+        )
+        with self.assertRaisesRegex(InventoryStoreError, "duplicate JSON key"):
+            self.store.apply("hero", "tampered-duplicate", 0, [("potion", 1)])
+
+    def test_replay_rejects_receipt_for_another_character(self):
+        self.store.create("hero")
+        self.store.apply("hero", "tampered-owner", 0, [("potion", 1)])
+        self.db.execute(
+            "UPDATE inventory_mutations SET result_json=? WHERE request_id=?",
+            ('{"character_id":"other","capacity":20,"max_stack":99,'
+             '"revision":1,"items":[["potion",1]]}', "tampered-owner"),
+        )
+        with self.assertRaisesRegex(InventoryStoreError, "character mismatch"):
+            self.store.apply("hero", "tampered-owner", 0, [("potion", 1)])
+
+    def test_replay_rejects_boolean_quantities_and_noncanonical_item_order(self):
+        cases = (
+            ('{"character_id":"hero","capacity":20,"max_stack":99,'
+             '"revision":1,"items":[["potion",true]]}', "boolean quantity"),
+            ('{"character_id":"hero","capacity":20,"max_stack":99,'
+             '"revision":1,"items":[["potion",1],["apple",1]]}', "item order"),
+        )
+        for index, (receipt, label) in enumerate(cases):
+            with self.subTest(case=label):
+                request_id = "tampered-shape-" + str(index)
+                self.store.create("hero-" + str(index))
+                character_id = "hero-" + str(index)
+                self.store.apply(character_id, request_id, 0, [("potion", 1)])
+                receipt = receipt.replace('"hero"', '"' + character_id + '"')
+                self.db.execute(
+                    "UPDATE inventory_mutations SET result_json=? WHERE request_id=?",
+                    (receipt, request_id),
+                )
+                with self.assertRaises(InventoryStoreError):
+                    self.store.apply(character_id, request_id, 0, [("potion", 1)])
+
+    def test_replay_rejects_receipt_revision_mismatch(self):
+        self.store.create("hero")
+        self.store.apply("hero", "tampered-revision", 0, [("potion", 1)])
+        self.db.execute(
+            "UPDATE inventory_mutations SET result_revision=2 WHERE request_id=?",
+            ("tampered-revision",),
+        )
+        with self.assertRaisesRegex(InventoryStoreError, "receipt revision"):
+            self.store.apply("hero", "tampered-revision", 0, [("potion", 1)])
+
+    def test_replay_rejects_non_finite_receipt_values(self):
+        self.store.create("hero")
+        self.store.apply("hero", "tampered-float", 0, [("potion", 1)])
+        self.db.execute(
+            "UPDATE inventory_mutations SET result_json=? WHERE request_id=?",
+            ('{"character_id":"hero","capacity":20,"max_stack":99,'
+             '"revision":1,"items":[["potion",NaN]]}', "tampered-float"),
+        )
+        with self.assertRaisesRegex(InventoryStoreError, "non-finite"):
+            self.store.apply("hero", "tampered-float", 0, [("potion", 1)])
+
+
 if __name__ == "__main__":
     unittest.main()
