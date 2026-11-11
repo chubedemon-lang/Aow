@@ -5,7 +5,7 @@ import unittest
 
 from tools.il2cpp_native_method_evidence import (
     R_AARCH64_RELATIVE,
-    _decode_aarch64_adrp, _decode_aarch64_add_imm64,
+    _decode_aarch64_adr, _decode_aarch64_adrp, _decode_aarch64_add_imm64,
     _decode_aarch64_ldr_x_unsigned, _decode_aarch64_mov_x_register,
     _decode_aarch64_bl_target,
     _decode_aarch64_b_target, _summarize_aarch64_calls,
@@ -322,6 +322,19 @@ class NativeMethodEvidenceTests(unittest.TestCase):
 
 
     @staticmethod
+    def _encode_adr(pc, target, register):
+        delta = target - pc
+        if not -(1 << 20) <= delta < (1 << 20):
+            raise ValueError("ADR target outside signed 21-bit range")
+        immediate = delta & 0x1FFFFF
+        return (
+            0x10000000
+            | ((immediate & 0x3) << 29)
+            | (((immediate >> 2) & 0x7FFFF) << 5)
+            | register
+        )
+
+    @staticmethod
     def _encode_adrp(pc, target_page, register):
         delta_pages = ((target_page & ~0xFFF) - (pc & ~0xFFF)) >> 12
         immediate = delta_pages & 0x1FFFFF
@@ -357,6 +370,37 @@ class NativeMethodEvidenceTests(unittest.TestCase):
     @staticmethod
     def _encode_blr(rn):
         return 0xD63F0000 | (rn << 5)
+
+    def test_aarch64_adr_decoder_handles_forward_backward_and_rejects_invalid(self):
+        self.assertEqual(
+            _decode_aarch64_adr(self._encode_adr(0x1000, 0x1804, 8), 0x1000),
+            (8, 0x1804),
+        )
+        self.assertEqual(
+            _decode_aarch64_adr(self._encode_adr(0x2000, 0x1FF0, 9), 0x2000),
+            (9, 0x1FF0),
+        )
+        self.assertIsNone(_decode_aarch64_adr(0x90000008, 0x1000))
+        self.assertIsNone(_decode_aarch64_adr(self._encode_adr(0x1000, 0x1004, 31), 0x1000))
+        self.assertIsNone(_decode_aarch64_adr(0x10000008, 0x1002))
+
+    def test_relocated_indirect_call_resolves_adr_ldr_blr_chain(self):
+        start = 0x5000
+        words = (
+            self._encode_adr(start, 0x3000, 8),
+            self._encode_ldr_x(9, 8),
+            self._encode_blr(9),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_relocated_indirect_calls(
+            code, start, {0x3000: (R_AARCH64_RELATIVE, 0x5010)},
+            {0x5010: ["Receiver::Cycle"]},
+        )
+        self.assertEqual(
+            summary["resolved_indirect_method_call_counts"],
+            {"Receiver::Cycle": 1},
+        )
+        self.assertEqual(summary["unresolved_indirect_call_count"], 0)
 
     def test_relocated_indirect_call_resolves_adrp_add_ldr_blr_chain(self):
         start = 0x5000
