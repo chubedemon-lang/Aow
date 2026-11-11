@@ -1,6 +1,6 @@
 # AOW protocol evidence ledger
 
-**Current status: unknown.** Unity IL2CPP and Addressables are present. Offline metadata and native inspection identify a client message serializer/deserializer layer, primitive payload operations, and socket sender/receiver abstractions. No verified outer frame, active wire transport, server host, authentication flow, or client packet capture is available here.
+**Current status: incomplete.** Unity IL2CPP and Addressables are present. Offline metadata and native inspection identify a client message serializer/deserializer layer, primitive payload operations, and socket sender/receiver abstractions. A static four-byte big-endian length-prefix candidate is now supported by a bounded receive-side data-flow trace, but no complete verified outer frame, active wire transport, server host, authentication flow, or client packet capture is available here.
 
 | Component | Verified evidence | Status |
 |---|---|---|
@@ -136,3 +136,33 @@ it copies a previously tracked value. It treats XZR as zero, ignores writes
 to XZR, and does not accept shifted ORR, W-register aliases, or unknown source
 values as pointer evidence. This is synthetic analyzer coverage only; it does
 not add a new APK observation or change the framing/login confidence level.
+
+
+## Native data-flow re-verification — 2026-11-12
+
+The exact user-provided APK fingerprint already recorded above was rechecked in a private, read-only workspace: the SHA-256 matched, all 7,368 ZIP entries passed CRC validation, and the arm64 IL2CPP library was confirmed as ELF64 little-endian AArch64. No APK, native library, raw instruction bytes, packet capture or endpoint value was added to this repository.
+
+The bounded native `Receiver.Cycle` entry window provides a stronger static chain than the earlier callsite-only observation:
+
+1. The initial `ClientNetworkStreamBuffer.SetDataAvailable` call receives the immediate count **4**.
+2. `AbstractClientBuffer.Write` receives the same count **4**.
+3. `SimpleDeserializer.deserializeInt` reads the four-byte value.
+4. The value is compared with an HTTP marker. In the non-marker branch, the returned integer is reused as the next `SetDataAvailable` and buffer-write count.
+5. The same bounded window contains a later integer read, `ZipDecompress`, message-metadata construction and receiver-queue handoff.
+
+The primitive native helpers independently show high-byte/high-word-first composition for 16-bit and 32-bit integer operations. This supports a **four-byte big-endian length-prefix candidate**, with the decoded integer used as the subsequent read count on that branch.
+
+The bounded `Sender.Cycle` window contains two `serializeInt` callsites, `ZipCompression`, buffer-length setup and two stream-buffer writes. The two integer calls are not assigned semantics because the bounded window includes branches and the complete control-flow/data relationship has not been proven.
+
+The LoginRequest serializer/deserializer windows contain direct primitive-helper call counts of:
+
+| Operation | Serializer | Deserializer |
+|---|---:|---:|
+| Integer | 19 | 14 |
+| String | 16 | 16 |
+| Long | 2 | 2 |
+| Boolean | 1 | 1 |
+
+These are direct callsite counts in bounded native entry windows, not a field schema or execution trace. The five-call integer discrepancy is unresolved; no LoginRequest field order is inferred.
+
+**Remaining proof gates:** the effective runtime value/use of `NetworkSettings.HeaderLength`; the complete send/receive framing relationship; compression/encryption activation and placement; message-ID mapping; handshake order; LoginRequest field order; and an authorized, redacted client-side byte fixture or local runtime trace. The adapter remains disabled. No official endpoint was contacted.
