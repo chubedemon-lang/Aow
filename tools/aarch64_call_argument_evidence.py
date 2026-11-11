@@ -1,4 +1,4 @@
-"""Conservative, redacted AArch64 small-immediate call-argument evidence.
+"""Conservative, redacted AArch64 small-immediate and register-move evidence.
 
 This is a linear bounded-window analysis, not a control-flow graph or ABI
 proof. It reports only small constants in x0-x7 immediately before uniquely
@@ -36,6 +36,20 @@ def _decode_move_wide(word):
     return operation, destination, immediate, shift, width_mask
 
 
+
+def _decode_move_register(word):
+    """Decode the unshifted MOV-register alias (ORR Xd, XZR, Xm)."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    # ORR (shifted register), with N=0, LSL #0 and Rn=31 (ZR).
+    # Bit 31 (sf) is deliberately excluded so W and X forms share the mask.
+    if (word & 0x7FE0FFE0) != 0x2A0003E0:
+        return None
+    destination = word & 0x1F
+    source = (word >> 16) & 0x1F
+    width_mask = (1 << (64 if word & 0x80000000 else 32)) - 1
+    return destination, source, width_mask
+
 def _decode_add_immediate(word):
     if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
         return None
@@ -67,10 +81,12 @@ def summarize_small_argument_constants(
 ):
     """Return small x0-x7 constants at selected uniquely resolved BL sites.
 
-    Unknown instructions clear the abstract register state. Calls clear
-    caller-saved registers. Unconditional branches clear all state because
-    this pass does not follow control flow. Values above 0xffff are omitted
-    so address-like or large constants are never published.
+    The supported data-flow subset is MOVZ/MOVN/MOVK, the unshifted
+    MOV-register alias, and ADD-immediate. Unknown instructions clear the
+    abstract register state. Calls clear caller-saved registers. Unconditional
+    branches clear all state because this pass does not follow control flow.
+    Values above 0xffff are omitted so address-like or large constants are
+    never published.
     """
     if not isinstance(code, bytes) or len(code) % 4:
         raise ValueError("AArch64 code window must be a multiple of four bytes")
@@ -105,6 +121,18 @@ def summarize_small_argument_constants(
                 ) & width_mask
             else:
                 registers.pop(destination, None)
+            continue
+
+        move_register = _decode_move_register(word)
+        if move_register is not None:
+            destination, source, width_mask = move_register
+            if destination != 31:  # XZR/WZR destination discards the result.
+                if source == 31:  # XZR/WZR source is the known constant zero.
+                    registers[destination] = 0
+                elif source in registers:
+                    registers[destination] = registers[source] & width_mask
+                else:
+                    registers.pop(destination, None)
             continue
 
         add = _decode_add_immediate(word)
