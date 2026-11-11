@@ -5,8 +5,8 @@ from server.protocol_evidence_registry import Evidence, EvidenceError
 from server.protocol_evidence_gates import STAGES, evaluate_evidence
 
 
-def evidence(topic, verified=True):
-    return Evidence(topic, "a" * 64, "offline fixture observation",
+def evidence(topic, verified=True, artifact_sha256="a" * 64):
+    return Evidence(topic, artifact_sha256, "offline fixture observation",
                     "authorized local inspection", verified)
 
 
@@ -73,6 +73,49 @@ class EvidenceGateTests(unittest.TestCase):
                  evidence("framing"), evidence("serialization")]
         self.assertEqual(evaluate_evidence(items),
                          evaluate_evidence(list(reversed(items))))
+
+    def test_mixed_artifacts_cannot_be_combined_implicitly(self):
+        records = [
+            evidence("transport", artifact_sha256="a" * 64),
+            evidence("framing", artifact_sha256="a" * 64),
+            evidence("serialization", artifact_sha256="b" * 64),
+            evidence("handshake", artifact_sha256="b" * 64),
+            evidence("login", artifact_sha256="b" * 64),
+        ]
+        with self.assertRaisesRegex(EvidenceError, "multiple artifacts"):
+            evaluate_evidence(records)
+
+    def test_explicit_artifact_selection_keeps_prerequisites_isolated(self):
+        records = [
+            evidence("transport", artifact_sha256="a" * 64),
+            evidence("framing", artifact_sha256="a" * 64),
+            evidence("serialization", artifact_sha256="b" * 64),
+            evidence("handshake", artifact_sha256="b" * 64),
+            evidence("login", artifact_sha256="b" * 64),
+        ]
+        selected_a = {item.stage: item for item in evaluate_evidence(
+            records, artifact_sha256="a" * 64
+        )}
+        self.assertTrue(selected_a["transport"].ready)
+        self.assertTrue(selected_a["framing"].ready)
+        self.assertFalse(selected_a["serialization"].ready)
+        self.assertFalse(selected_a["login"].ready)
+
+        selected_b = {item.stage: item for item in evaluate_evidence(
+            records, artifact_sha256="b" * 64
+        )}
+        self.assertFalse(selected_b["transport"].ready)
+        self.assertFalse(selected_b["framing"].ready)
+        self.assertFalse(selected_b["serialization"].ready)
+        self.assertFalse(selected_b["login"].ready)
+
+    def test_explicit_artifact_selector_is_validated(self):
+        records = [evidence("transport")]
+        for digest in ("BAD", "A" * 64):
+            with self.subTest(digest=digest), self.assertRaises(EvidenceError):
+                evaluate_evidence(records, artifact_sha256=digest)
+        with self.assertRaisesRegex(EvidenceError, "no evidence records"):
+            evaluate_evidence(records, artifact_sha256="b" * 64)
 
 
 if __name__ == "__main__":

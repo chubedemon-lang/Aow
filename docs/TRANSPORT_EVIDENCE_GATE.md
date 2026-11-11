@@ -12,4 +12,6 @@ Synthetic test fixtures in `tests/test_transport.py` exercise fail-closed behavi
 
 The evidence readiness sequence is transport → framing → serialization → handshake → login → session → player initialization → map join → movement → inventory → shop → combat → quest. Each stage requires its own verified evidence record; a later record cannot bypass a missing prerequisite. These gates track evidence coverage only and do not claim APK compatibility.
 
+**Fingerprint isolation:** `evaluate_evidence()` requires all records in one evaluation to refer to a single artifact SHA-256. If multiple fingerprints are present, the caller must pass `artifact_sha256` explicitly; the gate then filters to that artifact before evaluating prerequisites. Evidence from different APK builds must never be combined to make a stage appear ready. This is a bookkeeping safeguard, not a compatibility test.
+
 Primitive serializer findings from the authorized offline APK pass are not by themselves a complete message schema or proof that a specific serializer is used by the active transport. The serialization gate is deliberately separate from framing and handshake.
