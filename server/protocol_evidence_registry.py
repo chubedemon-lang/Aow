@@ -23,8 +23,8 @@ _LOCAL_REFERENCE = re.compile(
     r"^(?:issue:[1-9][0-9]*|(?:docs|tests|server|tools)/[A-Za-z0-9_./#-]{1,150})$"
 )
 _REPRODUCTION = re.compile(r"^[A-Za-z0-9_./:# -]{1,512}$")
-_ABSOLUTE_PATH = re.compile(r"(?<!\\S)/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+")
-_PARENT_PATH = re.compile(r"(?:^|[\\s/])\\.\\.(?:/|$)")
+_ABSOLUTE_PATH = re.compile(r"(?<!\S)/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+")
+_PARENT_PATH = re.compile(r"(?:^|[\s/])\.\.(?:/|$)")
 _URI_SCHEME = re.compile(r"\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _IPV4 = re.compile(
     r"(?<![A-Za-z0-9_.])"
