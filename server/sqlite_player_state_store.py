@@ -66,7 +66,32 @@ class SqlitePlayerStateStore:
                 currency INTEGER NOT NULL
                     CHECK(currency BETWEEN 0 AND 2147483647),
                 revision INTEGER NOT NULL
-                    CHECK(revision BETWEEN 0 AND 9223372036854775807)
+                    CHECK(revision BETWEEN 0 AND 9223372036854775807),
+                baseline_version INTEGER NOT NULL DEFAULT 0
+                    CHECK(baseline_version IN (0, 1))
+            )"""
+        )
+        snapshot_columns = {
+            row[1] for row in self.db.execute(
+                "PRAGMA table_info(player_state_snapshots)"
+            )
+        }
+        if "baseline_version" not in snapshot_columns:
+            # Existing databases remain readable as legacy/unanchored snapshots.
+            self.db.execute(
+                "ALTER TABLE player_state_snapshots ADD COLUMN "
+                "baseline_version INTEGER NOT NULL DEFAULT 0 "
+                "CHECK(baseline_version IN (0, 1))"
+            )
+        self.db.execute(
+            """CREATE TABLE IF NOT EXISTS player_state_creations (
+                character_id TEXT PRIMARY KEY
+                    CHECK(length(character_id) BETWEEN 1 AND 128),
+                level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 1000),
+                experience INTEGER NOT NULL
+                    CHECK(experience BETWEEN 0 AND 9223372036854775807),
+                currency INTEGER NOT NULL
+                    CHECK(currency BETWEEN 0 AND 2147483647)
             )"""
         )
         self.db.execute(
@@ -135,8 +160,13 @@ class SqlitePlayerStateStore:
             try:
                 self.db.execute(
                     "INSERT INTO player_state_snapshots "
-                    "(character_id, level, experience, currency, revision) "
-                    "VALUES (?, ?, ?, ?, 0)",
+                    "(character_id, level, experience, currency, revision, baseline_version) "
+                    "VALUES (?, ?, ?, ?, 0, 1)",
+                    (character_id, level, experience, currency),
+                )
+                self.db.execute(
+                    "INSERT INTO player_state_creations "
+                    "(character_id, level, experience, currency) VALUES (?, ?, ?, ?)",
                     (character_id, level, experience, currency),
                 )
             except sqlite3.IntegrityError as exc:
@@ -162,12 +192,14 @@ class SqlitePlayerStateStore:
         return self._snapshot(row)
 
     def verify_integrity(self) -> dict:
-        """Audit snapshots against their durable mutation receipts without writes.
+        """Audit snapshots against creation baselines and mutation receipts.
 
-        The initial create() values have no separate creation receipt, so this
-        audit can verify revision zero and every subsequent mutation chain, but
-        cannot independently prove the original baseline against external
-        tampering. It never repairs data.
+        New snapshots have an immutable-by-convention creation receipt written
+        atomically with the snapshot. Databases created before that receipt
+        existed are migrated with baseline_version=0 and remain explicitly
+        classified as legacy/unanchored. This is a consistency audit, not a
+        cryptographic integrity boundary; an attacker able to rewrite all
+        related rows can rewrite the marker and receipts too.
         """
         if self.db.in_transaction:
             raise ValueError("connection must not have an active transaction")
@@ -177,12 +209,24 @@ class SqlitePlayerStateStore:
         if self.db.execute("PRAGMA foreign_key_check").fetchall():
             raise PlayerStoreError("player-state foreign key check failed")
 
-        snapshots = {}
+        snapshot_columns = {
+            row[1] for row in self.db.execute(
+                "PRAGMA table_info(player_state_snapshots)"
+            )
+        }
+        has_baseline_version = "baseline_version" in snapshot_columns
+        baseline_column = ", baseline_version" if has_baseline_version else ""
         rows = self.db.execute(
-            """SELECT character_id, level, experience, currency, revision
-               FROM player_state_snapshots ORDER BY character_id"""
+            "SELECT character_id, level, experience, currency, revision"
+            + baseline_column
+            + " FROM player_state_snapshots ORDER BY character_id"
         ).fetchall()
-        for character_id, level, experience, currency, revision in rows:
+
+        snapshots = {}
+        baseline_versions = {}
+        for row in rows:
+            character_id, level, experience, currency, revision = row[:5]
+            baseline_version = row[5] if has_baseline_version else 0
             character_id = self._character_id(character_id)
             if character_id in snapshots:
                 raise PlayerStoreError("duplicate player snapshot")
@@ -192,13 +236,54 @@ class SqlitePlayerStateStore:
                     or type(currency) is not int
                     or not 0 <= currency <= _MAX_CURRENCY
                     or type(revision) is not int
-                    or not 0 <= revision <= _MAX_REVISION):
+                    or not 0 <= revision <= _MAX_REVISION
+                    or type(baseline_version) is not int
+                    or baseline_version not in (0, 1)):
                 raise PlayerStoreError("invalid stored player snapshot")
             snapshots[character_id] = PlayerSnapshot(
                 character_id, level, experience, currency, revision
             )
+            baseline_versions[character_id] = baseline_version
 
-        replayed = {}
+        tables = {
+            row[0] for row in self.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        baselines = {}
+        if "player_state_creations" in tables:
+            creation_rows = self.db.execute(
+                """SELECT character_id, level, experience, currency
+                   FROM player_state_creations ORDER BY character_id"""
+            ).fetchall()
+        else:
+            creation_rows = []
+
+        for character_id, level, experience, currency in creation_rows:
+            character_id = self._character_id(character_id)
+            if character_id in baselines:
+                raise PlayerStoreError("duplicate player creation receipt")
+            if character_id not in snapshots:
+                raise PlayerStoreError("creation receipt has no player snapshot")
+            if baseline_versions[character_id] != 1:
+                raise PlayerStoreError("creation receipt baseline marker mismatch")
+            if (type(level) is not int or not 1 <= level <= _MAX_LEVEL
+                    or type(experience) is not int
+                    or not 0 <= experience <= _MAX_EXPERIENCE
+                    or type(currency) is not int
+                    or not 0 <= currency <= _MAX_CURRENCY):
+                raise PlayerStoreError("invalid player creation receipt")
+            baselines[character_id] = PlayerSnapshot(
+                character_id, level, experience, currency, 0
+            )
+
+        for character_id, baseline_version in baseline_versions.items():
+            if baseline_version == 1 and character_id not in baselines:
+                raise PlayerStoreError("player creation receipt is missing")
+            if baseline_version == 0 and character_id in baselines:
+                raise PlayerStoreError("creation receipt baseline marker mismatch")
+
+        replayed = dict(baselines)
         mutation_rows = self.db.execute(
             """SELECT request_id, character_id, expected_revision,
                       requested_level, experience_delta, currency_delta,
@@ -241,6 +326,8 @@ class SqlitePlayerStateStore:
 
             current = replayed.get(character_id)
             if current is None:
+                # Legacy snapshot: its original level was never stored in a
+                # creation receipt, so only deltas and later history are provable.
                 if expected_revision != 0:
                     raise PlayerStoreError("player mutation history has a gap")
                 baseline_experience = result_experience - experience_delta
@@ -251,9 +338,6 @@ class SqlitePlayerStateStore:
                 if (requested_level is not None
                         and result_level != requested_level):
                     raise PlayerStoreError("first player mutation level mismatch")
-                # The first receipt does not store the original level when a
-                # level override is requested. Its resulting level is still
-                # independently checked against that requested value.
                 current = PlayerSnapshot(
                     character_id, result_level, result_experience,
                     result_currency, result_revision,
@@ -292,7 +376,12 @@ class SqlitePlayerStateStore:
                     "current player snapshot does not match mutation history"
                 )
 
-        return {"snapshots": len(snapshots), "mutations": mutation_count}
+        return {
+            "snapshots": len(snapshots),
+            "mutations": mutation_count,
+            "anchored_snapshots": len(baselines),
+            "legacy_unanchored_snapshots": len(snapshots) - len(baselines),
+        }
 
     def apply(self, character_id: str, request_id: str, expected_revision: int,
               *, level=None, experience_delta: int = 0,
