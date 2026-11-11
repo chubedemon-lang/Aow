@@ -22,23 +22,41 @@ class EvidenceGateTests(unittest.TestCase):
         self.assertFalse(result[0].ready)
 
     def test_prerequisites_required(self):
-        result = evaluate_evidence([evidence("login"), evidence("framing")])
-        self.assertFalse(result[3].ready)
-        self.assertEqual(result[3].missing, ("transport", "handshake"))
+        result = {item.stage: item for item in evaluate_evidence(
+            [evidence("login"), evidence("framing")]
+        )}
+        self.assertFalse(result["login"].ready)
+        self.assertEqual(result["login"].missing,
+                         ("transport", "serialization", "handshake"))
 
     def test_verified_prefix_only(self):
-        result = evaluate_evidence([evidence("transport"), evidence("framing")])
-        self.assertTrue(result[0].ready)
-        self.assertTrue(result[1].ready)
-        self.assertFalse(result[2].ready)
+        result = {item.stage: item for item in evaluate_evidence(
+            [evidence("transport"), evidence("framing")]
+        )}
+        self.assertTrue(result["transport"].ready)
+        self.assertTrue(result["framing"].ready)
+        self.assertFalse(result["serialization"].ready)
+        self.assertFalse(result["handshake"].ready)
+
+    def test_handshake_requires_verified_primitive_serialization(self):
+        topics = ("transport", "framing", "handshake")
+        result = {item.stage: item for item in evaluate_evidence(
+            [evidence(topic) for topic in topics]
+        )}
+        self.assertFalse(result["serialization"].ready)
+        self.assertFalse(result["handshake"].ready)
+        self.assertEqual(result["handshake"].missing, ("serialization",))
 
     def test_all_stages_need_individual_evidence(self):
         result = evaluate_evidence([evidence(topic) for topic in STAGES])
         self.assertTrue(all(item.ready for item in result))
 
     def test_player_and_map_are_required_before_movement(self):
-        prefix = ("transport", "framing", "handshake", "login", "session", "movement")
-        result = {item.stage: item for item in evaluate_evidence([evidence(x) for x in prefix])}
+        prefix = ("transport", "framing", "serialization", "handshake",
+                  "login", "session", "movement")
+        result = {item.stage: item for item in evaluate_evidence(
+            [evidence(topic) for topic in prefix]
+        )}
         self.assertFalse(result["player"].ready)
         self.assertFalse(result["map"].ready)
         self.assertFalse(result["movement"].ready)
@@ -51,8 +69,10 @@ class EvidenceGateTests(unittest.TestCase):
                     evaluate_evidence(invalid)
 
     def test_input_order_does_not_change_results(self):
-        items = [evidence("handshake"), evidence("transport"), evidence("framing")]
-        self.assertEqual(evaluate_evidence(items), evaluate_evidence(list(reversed(items))))
+        items = [evidence("handshake"), evidence("transport"),
+                 evidence("framing"), evidence("serialization")]
+        self.assertEqual(evaluate_evidence(items),
+                         evaluate_evidence(list(reversed(items))))
 
 
 if __name__ == "__main__":
