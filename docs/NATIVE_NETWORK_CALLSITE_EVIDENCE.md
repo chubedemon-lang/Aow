@@ -91,3 +91,24 @@ unresolved.
 No extracted endpoint is contacted. No official server is probed. The real
 APK adapter remains blocked until the actual byte stream can be reproduced
 from an authorized test-client log or redacted packet fixture.
+
+
+## Receiver/Sender stream-length candidate — 2026-11-11
+
+A second read-only pass was run against the same locally held APK fingerprint above. The file was re-materialized privately, its SHA-256 was recomputed and matched, and the ZIP archive integrity check completed without a bad member. The local disassembly tool was LLVM llvm-objdump 17.0.0. No APK bytes, native addresses, raw instructions or private captures were added to this repository.
+
+The bounded Receiver.Cycle entry window contains this static call/data-flow sequence:
+
+1. A ClientNetworkStreamBuffer.SetDataAvailable call is supplied the immediate value 4.
+2. AbstractClientBuffer.Write(sourceBuffer, count) is then called with count = 4.
+3. SimpleDeserializer.deserializeInt(buffer) reads an integer from the resulting buffer.
+4. One branch compares the returned value with an HTTP marker. In the non-marker branch, the returned integer is reused as the next SetDataAvailable value and AbstractClientBuffer.Write count.
+5. The same entry window later contains another deserializeInt call, ClientArrayUtils.ZipDecompress, MessageMeta construction and receiver queue handoff callsites.
+
+The bounded Sender.Cycle entry window contains callsites to ClientArrayUtils.ZipCompression, SimpleSerializer.serializeInt, ClientNetworkStreamBuffer.SetDataAvailable and ClientStreamBuffer.Write. The independently inspected primitive helper body supports a 32-bit big-endian representation for serializeInt.
+
+**Interpretation: framing is now a candidate, not unknown with no lead.** Together, the receive-side fixed four-byte read followed by an integer-driven second read, and the send-side integer serialization plus stream writes, are consistent with a four-byte big-endian length-prefix path. The HTTP-marker branch indicates a special case in the receive path.
+
+This does not yet prove that the field named NetworkSettings.HeaderLength is the source of the four-byte constant, that the serialized integer is definitively the payload length on every path, or that the observed branch is used in every session. The metadata field exists, but its runtime value and direct storage/access relationship remain unresolved. The entry windows are bounded by adjacent executable entries, not formal function boundaries; they may contain cold branches or shared code. No runtime packet, handshake, login or client/server exchange was observed.
+
+Accordingly, the evidence ledger may record a framing candidate for follow-up, but must not promote framing to verified or enable an AOW transport adapter. The next proof still requires an authorized, redacted client-side fixture or local runtime trace that matches the unchanged APK and reproduces the complete byte stream. No extracted endpoint was contacted.
