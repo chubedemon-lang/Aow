@@ -129,6 +129,7 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
         self.assertEqual(result["sqlite_integrity"], "ok")
         self.assertEqual(result["foreign_key_violations"], 0)
         self.assertTrue(result["schema_valid"])
+        self.assertEqual(result["schema_contract"], "synthetic-v1")
         self.assertFalse(result["apk_compatible"])
         self.assertFalse(result["production_ready"])
 
