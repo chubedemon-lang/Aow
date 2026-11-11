@@ -53,6 +53,48 @@ class SqliteSessionStoreTests(unittest.TestCase):
         with self.assertRaises(SessionError):
             self.store.resolve(expired)
 
+    def test_purge_expired_supports_repeatable_bounded_batches(self):
+        oldest = self.store.issue(10, ttl_seconds=1)
+        middle = self.store.issue(11, ttl_seconds=2)
+        newest = self.store.issue(12, ttl_seconds=3)
+        active = self.store.issue(13, ttl_seconds=20)
+        self.now += 3
+
+        self.assertEqual(self.store.purge_expired(batch_size=2), 2)
+        remaining = {
+            row[0] for row in self.db.execute(
+                "SELECT token_hash FROM durable_sessions"
+            ).fetchall()
+        }
+        self.assertEqual(
+            remaining,
+            {
+                hashlib.sha256(newest.encode("ascii")).digest(),
+                hashlib.sha256(active.encode("ascii")).digest(),
+            },
+        )
+        self.assertEqual(self.store.purge_expired(batch_size=2), 1)
+        self.assertEqual(self.store.resolve(active), 13)
+        for token in (oldest, middle, newest):
+            with self.subTest(token_digest=hashlib.sha256(token.encode()).hexdigest()[:8]):
+                with self.assertRaises(SessionError):
+                    self.store.resolve(token)
+
+    def test_purge_expired_rejects_invalid_batch_sizes_without_mutation(self):
+        expired = self.store.issue(14, ttl_seconds=1)
+        self.now += 1
+        for batch_size in (True, 0, -1, 1.5, "1", 10_001):
+            with self.subTest(batch_size=batch_size):
+                with self.assertRaisesRegex(ValueError, "batch size"):
+                    self.store.purge_expired(batch_size=batch_size)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            1,
+        )
+        self.assertFalse(self.db.in_transaction)
+        with self.assertRaises(SessionError):
+            self.store.resolve(expired)
+
     def test_resolve_in_transaction_requires_caller_transaction(self):
         token = self.store.issue(77)
         with self.assertRaisesRegex(ValueError, "transaction"):
