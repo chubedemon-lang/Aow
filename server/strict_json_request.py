@@ -3,10 +3,14 @@
 This is generic HTTP input hardening, not an AOW wire-protocol implementation.
 """
 import json
+import math
 
 
 class JsonRequestError(ValueError):
     """The HTTP body is not one bounded, unambiguous JSON object."""
+
+
+_MAX_JSON_INTEGER_DIGITS = 128
 
 
 def _unique_object(pairs):
@@ -20,6 +24,28 @@ def _unique_object(pairs):
 
 def _reject_constant(value):
     raise JsonRequestError("non-finite JSON number is not allowed")
+
+
+def _parse_integer(value):
+    """Bound integer tokens independently of interpreter conversion settings."""
+    digits = value[1:] if value.startswith("-") else value
+    if len(digits) > _MAX_JSON_INTEGER_DIGITS:
+        raise JsonRequestError("JSON integer exceeds the digit limit")
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise JsonRequestError("invalid JSON integer") from exc
+
+
+def _parse_float(value):
+    """Reject valid JSON number syntax that overflows to infinity in Python."""
+    try:
+        number = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise JsonRequestError("invalid JSON number") from exc
+    if not math.isfinite(number):
+        raise JsonRequestError("non-finite JSON number is not allowed")
+    return number
 
 
 def read_json_object(headers, stream, *, max_bytes=4096):
@@ -56,7 +82,13 @@ def read_json_object(headers, stream, *, max_bytes=4096):
     raw_length = lengths[0].strip()
     if not raw_length or not raw_length.isascii() or not raw_length.isdecimal():
         raise JsonRequestError("invalid Content-Length")
-    length = int(raw_length)
+    try:
+        length = int(raw_length)
+    except ValueError as exc:
+        # Python may reject extremely long decimal strings before we can
+        # compare them with max_bytes. Keep all malformed HTTP lengths inside
+        # the parser's documented error type.
+        raise JsonRequestError("invalid Content-Length") from exc
     if not 1 <= length <= max_bytes:
         raise JsonRequestError("request body size is outside the allowed range")
 
@@ -69,7 +101,11 @@ def read_json_object(headers, stream, *, max_bytes=4096):
             text,
             object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
+            parse_int=_parse_integer,
+            parse_float=_parse_float,
         )
+    except JsonRequestError:
+        raise
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise JsonRequestError("invalid JSON body") from exc
 
