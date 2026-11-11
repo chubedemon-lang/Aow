@@ -55,6 +55,29 @@ class TransportTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             adapter.send("hello")
 
+    def test_accept_sanitized_local_review_references(self):
+        for reference in ("test-only", "issue:2", "docs/PROTOCOL.md#framing"):
+            with self.subTest(reference=reference):
+                evidence = ProtocolEvidence("a" * 64, "static observation", reference)
+                self.assertEqual(evidence.review_reference, reference)
+
+    def test_reject_endpoint_secret_and_unbounded_review_references(self):
+        invalid = (
+            "https://example.invalid/path",
+            "private//path",
+            "token",
+            "docs/PROTOCOL.md?api_key=hidden",
+            "x" * 161,
+            "contains whitespace",
+        )
+        for reference in invalid:
+            with self.subTest(reference=reference), self.assertRaises(ValueError):
+                ProtocolEvidence("a" * 64, "static observation", reference)
+
+    def test_reject_unbounded_observation(self):
+        with self.assertRaises(ValueError):
+            ProtocolEvidence("a" * 64, "x" * 2001, "issue:2")
+
 
 if __name__ == "__main__":
     unittest.main()
