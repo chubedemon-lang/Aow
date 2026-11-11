@@ -30,6 +30,12 @@ on:
       - 'tests/test_protocol_evidence_gates.py'
       - 'server/evidence_ledger.py'
       - 'tests/test_evidence_ledger.py'
+      - 'server/offline_protocol_evidence.py'
+      - 'tests/test_offline_protocol_evidence.py'
+      - 'server/offline_packet_fixture.py'
+      - 'tests/test_offline_packet_fixture.py'
+      - 'server/offline_evidence_validation.py'
+      - 'tests/test_offline_evidence_validation.py'
       - 'docs/TRANSPORT_EVIDENCE_GATE.md'
       - 'docs/PROTOCOL.md'
       - 'docs/IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md'
@@ -55,6 +61,9 @@ jobs:
             tools/il2cpp_network_callsite_evidence.py \
             server/aow_primitive_codec.py \
             server/offline_frame_probe.py \
+            server/offline_protocol_evidence.py \
+            server/offline_packet_fixture.py \
+            server/offline_evidence_validation.py \
             server/transport.py \
             server/protocol_evidence_registry.py \
             server/protocol_evidence_gates.py \
@@ -81,3 +90,9 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_protocol_evidence_gates.py' -v
       - name: End-to-end evidence ledger tests (metadata only)
         run: python -m unittest discover -s tests -p 'test_evidence_ledger.py' -v
+      - name: Offline protocol evidence manifest tests (metadata only)
+        run: python -m unittest discover -s tests -p 'test_offline_protocol_evidence.py' -v
+      - name: Offline packet fixture tests (synthetic bytes only)
+        run: python -m unittest discover -s tests -p 'test_offline_packet_fixture.py' -v
+      - name: Offline evidence validation tests (metadata only)
+        run: python -m unittest discover -s tests -p 'test_offline_evidence_validation.py' -v
