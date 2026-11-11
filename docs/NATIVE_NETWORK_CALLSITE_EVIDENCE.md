@@ -187,3 +187,24 @@ No new APK bytes were read or analyzed for this change. It does not establish
 that the original APK uses an ADR-based pointer chain, and it does not change
 the framing, compression, message-ID, handshake, or LoginRequest confidence
 levels. Raw addresses and instruction words remain excluded from reports.
+
+
+## Fresh APK byte and native data-flow re-verification — 2026-11-12
+
+The authorized local APK was re-materialized privately. Its SHA-256 matched the fingerprint at the top of this document; the full ZIP CRC test passed for all 7,368 entries. The metadata remains IL2CPP v31 and the arm64 library remains an ELF64 little-endian AArch64 shared object. No APK bytes, extracted native library, raw instructions, native addresses, endpoint values or packet captures were committed.
+
+The receive-side call arguments were rechecked, not merely counted. In the bounded `Receiver.Cycle` window:
+
+- `ClientNetworkStreamBuffer.SetDataAvailable` receives a statically known count of **4** at the initial read setup.
+- `AbstractClientBuffer.Write` receives a statically known count of **4** for that first copy.
+- The next direct call is `SimpleDeserializer.deserializeInt`.
+- The returned integer is compared with the HTTP marker; in the non-marker branch, that value is passed onward as the next read/copy count.
+- The same window contains a later integer read, `ZipDecompress`, `MessageMeta` construction and queue handoff.
+
+The helper implementation confirms the count argument is stored by `SetDataAvailable` and used by `AbstractClientBuffer.Write` for its buffer operation. `deserializeInt` composes two 16-bit reads high-half first; the 16-bit helper composes two one-byte reads high-byte first. The matching serializer path writes high half/high byte before low half/low byte. This is static evidence for a big-endian 32-bit integer primitive.
+
+The bounded `Sender.Cycle` window has two `serializeInt` callsites, one `ZipCompression` callsite, one buffer-length setup, and two `ClientStreamBuffer.Write` callsites. The callsite sequence is not a complete control-flow trace, so neither integer is assigned a definitive message-ID, sequence-number or frame-length meaning.
+
+The bounded LoginRequest serializer window contains direct calls to primitive helpers with counts: 19 integer, 16 string, 2 long and 1 boolean. The corresponding deserializer window contains 14 integer, 16 string, 2 long and 1 boolean direct helper calls. The integer-count difference remains unexplained. No field order is inferred from these counts.
+
+**Confidence update:** the receive-side four-byte big-endian length-prefix candidate is now supported by fixed-count argument evidence and the primitive helper bodies, rather than method names alone. It is still not a verified complete wire frame or a runtime observation. The relationship to the `NetworkSettings.HeaderLength` field, active branch behavior, compression/encryption placement, message IDs, handshake and LoginRequest field order remain unresolved. The AOW transport adapter must remain disabled pending an authorized, redacted client-side byte fixture or local runtime trace.
