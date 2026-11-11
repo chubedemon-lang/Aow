@@ -13,7 +13,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from server.synthetic_player_state import PlayerSnapshot
-from server.sqlite_inventory_store import InventorySnapshot
+from server.sqlite_inventory_store import InventorySnapshot, InventoryStoreError
 from server.sqlite_inventory_store import _MAX_REVISION as _MAX_INVENTORY_REVISION
 from server.sqlite_player_state_store import _MAX_REVISION as _MAX_PLAYER_REVISION
 from server.sqlite_inventory_store import SqliteInventoryStore
