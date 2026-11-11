@@ -25,6 +25,9 @@ from tools.il2cpp_codegen_inventory import (
     _metadata_images,
     _slice,
 )
+from tools.aarch64_call_argument_evidence import (
+    summarize_small_argument_constants,
+)
 from tools.il2cpp_native_method_evidence import (
     TARGET_METHODS,
     _all_method_targets,
@@ -147,6 +150,18 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "entry_window_truncated": truncated,
             **direct,
             **indirect,
+            "linear_window_small_argument_observations": (
+                summarize_small_argument_constants(
+                    code,
+                    target,
+                    method_targets,
+                    target_prefixes=(
+                        "ClientNetworkStreamBuffer::SetDataAvailable",
+                        "AbstractClientBuffer::Write",
+                        "ClientStreamBuffer::Write",
+                    ),
+                )
+            ),
         })
     callsite_summary.sort(key=lambda item: (
         item["namespace"], item["type"], item["method"],
