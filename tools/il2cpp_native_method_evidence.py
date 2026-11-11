@@ -295,6 +295,22 @@ def _decode_aarch64_b_target(word, pc):
 
 
 
+def _decode_aarch64_adr(word, pc):
+    """Decode ADR into (destination register, byte address); otherwise None."""
+    if (type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+            or type(pc) is not int or pc < 0 or pc % 4):
+        return None
+    if (word & 0x9F000000) != 0x10000000:
+        return None
+    immediate = (((word >> 5) & 0x7FFFF) << 2) | ((word >> 29) & 0x3)
+    if immediate & (1 << 20):
+        immediate -= 1 << 21
+    destination = word & 0x1F
+    if destination == 31:
+        return None
+    return destination, pc + immediate
+
+
 def _decode_aarch64_adrp(word, pc):
     """Decode ADRP into (destination register, page address); otherwise None."""
     if (type(word) is not int or not 0 <= word <= 0xFFFFFFFF
@@ -370,7 +386,7 @@ def _decode_aarch64_br_register(word):
 
 
 def _relocated_indirect_call_events(code, start_va, relocations):
-    """Resolve relocation-backed ADRP/ADD/LDR/MOV-X/BLR-or-BR chains.
+    """Resolve relocation-backed ADR/ADRP/ADD/LDR/MOV-X/BLR-or-BR chains.
 
     Any unrecognized instruction clears the small abstract register state.
     This deliberately misses ordinary virtual calls and runtime-computed
@@ -388,6 +404,12 @@ def _relocated_indirect_call_events(code, start_va, relocations):
     for offset in range(0, len(code), 4):
         word = struct.unpack_from("<I", code, offset)[0]
         pc = start_va + offset
+
+        adr = _decode_aarch64_adr(word, pc)
+        if adr is not None:
+            destination, address = adr
+            registers[destination] = address
+            continue
 
         adrp = _decode_aarch64_adrp(word, pc)
         if adrp is not None:
