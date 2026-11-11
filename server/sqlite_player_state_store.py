@@ -164,13 +164,13 @@ class SqlitePlayerStateStore:
                     "VALUES (?, ?, ?, ?, 0, 1)",
                     (character_id, level, experience, currency),
                 )
-                self.db.execute(
-                    "INSERT INTO player_state_creations "
-                    "(character_id, level, experience, currency) VALUES (?, ?, ?, ?)",
-                    (character_id, level, experience, currency),
-                )
             except sqlite3.IntegrityError as exc:
                 raise PlayerAlreadyExists("player snapshot already exists") from exc
+            self.db.execute(
+                "INSERT INTO player_state_creations "
+                "(character_id, level, experience, currency) VALUES (?, ?, ?, ?)",
+                (character_id, level, experience, currency),
+            )
             if owns_transaction:
                 self.db.commit()
             return snapshot
