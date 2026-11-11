@@ -18,6 +18,7 @@ from server.sessions import SessionError
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _MAX_TTL_SECONDS = 31_536_000
 _MAX_ACCOUNT_ID = 2**63 - 1
+_MAX_PURGE_BATCH_SIZE = 10_000
 
 
 class SqliteSessionStore:
@@ -59,6 +60,12 @@ class SqliteSessionStore:
         if (type(ttl_seconds) is not int
                 or not 1 <= ttl_seconds <= _MAX_TTL_SECONDS):
             raise ValueError("invalid session ttl")
+
+    @staticmethod
+    def _validate_purge_batch_size(batch_size):
+        if (type(batch_size) is not int
+                or not 1 <= batch_size <= _MAX_PURGE_BATCH_SIZE):
+            raise ValueError("invalid session purge batch size")
 
     def _now(self):
         value = self.clock()
@@ -180,14 +187,36 @@ class SqliteSessionStore:
             self.db.rollback()
             raise
 
-    def purge_expired(self) -> int:
-        """Delete all expired sessions and return the number of rows removed."""
+    def purge_expired(self, batch_size=None) -> int:
+        """Delete expired sessions, optionally bounding one cleanup transaction.
+
+        With no batch_size, preserve the original all-at-once behavior. A
+        positive batch_size deletes at most that many oldest expired rows,
+        ordered by expiry and token digest for deterministic cleanup. Callers
+        can repeat bounded batches to avoid holding SQLite's write lock for a
+        large cleanup. The method returns the number of rows removed.
+        """
+        if batch_size is not None:
+            self._validate_purge_batch_size(batch_size)
+
         self.db.execute("BEGIN IMMEDIATE")
         try:
             now = self._now()
-            result = self.db.execute(
-                "DELETE FROM durable_sessions WHERE expires_at <= ?", (now,)
-            )
+            if batch_size is None:
+                result = self.db.execute(
+                    "DELETE FROM durable_sessions WHERE expires_at <= ?", (now,)
+                )
+            else:
+                result = self.db.execute(
+                    """DELETE FROM durable_sessions
+                       WHERE token_hash IN (
+                           SELECT token_hash FROM durable_sessions
+                           WHERE expires_at <= ?
+                           ORDER BY expires_at ASC, token_hash ASC
+                           LIMIT ?
+                       )""",
+                    (now, batch_size),
+                )
             self.db.commit()
             return result.rowcount
         except BaseException:
