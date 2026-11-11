@@ -6,7 +6,7 @@
 |---|---|---|
 | Endpoint discovery | Address configuration type names only; no values published | Unknown |
 | Transport | Socket/TCP-related metadata identifiers | Active transport unverified |
-| Framing | `HeaderLength`, header/stream buffers, zipped/encrypted/decrypted buffer identifiers | Layout and rules unknown |
+| Framing | `HeaderLength` metadata field and header/stream buffers; Receiver.Cycle has a fixed four-byte read followed by an integer-driven second read, with an HTTP-marker branch; Sender.Cycle has integer serialization and stream-write callsites | Four-byte big-endian length-prefix candidate only; `HeaderLength` value/use and runtime path are unverified |
 | Primitive serialization | Native helper bodies indicate big-endian 16/32/64-bit values, UTF-16 code-unit strings and one-byte boolean/byte operations; isolated codec and synthetic vectors exist | Primitive payload layer only |
 | Message schema | Message type registry and paired serializer/deserializer type definitions | Field order, optionality and wire IDs unknown |
 | Handshake | Login/registration/session type names | Application handshake sequence unknown |
@@ -124,3 +124,8 @@ The offline native-method analyzer now has an additional **tool capability** for
 The scanner clears its tracked register state on any unrecognized instruction (except NOP). Missing/non-relative relocations, ambiguous metadata targets, ordinary virtual calls and runtime-computed pointers remain unresolved. Output contains method labels and aggregate counts only; no native addresses or instruction words are emitted.
 
 This change adds synthetic instruction/relocation tests only. **No new APK analysis was run for this change**, so existing unresolved indirect-call counts (including the previously recorded LoginRequest serializer/deserializer counts) are unchanged until the tool is run successfully against the exact authorized APK fingerprint. This narrow resolver is not a general AArch64 decompiler and does not establish field order, framing, message IDs, handshake, or APK compatibility.
+
+
+## Framing candidate update — 2026-11-11
+
+A read-only disassembly pass over the exact APK fingerprint recorded in docs/NATIVE_NETWORK_CALLSITE_EVIDENCE.md found a receive-side four-byte read followed by deserializeInt and a second read count derived from the returned integer. The send-side entry window contains serializeInt, compression and stream-write callsites. This is consistent with a four-byte big-endian length-prefix path, but remains a static candidate: no authorized wire fixture or runtime trace confirms the field relationship, active branch, or complete frame. In particular, do not equate the candidate with NetworkSettings.HeaderLength until its value and use are traced. The actual APK adapter remains blocked.
