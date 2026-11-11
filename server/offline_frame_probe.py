@@ -23,6 +23,13 @@ class FrameSpec:
             raise ValueError("includes_header must be bool")
         if type(self.max_payload) is not int or not (1 <= self.max_payload <= 16 * 1024 * 1024):
             raise ValueError("invalid max_payload")
+        max_declared = (1 << (8 * self.length_bytes)) - 1
+        max_representable_payload = (
+            max_declared - self.length_bytes
+            if self.includes_header else max_declared
+        )
+        if self.max_payload > max_representable_payload:
+            raise ValueError("max_payload cannot be represented by length header")
         if type(self.max_chunk_bytes) is not int or not (1 <= self.max_chunk_bytes <= 16 * 1024 * 1024):
             raise ValueError("invalid max_chunk_bytes")
 
