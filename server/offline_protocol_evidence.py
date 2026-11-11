@@ -18,15 +18,39 @@ FIELDS = frozenset({
 })
 
 # Free-text metadata is intended for public provenance, not raw observations.
-# Reject common endpoint/credential forms before a caller writes it to a
-# public manifest. This is a guardrail, not a general-purpose DLP scanner.
-_URL = re.compile(r"\b(?:https?|wss?)://", re.IGNORECASE)
+# Reject arbitrary URI schemes (not just HTTP), IPv4/IPv6 literals, localhost,
+# and DNS-like hostnames before a caller writes metadata to a public manifest.
+# This is a conservative guardrail, not a general-purpose DLP scanner.
+_URI_SCHEME = re.compile(r"\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _IPV4 = re.compile(
     r"(?<![A-Za-z0-9_.])"
     r"(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])"
     r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
     r"(?![A-Za-z0-9_.])"
 )
+_IPV6 = re.compile(
+    r"(?<![0-9A-Fa-f:])"
+    r"(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}"
+    r"(?![0-9A-Fa-f:])"
+)
+_HOSTNAME = re.compile(
+    r"(?<![A-Za-z0-9_-])"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"[A-Za-z]{2,}(?::[0-9]{1,5})?"
+    r"(?![A-Za-z0-9_-])",
+    re.IGNORECASE,
+)
+_LOCALHOST = re.compile(
+    r"(?<![A-Za-z0-9_.-])localhost(?::[0-9]{1,5})?(?![A-Za-z0-9_.-])",
+    re.IGNORECASE,
+)
+# Local source references such as tests/test_module.py and docs/PROTOCOL.md
+# are allowed; these suffixes are not treated as DNS top-level domains.
+_LOCAL_FILE_SUFFIXES = frozenset({
+    "apk", "bat", "c", "cfg", "cpp", "cs", "css", "csv", "dll", "go",
+    "h", "html", "ini", "java", "js", "json", "log", "md", "py", "ps1",
+    "rst", "sh", "so", "sql", "toml", "ts", "txt", "xml", "yaml", "yml",
+})
 _CREDENTIAL_ASSIGNMENT = re.compile(
     r"\b(?:authorization|bearer|token|password|passwd|secret|"
     r"api[_-]?key|access[_-]?key|refresh[_-]?token)\s*[:=]\s*\S+",
@@ -45,17 +69,30 @@ class EvidenceError(ValueError):
     """Invalid or unverifiable evidence metadata."""
 
 
+def _contains_network_locator(value):
+    if (_URI_SCHEME.search(value) or _IPV4.search(value)
+            or _IPV6.search(value) or _LOCALHOST.search(value)):
+        return True
+    for match in _HOSTNAME.finditer(value):
+        suffix = match.group(0).rsplit(".", 1)[-1].split(":", 1)[0].lower()
+        if suffix not in _LOCAL_FILE_SUFFIXES:
+            return True
+    return False
+
+
 def _validate_public_text(key, value):
     if not isinstance(value, str) or not value.strip() or len(value) > 512:
         raise EvidenceError("invalid metadata field: " + key)
     if not value.isprintable():
         raise EvidenceError("control character in metadata")
-    if (_URL.search(value) or _IPV4.search(value)
+    if (_contains_network_locator(value)
             or _CREDENTIAL_ASSIGNMENT.search(value)
             or _BEARER_VALUE.search(value)
             or _PACKET_BYTES.search(value)
             or _PRIVATE_KEY.search(value)):
-        raise EvidenceError("sensitive endpoint, credential, or raw-byte marker in " + key)
+        raise EvidenceError(
+            "sensitive endpoint, credential, or raw-byte marker in " + key
+        )
     return value.strip()
 
 
