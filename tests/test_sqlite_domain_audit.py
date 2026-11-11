@@ -46,7 +46,12 @@ class SqliteDomainAuditTests(unittest.TestCase):
             result["audits"],
             {
                 "inventory": {"snapshots": 1, "items": 1, "mutations": 1},
-                "player_state": {"snapshots": 1, "mutations": 1},
+                "player_state": {
+                    "snapshots": 1,
+                    "mutations": 1,
+                    "anchored_snapshots": 1,
+                    "legacy_unanchored_snapshots": 0,
+                },
                 "map_position": {"snapshots": 1, "mutations": 1},
             },
         )
