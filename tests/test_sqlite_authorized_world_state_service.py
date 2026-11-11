@@ -317,5 +317,75 @@ class SqliteAuthorizedWorldStateServiceTests(unittest.TestCase):
             self.service.get_snapshot(self.owner_token, self.character_id)
 
 
+    def test_leave_returns_unplaced_snapshot_and_replay_keeps_current_world_view(self):
+        self.service.enter_and_get_snapshot(
+            self.owner_token, self.character_id, "enter-before-leave",
+            0, 11, 4, 5,
+        )
+        self.service.move_and_get_snapshot(
+            self.owner_token, self.character_id, "move-before-leave",
+            1, 11, 8, 9,
+        )
+
+        left = self.service.leave_and_get_snapshot(
+            self.owner_token, self.character_id, "leave-1", 2, 11
+        )
+        unplaced = MapPosition(revision=3)
+        self.assertFalse(left.mutation.replayed)
+        self.assertEqual(left.mutation.snapshot, unplaced)
+        self.assertEqual(left.snapshot.map_position, unplaced)
+        self.assertEqual(left.snapshot.character, self.bootstrap.character)
+        self.assertEqual(left.snapshot.player_state,
+                         PlayerSnapshot("1", 4, 125, 0, 0))
+
+        reentered = self.service.enter_and_get_snapshot(
+            self.owner_token, self.character_id, "reenter-after-leave",
+            3, 12, -2, 6,
+        )
+        replay = self.service.leave_and_get_snapshot(
+            self.owner_token, self.character_id, "leave-1", 2, 11
+        )
+        self.assertTrue(replay.mutation.replayed)
+        self.assertEqual(replay.mutation.snapshot, unplaced)
+        self.assertEqual(replay.snapshot.map_position,
+                         reentered.snapshot.map_position)
+        self.assertEqual(replay.snapshot.map_position,
+                         MapPosition(12, Position(-2, 6), 4))
+
+    def test_snapshot_read_failure_rolls_back_map_transition_and_receipt(self):
+        self.db.execute(
+            "DELETE FROM player_state_snapshots WHERE character_id=?",
+            (str(self.character_id),),
+        )
+        self.db.commit()
+        before_receipts = self.db.execute(
+            "SELECT count(*) FROM map_position_mutations"
+        ).fetchone()[0]
+
+        with self.assertRaises(PlayerNotFound):
+            self.service.enter_and_get_snapshot(
+                self.owner_token, self.character_id, "rollback-enter",
+                0, 5, 3, 4,
+            )
+
+        self.assertEqual(
+            self.service.positions.get(str(self.bootstrap.character.character_id)),
+            MapPosition(),
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_mutations"
+            ).fetchone()[0],
+            before_receipts,
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_mutations "
+                "WHERE request_id='rollback-enter'"
+            ).fetchone()[0],
+            0,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
