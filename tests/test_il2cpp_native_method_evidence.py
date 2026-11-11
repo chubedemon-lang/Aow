@@ -443,6 +443,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(summary["resolved_indirect_method_call_counts"], {})
         self.assertEqual(summary["ambiguous_indirect_call_count"], 1)
+        self.assertEqual(summary["resolved_indirect_method_call_sequence"], [])
         self.assertEqual(summary["unresolved_indirect_call_count"], 0)
 
     def test_indirect_tail_branch_is_reported_separately(self):
@@ -463,6 +464,51 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             {"Receiver::Cycle": 1},
         )
         self.assertEqual(summary["unresolved_indirect_tail_call_count"], 0)
+
+    def test_indirect_call_summary_preserves_resolved_call_and_tail_order(self):
+        start = 0x5000
+        words = (
+            self._encode_adrp(start, 0x3000, 8),
+            self._encode_add_x(8, 8, 0x80),
+            self._encode_ldr_x(9, 8),
+            self._encode_blr(9),
+            self._encode_adrp(start + 16, 0x4000, 10),
+            self._encode_add_x(10, 10, 0x20),
+            self._encode_ldr_x(11, 10),
+            self._encode_blr(11),
+            self._encode_adrp(start + 32, 0x4000, 12),
+            self._encode_add_x(12, 12, 0x28),
+            self._encode_ldr_x(13, 12),
+            0xD61F0000 | (13 << 5),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_relocated_indirect_calls(
+            code, start,
+            {
+                0x3080: (R_AARCH64_RELATIVE, 0x6010),
+                0x4020: (R_AARCH64_RELATIVE, 0x6020),
+                0x4028: (R_AARCH64_RELATIVE, 0x6030),
+            },
+            {
+                0x6010: ["SimpleSerializer::serializeInt"],
+                0x6020: ["SimpleSerializer::serializeString"],
+                0x6030: ["SimpleSerializer::serializeChar"],
+            },
+        )
+        self.assertEqual(
+            summary["resolved_indirect_method_call_sequence"],
+            [
+                "SimpleSerializer::serializeInt",
+                "SimpleSerializer::serializeString",
+            ],
+        )
+        self.assertEqual(
+            summary["resolved_indirect_tail_method_call_sequence"],
+            ["SimpleSerializer::serializeChar"],
+        )
+        rendered = json.dumps(summary)
+        for address in ("0x3080", "0x4020", "0x4028", "0x6010", "0x6020", "0x6030"):
+            self.assertNotIn(address, rendered)
 
     def test_aarch64_indirect_instruction_decoders_reject_other_words(self):
         self.assertIsNone(_decode_aarch64_adrp(0xD503201F, 0x5000))
