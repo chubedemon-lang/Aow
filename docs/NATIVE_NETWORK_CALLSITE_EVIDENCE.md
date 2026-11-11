@@ -136,3 +136,21 @@ whether the call is reachable, or whether a value is a frame length. The
 existing framing candidate remains unverified and the real APK adapter stays
 disabled pending an authorized, redacted client-side fixture or local runtime
 trace.
+
+
+## Ordered relocation-backed indirect-call labels — tooling only
+
+The redacted callsite summary now includes an ordered list of uniquely
+resolved relocation-backed indirect method labels for each bounded entry
+window. This preserves the order among the indirect BLR events that the narrow
+ADRP/ADD/LDR resolver can prove, while continuing to omit raw native addresses,
+instruction bytes and APK data.
+
+The list is deliberately partial: unresolved and ambiguous indirect calls are
+counted separately and omitted from the sequence. Direct BL calls are reported
+by the existing direct-call summaries and are **not interleaved** into this
+indirect-only list. The result is still a linear-window observation, not a
+control-flow graph, a complete serializer field order, or proof that every
+listed call executes on a real login path. It is useful for selecting the next
+offline inspection targets, but cannot establish the LoginRequest wire schema
+or enable the APK adapter.
