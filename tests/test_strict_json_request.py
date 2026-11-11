@@ -33,9 +33,28 @@ class StrictJsonRequestTests(unittest.TestCase):
                 self.parse(body)
 
     def test_rejects_non_finite_numbers(self):
-        for body in (b'{"x":NaN}', b'{"x":Infinity}', b'{"x":-Infinity}'):
+        for body in (
+            b'{"x":NaN}',
+            b'{"x":Infinity}',
+            b'{"x":-Infinity}',
+            b'{"x":1e999}',
+            b'{"x":-1e999}',
+        ):
             with self.subTest(body=body), self.assertRaises(JsonRequestError):
                 self.parse(body)
+
+    def test_rejects_integer_exceeding_python_conversion_limit(self):
+        body = b'{"x":' + (b"9" * 5000) + b"}"
+        with self.assertRaises(JsonRequestError):
+            self.parse(body, max_bytes=len(body))
+
+    def test_rejects_extremely_long_content_length_as_parser_error(self):
+        body = b'{"x":1}'
+        headers = Message()
+        headers["Content-Type"] = "application/json"
+        headers["Content-Length"] = "9" * 5000
+        with self.assertRaises(JsonRequestError):
+            read_json_object(headers, io.BytesIO(body), max_bytes=64)
 
     def test_rejects_non_object_roots(self):
         for body in (b'[]', b'null', b'"text"', b'42'):
