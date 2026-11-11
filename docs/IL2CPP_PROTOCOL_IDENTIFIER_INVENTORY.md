@@ -89,6 +89,8 @@ These are field names only. Numeric constants are deliberately not reported: the
 
 - `com.geargames.common.network.Network`: 26 fields and 58 methods. Metadata names include `m_tcpClient`, `m_socket`, `m_sender`, `m_receiver`, `m_messageDispatcher`, `m_serializationManager`, and `m_tcpNoDelayEnabled`. Method identifiers include `ConnectBeginAsync`, `SetCryptoProvider`, `SetTcpNoDelayFlag`, `ApplyTcpNoDelayFlag`, `SendMessage`, `SendMessageUnreliable`, `SessionRestored`, and `SessionBroken`.
 - `com.geargames.common.network.NetworkSettings`: 28 fields and 16 methods. Field names include `HeaderLength`, `ZipIntermediateBufferSize`, socket receive/send buffer sizes, encrypted/decrypted/zipped/unzipped buffer capacities, read/write timeout fields, `HeartbeatTimeout`, `m_zippetMessageTypes`, and `m_notSessionedMessageTypes`.
+
+  The `HeaderLength` field also has a field-default metadata record. The public inventory reports record presence only; its default type/value is not decoded here, and this does not prove a runtime read or establish that the value equals the receive-side four-byte immediate.
 - `Sender` and `Receiver` definitions contain stream/header/encrypted/decrypted/zipped/unzipped buffer identifiers. `Sender` has `TrySendHeartbeat`; `Receiver` has `DoStreamReadedBytes` and `ReadStreamBufferToEnd`.
 - `MessageHelper` has fields named `m_messageTypeByMessageClass` and `m_messageClassByMessageType`, plus methods `GetMessageType`, `GetMessageTypeName`, and `GetMessageClassName`.
 - `MessageDispatcher` has `m_lastProcessedServerSequenceNumber` and a `Dispatch` method.
