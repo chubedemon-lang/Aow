@@ -163,6 +163,29 @@ class SqliteSessionStoreTests(unittest.TestCase):
             0,
         )
 
+    def test_issue_rejects_finite_clock_values_that_cannot_represent_expiry(self):
+        for value in (1e20, float.fromhex("0x1.fffffffffffffp+1023")):
+            store = SqliteSessionStore(self.db, clock=lambda value=value: value)
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "expiry"):
+                store.issue(51)
+            self.assertFalse(self.db.in_transaction)
+            self.assertEqual(
+                self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+                0,
+            )
+
+    def test_issue_in_transaction_preserves_caller_transaction_on_unrepresentable_expiry(self):
+        self.store.clock = lambda: 1e20
+        self.db.execute("BEGIN IMMEDIATE")
+        with self.assertRaisesRegex(ValueError, "expiry"):
+            self.store.issue_in_transaction(52)
+        self.assertTrue(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            0,
+        )
+        self.db.rollback()
+
     def test_constructor_does_not_commit_callers_transaction(self):
         self.db.execute("CREATE TABLE caller_work (value INTEGER)")
         self.db.commit()

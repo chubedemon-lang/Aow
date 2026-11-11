@@ -102,10 +102,13 @@ class SqliteSessionStore:
         token = secrets.token_urlsafe(32)
         digest = self._digest(token)
         now = self._now()
+        expires_at = now + ttl
+        if not math.isfinite(expires_at) or expires_at <= now:
+            raise ValueError("clock cannot represent the requested session expiry")
         self.db.execute(
             "INSERT INTO durable_sessions "
             "(token_hash, account_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-            (digest, account_id, now, now + ttl),
+            (digest, account_id, now, expires_at),
         )
         return token
 
