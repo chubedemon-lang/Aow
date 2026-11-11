@@ -148,7 +148,11 @@ class SqliteDomainAuditTests(unittest.TestCase):
             )"""
         )
         connection.execute(
-            "INSERT INTO player_state_snapshots VALUES ('legacy', 3, 12, 40, 0)"
+            "INSERT INTO player_state_snapshots VALUES ('legacy', 3, 17, 45, 1)"
+        )
+        connection.execute(
+            """INSERT INTO player_state_mutations VALUES
+               ('legacy-1', 'legacy', 0, NULL, 5, 5, 3, 17, 45, 1)"""
         )
         connection.commit()
         connection.close()
@@ -159,7 +163,7 @@ class SqliteDomainAuditTests(unittest.TestCase):
             result["audits"]["player_state"],
             {
                 "snapshots": 1,
-                "mutations": 0,
+                "mutations": 1,
                 "anchored_snapshots": 0,
                 "legacy_unanchored_snapshots": 1,
             },
