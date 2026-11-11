@@ -14,13 +14,74 @@ class EvidenceRegistryTests(unittest.TestCase):
 
     def test_unverified_does_not_claim_compatibility(self):
         registry = EvidenceRegistry()
-        registry.add(Evidence("framing", self.sha, "synthetic fixture", "unit test"))
+        registry.add(Evidence("framing", self.sha, "synthetic fixture", "synthetic_test"))
         self.assertEqual(registry.summary()["framing"], {"observations": 1, "verified": 0})
 
-    def test_verified_explicit_only(self):
+    def test_verified_explicit_only_with_reproducible_local_test(self):
         registry = EvidenceRegistry()
-        registry.add(Evidence("login", self.sha, "offline observation", "manual review", True))
+        registry.add(Evidence(
+            "login", self.sha, "offline observation", "il2cpp_offline", True,
+            "tests/test_protocol_evidence_registry.py",
+            "python -m unittest discover -s tests -p test_protocol_evidence_registry.py -v",
+        ))
         self.assertEqual(registry.summary()["login"], {"observations": 1, "verified": 1})
+
+    def test_verified_requires_test_reference_and_reproduction(self):
+        with self.assertRaisesRegex(EvidenceError, "local test reference"):
+            Evidence("login", self.sha, "offline observation", "il2cpp_offline", True)
+        with self.assertRaisesRegex(EvidenceError, "provided together"):
+            Evidence(
+                "login", self.sha, "offline observation", "il2cpp_offline", True,
+                "tests/test_protocol_evidence_registry.py", None,
+            )
+
+    def test_synthetic_only_method_cannot_mark_protocol_evidence_verified(self):
+        with self.assertRaisesRegex(EvidenceError, "offline or authorized method"):
+            Evidence(
+                "framing", self.sha, "synthetic fixture observation", "synthetic_test", True,
+                "tests/test_protocol_evidence_registry.py",
+                "python -m unittest discover -s tests -p test_protocol_evidence_registry.py -v",
+            )
+
+    def test_rejects_sensitive_observation_and_method_text(self):
+        for field in ("observation", "method"):
+            values = {
+                "observation": "offline observation",
+                "method": "il2cpp_offline",
+            }
+            values[field] = "captured endpoint game.example.invalid"
+            with self.subTest(field=field), self.assertRaises(EvidenceError):
+                Evidence("transport", self.sha, values["observation"], values["method"])
+
+    def test_rejects_non_local_test_references(self):
+        invalid = (
+            "https://example.invalid/capture",
+            "game.example.invalid",
+            "/tmp/capture.pcap",
+            "tests/../private.py",
+            "private/capture.pcap",
+            "issue:0",
+        )
+        for reference in invalid:
+            with self.subTest(reference=reference), self.assertRaises(EvidenceError):
+                Evidence(
+                    "transport", self.sha, "offline observation", "il2cpp_offline",
+                    False, reference,
+                    "python -m unittest discover -s tests -p test_protocol_evidence_registry.py -v",
+                )
+
+    def test_rejects_sensitive_reproduction_commands(self):
+        for reproduction in (
+            "python -m unittest https://example.invalid",
+            "python -m unittest token=secret",
+            "/tmp/private/capture.pcap",
+            "python ../outside.py",
+        ):
+            with self.subTest(reproduction=reproduction), self.assertRaises(EvidenceError):
+                Evidence(
+                    "transport", self.sha, "offline observation", "il2cpp_offline",
+                    False, "tests/test_protocol_evidence_registry.py", reproduction,
+                )
 
     def test_duplicate_rejected(self):
         registry = EvidenceRegistry()
@@ -30,11 +91,13 @@ class EvidenceRegistryTests(unittest.TestCase):
             registry.add(entry)
 
     def test_invalid_fields(self):
-        bad = [("unknown", self.sha, "a", "b", False),
-               ("login", "abc", "a", "b", False),
-               ("login", self.sha, "", "b", False),
-               ("login", self.sha, "a", "", False),
-               ("login", self.sha, "a", "b", 1)]
+        bad = [
+            ("unknown", self.sha, "a", "b", False),
+            ("login", "abc", "a", "b", False),
+            ("login", self.sha, "", "b", False),
+            ("login", self.sha, "a", "", False),
+            ("login", self.sha, "a", "b", 1),
+        ]
         for fields in bad:
             with self.assertRaises(EvidenceError):
                 Evidence(*fields)
