@@ -479,6 +479,8 @@ def _summarize_relocated_indirect_calls(code, start_va, relocations, method_targ
         "ambiguous_indirect_call_count": ambiguous_calls,
         "ambiguous_indirect_tail_call_count": ambiguous_tails,
     }
+
+
 def _summarize_aarch64_calls(code, start_va, helper_targets):
     """Summarize direct calls to allowlisted serializer helpers without addresses."""
     if not isinstance(code, bytes) or len(code) % 4:
