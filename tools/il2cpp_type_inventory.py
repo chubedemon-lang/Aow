@@ -215,6 +215,7 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
                 "name": _read_heap_string(heap, field_name_index),
                 "type_index": field_type_index,
                 "metadata_token": field_token,
+                "default_value_record_present": default_value is not None,
                 "default_value_type_index": (
                     default_value["type_index"] if default_value is not None else None
                 ),

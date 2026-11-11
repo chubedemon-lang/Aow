@@ -165,6 +165,7 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
                  "name": "LoginRequestSTDeserializer", "methods": ["deserialize"]},
                 {"namespace": "com.geargames.common.network", "name": "NetworkSettings",
                  "fields": ["HeaderLength", "HeartbeatTimeout"],
+                 "field_defaults": {"HeaderLength": {"type_index": 9, "data_index": 2}},
                  "methods": ["get_HeartbeatTimeout"]},
             ]
             write_apk(apk, make_metadata(types))
@@ -177,8 +178,10 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
             self.assertEqual(fields_by_name["protocolVersion"]["type_index"], 17)
             self.assertEqual(fields_by_name["token"]["type_index"], 42)
             self.assertEqual(fields_by_name["protocolVersion"]["metadata_token"], 0x04000001)
+            self.assertTrue(fields_by_name["protocolVersion"]["default_value_record_present"])
             self.assertEqual(fields_by_name["protocolVersion"]["default_value_type_index"], 9)
             self.assertEqual(fields_by_name["protocolVersion"]["default_value_data_index"], 3)
+            self.assertFalse(fields_by_name["token"]["default_value_record_present"])
             self.assertIsNone(fields_by_name["token"]["default_value_type_index"])
             methods_by_name = {
                 item["name"]: item for item in by_name["LoginRequest"]["method_records"]
@@ -194,6 +197,11 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
                 by_name["LoginRequestSTDeserializer"]["method_names"], ["deserialize"]
             )
             self.assertIn("HeaderLength", by_name["NetworkSettings"]["field_names"])
+            network_fields = {
+                item["name"]: item for item in by_name["NetworkSettings"]["field_records"]
+            }
+            self.assertTrue(network_fields["HeaderLength"]["default_value_record_present"])
+            self.assertFalse(network_fields["HeartbeatTimeout"]["default_value_record_present"])
             self.assertTrue(all(item["method_owner_matches"] for item in by_name.values()))
 
     def test_limits_message_type_registry_fields_to_allowlist(self):
