@@ -10,7 +10,7 @@ import re
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _REFERENCE = re.compile(r"^[A-Za-z0-9_./:#-]{1,160}$")
-_ALLOWED_TOPICS = frozenset({"transport", "framing", "handshake", "login",
+_ALLOWED_TOPICS = frozenset({"transport", "framing", "serialization", "handshake", "login",
                              "session", "player", "map", "movement", "inventory",
                              "shop", "combat", "quest"})
 
@@ -49,7 +49,8 @@ class EvidenceRecord:
             raise ValueError("end-to-end requires authorized local test")
 
 
-def protocol_ready(records, required=("transport", "framing", "handshake", "login")):
+def protocol_ready(records, required=("transport", "framing", "serialization",
+                                      "handshake", "login")):
     """Require a complete authorized local test for ONE APK, never mixed APKs.
 
     This checks evidence bookkeeping only, not actual APK compatibility.
@@ -60,13 +61,10 @@ def protocol_ready(records, required=("transport", "framing", "handshake", "logi
         raise TypeError("records must be EvidenceRecord instances")
     if not required or not all(topic in _ALLOWED_TOPICS for topic in required):
         raise ValueError("required must contain supported topics")
-    if not records:
-        return False
-    digests = {r.apk_sha256 for r in records}
     return any(
         all(any(r.apk_sha256 == digest and r.topic == topic
                 and r.status == EvidenceStatus.VERIFIED_END_TO_END
                 and r.method == "authorized_local_test"
                 for r in records) for topic in required)
-        for digest in digests
+        for digest in {r.apk_sha256 for r in records}
     )
