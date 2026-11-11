@@ -79,6 +79,26 @@ class OfflineFrameProbeTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             LengthFrameDecoder(FrameSpec(1, "big")).feed(bytearray(b"\x01a"))
 
+    def test_clean_eof_is_terminal(self):
+        decoder = LengthFrameDecoder(FrameSpec(1, "big"))
+        self.assertEqual(decoder.feed(b"\x01x"), [b"x"])
+        decoder.finish()
+        self.assertEqual(decoder.pending_bytes, 0)
+        with self.assertRaisesRegex(FrameDecodeError, "already finished"):
+            decoder.feed(b"\x01y")
+        with self.assertRaisesRegex(FrameDecodeError, "already finished"):
+            decoder.finish()
+
+    def test_truncated_eof_discards_pending_and_is_terminal(self):
+        decoder = LengthFrameDecoder(FrameSpec(1, "big"))
+        decoder.feed(b"\x03ab")
+        self.assertEqual(decoder.pending_bytes, 3)
+        with self.assertRaisesRegex(FrameDecodeError, "truncated final frame"):
+            decoder.finish()
+        self.assertEqual(decoder.pending_bytes, 0)
+        with self.assertRaisesRegex(FrameDecodeError, "failed"):
+            decoder.feed(b"c")
+
 
 if __name__ == "__main__":
     unittest.main()
