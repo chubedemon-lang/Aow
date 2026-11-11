@@ -26,12 +26,12 @@ A high-fidelity reconstruction should investigate a compatible Unity 6 project, 
 
 ## Pending deeper analysis
 
-1. Parse binary AndroidManifest.xml using aapt2/apktool (not installed in this initial runtime) for package, SDK levels, permissions and launcher.
-2. Inventory all AssetBundles with a Unity asset parser compatible with Unity 6000; record classes and dependencies without publishing copyrighted binary contents.
-3. Inspect IL2CPP metadata/type signatures with a compatible analysis tool in an authorized local workspace.
-4. Build evidence-based screen/gameplay matrix from authorized observation.
-5. Identify endpoint configuration, if any, without exposing secrets or accessing official infrastructure beyond authorized normal use.
-6. Determine whether original assets can legally be reused or whether clean-room replacements are needed.
+1. Trace the effective runtime use of `NetworkSettings.HeaderLength`; do not equate the four-byte receive-side immediate with that field until the relationship is established.
+2. Recover LoginRequest field order from native field loads and serializer/deserializer data flow; metadata declaration order and helper-call counts alone are insufficient.
+3. Verify how MessageTypes metadata values are mapped to message classes and whether those values are used on the active wire path.
+4. Establish compression/encryption activation and the complete sender/receiver byte relationship using an authorized, redacted client-side fixture or local runtime trace.
+5. Inventory AssetBundles with a Unity 6000-compatible parser, recording only safe metadata and dependencies without publishing copyrighted binary contents.
+6. Build an evidence-based screen/gameplay matrix from authorized observation and determine whether clean-room replacement assets are required.
 
 ## Reproduce with Python
 
@@ -62,3 +62,26 @@ Inspected the uploaded APK directly using Python `zipfile` and `json`, without m
 - `assets/aa/catalog.json` contains 912 internal IDs. No actual endpoint or IP has yet been verified.
 
 Run: `python tools/apk_inventory.py /path/to/aow.apk --output apk_inventory.json`. Keep output local until reviewed for sensitive configuration. Do not commit APK or extracted proprietary resources.
+
+
+## Follow-up inspection — 2026-11-12 (read-only re-verification)
+
+The previously supplied APK was re-materialized into a private workspace and read successfully. It was not modified, and neither the APK nor extracted game assets/native libraries were uploaded to GitHub.
+
+- APK size: **256,468,647 bytes**; SHA-256 re-computed and matched the existing fingerprint above.
+- ZIP entries: **7,368**; a full CRC test passed.
+- Binary Android manifest: package `com.geargames.aow`, version name `6.11.2`, version code `39430`, minimum SDK **24**, target SDK **36**.
+- Launcher activity: `com.trophit.MyUnityPlayerActivity`.
+- The manifest sets `usesCleartextTraffic=true`; this is only an Android platform policy flag and does **not** prove that gameplay traffic is plain HTTP or identify the active transport.
+- `global-metadata.dat`: **26,021,348 bytes**, magic `0xfab11baf`, version **31**.
+- `lib/arm64-v8a/libil2cpp.so`: **166,150,720 bytes**, ELF64 little-endian AArch64 shared object.
+
+A fresh private read-only metadata/ELF pass independently reproduced the existing aggregate codegen mapping: **165/165** metadata images matched native modules; **197,631** method definitions mapped to **197,631** pointer slots; **164,023** slots had relative relocations to executable targets. The exact APK SHA-256 remained unchanged.
+
+The bounded native `Receiver.Cycle` window was rechecked at instruction/data-flow level: the initial stream-buffer setup supplies count **4** to the first read/copy, then calls `SimpleDeserializer.deserializeInt`. In the non-HTTP-marker branch, the returned integer is reused as the next buffer read count. The same bounded window contains a later integer read, decompression, message-metadata construction and queue handoff. The primitive helper bodies independently show high-byte/high-word-first composition for 16- and 32-bit integer operations.
+
+The bounded `Sender.Cycle` window contains two `serializeInt` callsites, a `ZipCompression` callsite, a buffer-length setup and two stream-buffer writes. The window is not a control-flow graph, so the two integer writes are not assigned field semantics here.
+
+The LoginRequest serializer window has direct helper callsites for 19 integers, 16 strings, 2 longs and 1 boolean; its deserializer window has 14 integers, 16 strings, 2 longs and 1 boolean. These are bounded-window direct-call counts, not a recovered field order. The differing integer counts remain unresolved.
+
+**Conclusion:** the four-byte big-endian length-prefix candidate is stronger and reproducible as static native evidence, with a receive-side integer-driven second read. It is still not a verified complete wire frame: the runtime relationship to `NetworkSettings.HeaderLength`, active branch behavior, compression/encryption placement, message IDs, handshake and LoginRequest field order remain unverified. No packet capture was available and no official endpoint/server was contacted.
