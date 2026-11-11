@@ -55,11 +55,12 @@ The preflight opens SQLite in read-only mode and checks:
 - literal IPv4 loopback binding and a valid TCP port;
 - SQLite `quick_check`;
 - foreign-key integrity;
-- required synthetic mock tables and columns.
+- required synthetic column types, nullability, defaults and primary-key layout;
+- required unique, foreign-key and CHECK constraints for the synthetic schema.
 
 It does not create, migrate, repair, or modify the database. A successful result
-means only that the local synthetic prototype passes these checks. It explicitly
-reports `apk_compatible: false` and `production_ready: false`.
+means only that the local synthetic prototype passes these checks. It validates the `synthetic-v1` schema contract. It explicitly reports
+`apk_compatible: false` and `production_ready: false`.
 
 ## Operational cautions
 
