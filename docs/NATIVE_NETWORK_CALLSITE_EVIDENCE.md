@@ -112,3 +112,27 @@ The bounded Sender.Cycle entry window contains callsites to ClientArrayUtils.Zip
 This does not yet prove that the field named NetworkSettings.HeaderLength is the source of the four-byte constant, that the serialized integer is definitively the payload length on every path, or that the observed branch is used in every session. The metadata field exists, but its runtime value and direct storage/access relationship remain unresolved. The entry windows are bounded by adjacent executable entries, not formal function boundaries; they may contain cold branches or shared code. No runtime packet, handshake, login or client/server exchange was observed.
 
 Accordingly, the evidence ledger may record a framing candidate for follow-up, but must not promote framing to verified or enable an AOW transport adapter. The next proof still requires an authorized, redacted client-side fixture or local runtime trace that matches the unchanged APK and reproduces the complete byte stream. No extracted endpoint was contacted.
+
+
+## Redacted small-immediate argument observations — tooling only
+
+The offline network callsite inventory now optionally reports small constants
+that a conservative linear scan can still prove in AArch64 argument registers
+x0-x7 immediately before selected direct calls to the stream-buffer methods
+listed by the tool.
+
+The scan supports only MOVZ/MOVN/MOVK and ADD-immediate register updates. Any
+unrecognized instruction clears its abstract register state; an unconditional
+branch clears all state; a direct call clears caller-saved registers. Ambiguous
+targets and values above 0xffff are omitted. Output contains method labels,
+linear-window call ordinals and small register constants only—never native
+addresses, instruction bytes or APK data.
+
+This is **not** a control-flow graph, a complete AArch64 emulator, an ABI proof,
+or a runtime trace. A reported x-register constant is only a statically
+recoverable value at one direct-call site inside a bounded entry window. It
+does not establish the parameter's semantic name, whether the path executes,
+whether the call is reachable, or whether a value is a frame length. The
+existing framing candidate remains unverified and the real APK adapter stays
+disabled pending an authorized, redacted client-side fixture or local runtime
+trace.
