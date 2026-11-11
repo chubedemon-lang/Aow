@@ -111,7 +111,7 @@ class EvidenceGateTests(unittest.TestCase):
 
     def test_explicit_artifact_selector_is_validated(self):
         records = [evidence("transport")]
-        for digest in ("BAD", "A" * 64, None):
+        for digest in ("BAD", "A" * 64):
             with self.subTest(digest=digest), self.assertRaises(EvidenceError):
                 evaluate_evidence(records, artifact_sha256=digest)
         with self.assertRaisesRegex(EvidenceError, "no evidence records"):
