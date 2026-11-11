@@ -5,8 +5,51 @@ This is a provenance gate, not a parser for the original AOW protocol.
 import re
 from dataclasses import dataclass
 
-_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\\Z")
 _ALLOWED = frozenset({"apk", "local_capture", "decompiled_symbol", "test_observation"})
+
+# Public provenance text must not leak network locations or sensitive material.
+# Keep local repository/file references usable (for example docs/PROTOCOL.md).
+_URI_SCHEME = re.compile(r"\\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+_IPV4 = re.compile(
+    r"(?<![A-Za-z0-9_.])"
+    r"(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])"
+    r"(?:\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
+    r"(?![A-Za-z0-9_.])"
+)
+_IPV6 = re.compile(
+    r"(?<![0-9A-Fa-f:])"
+    r"(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}"
+    r"(?![0-9A-Fa-f:])"
+)
+_HOSTNAME = re.compile(
+    r"(?<![A-Za-z0-9_-])"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+"
+    r"[A-Za-z]{2,}(?::[0-9]{1,5})?"
+    r"(?![A-Za-z0-9_-])",
+    re.IGNORECASE,
+)
+_LOCALHOST = re.compile(
+    r"(?<![A-Za-z0-9_.-])localhost(?::[0-9]{1,5})?(?![A-Za-z0-9_.-])",
+    re.IGNORECASE,
+)
+_LOCAL_FILE_SUFFIXES = frozenset({
+    "apk", "bat", "c", "cfg", "cpp", "cs", "css", "csv", "dll", "go",
+    "h", "html", "ini", "java", "js", "json", "log", "md", "py", "ps1",
+    "rst", "sh", "so", "sql", "toml", "ts", "txt", "xml", "yaml", "yml",
+})
+_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"\\b(?:authorization|bearer|token|password|passwd|secret|"
+    r"api[_-]?key|access[_-]?key|refresh[_-]?token)\\s*[:=]\\s*\\S+",
+    re.IGNORECASE,
+)
+_BEARER_VALUE = re.compile(r"\\bBearer\\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
+_PACKET_BYTES = re.compile(
+    r"\\b(?:packet|capture|payload)_bytes\\s*[:=]", re.IGNORECASE
+)
+_PRIVATE_KEY = re.compile(
+    r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.IGNORECASE
+)
 
 
 class EvidenceError(ValueError):
@@ -20,6 +63,32 @@ class EvidenceRecord:
     source: str
     observation: str
     verified: bool
+
+
+def _contains_network_locator(value):
+    if (
+        _URI_SCHEME.search(value)
+        or _IPV4.search(value)
+        or _IPV6.search(value)
+        or _LOCALHOST.search(value)
+        or "@" in value
+    ):
+        return True
+    for match in _HOSTNAME.finditer(value):
+        suffix = match.group(0).rsplit(".", 1)[-1].split(":", 1)[0].lower()
+        if suffix not in _LOCAL_FILE_SUFFIXES:
+            return True
+    return False
+
+
+def _contains_sensitive_material(value):
+    return (
+        _contains_network_locator(value)
+        or _CREDENTIAL_ASSIGNMENT.search(value) is not None
+        or _BEARER_VALUE.search(value) is not None
+        or _PACKET_BYTES.search(value) is not None
+        or _PRIVATE_KEY.search(value) is not None
+    )
 
 
 def validate_record(record):
@@ -45,9 +114,8 @@ def validate_record(record):
             raise EvidenceError("control character in " + field)
         if value != value.strip() or not value.strip():
             raise EvidenceError("invalid whitespace in " + field)
-        # Keep public metadata free of URLs, network locations and credential hints.
-        if re.search(r"(?i)(?:https?://|www\.|\b(?:token|password|secret|apikey|api_key)\s*[:=]|\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b|@)", value):
-            raise EvidenceError("sensitive locator in " + field)
+        if _contains_sensitive_material(value):
+            raise EvidenceError("sensitive locator or material in " + field)
     if type(record["verified"]) is not bool:
         raise EvidenceError("verified must be boolean")
     if record["verified"] and (
