@@ -12,7 +12,7 @@ class UnverifiedProtocolError(RuntimeError):
     """The original APK wire format has not been established."""
 
 
-_SAFE_REFERENCE = re.compile(r"[A-Za-z0-9_./:#-]{1,160}\\Z")
+_SAFE_REFERENCE = re.compile(r"[A-Za-z0-9_./:#-]{1,160}\Z")
 _SECRET_REFERENCE = re.compile(
     r"(?i)(?:token|secret|password|apikey|api_key|credential)"
 )
