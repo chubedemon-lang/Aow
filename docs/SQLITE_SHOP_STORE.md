@@ -23,6 +23,12 @@ identical retry returns the original committed player and inventory snapshots,
 even after later mutations or catalog repricing/removal. Reusing the request
 ID with different character, revisions, offer ID or quantity is rejected.
 
+Before an idempotent replay is returned, the stored result JSON is validated
+for duplicate keys, non-finite values, exact field shapes, integer bounds,
+character/offer/quantity identity, and player/inventory revision columns. The
+nested inventory snapshot uses the same strict decoder as inventory receipts.
+Corrupted receipts fail closed instead of being coerced into a response.
+
 The shop receipt and the two existing mutation ledgers are written in the same
 SQLite transaction. Internal ledger request IDs are namespaced by a SHA-256
 digest of the shop request ID so the raw caller ID is not reused in either
