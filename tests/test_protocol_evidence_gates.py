@@ -6,8 +6,15 @@ from server.protocol_evidence_gates import STAGES, evaluate_evidence
 
 
 def evidence(topic, verified=True, artifact_sha256="a" * 64):
-    return Evidence(topic, artifact_sha256, "offline fixture observation",
-                    "authorized local inspection", verified)
+    return Evidence(
+        topic, artifact_sha256, "offline fixture observation", "il2cpp_offline",
+        verified,
+        "tests/test_protocol_evidence_gates.py" if verified else None,
+        (
+            "python -m unittest discover -s tests -p test_protocol_evidence_gates.py -v"
+            if verified else None
+        ),
+    )
 
 
 class EvidenceGateTests(unittest.TestCase):
@@ -20,6 +27,10 @@ class EvidenceGateTests(unittest.TestCase):
     def test_unverified_records_do_not_unlock(self):
         result = evaluate_evidence([evidence("transport", False)])
         self.assertFalse(result[0].ready)
+
+    def test_verified_flag_without_reproduction_cannot_unlock(self):
+        with self.assertRaises(EvidenceError):
+            Evidence("transport", "a" * 64, "offline observation", "il2cpp_offline", True)
 
     def test_prerequisites_required(self):
         result = {item.stage: item for item in evaluate_evidence(
@@ -63,7 +74,7 @@ class EvidenceGateTests(unittest.TestCase):
         self.assertEqual(result["movement"].missing, ("player", "map"))
 
     def test_invalid_collection_fails_closed(self):
-        for invalid in (None, {}, [object()], [evidence("transport"), None]):
+        for invalid in (None, {}, [object()], [evidence("transport", False), None]):
             with self.subTest(invalid=repr(invalid)):
                 with self.assertRaises(EvidenceError):
                     evaluate_evidence(invalid)
