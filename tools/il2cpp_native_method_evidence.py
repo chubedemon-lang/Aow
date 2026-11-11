@@ -341,6 +341,16 @@ def _decode_aarch64_ldr_x_unsigned(word):
     return target, base, offset
 
 
+def _decode_aarch64_mov_x_register(word):
+    """Decode the unshifted MOV Xd, Xm alias (ORR Xd, XZR, Xm, LSL #0)."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    if ((word & 0xFFE0FC00) != 0xAA000000
+            or (word & 0x3E0) != 0x3E0):
+        return None
+    return word & 0x1F, (word >> 16) & 0x1F
+
+
 def _decode_aarch64_blr_register(word):
     """Return the BLR source register, or None for another instruction."""
     if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
@@ -360,7 +370,7 @@ def _decode_aarch64_br_register(word):
 
 
 def _relocated_indirect_call_events(code, start_va, relocations):
-    """Resolve only contiguous ADRP/ADD/LDR/BLR-or-BR relocation-backed chains.
+    """Resolve relocation-backed ADRP/ADD/LDR/MOV-X/BLR-or-BR chains.
 
     Any unrecognized instruction clears the small abstract register state.
     This deliberately misses ordinary virtual calls and runtime-computed
@@ -405,6 +415,18 @@ def _relocated_indirect_call_events(code, start_va, relocations):
                 registers[target_register] = relocation[1]
             else:
                 registers.pop(target_register, None)
+            continue
+
+        move = _decode_aarch64_mov_x_register(word)
+        if move is not None:
+            destination, source = move
+            if destination != 31:
+                if source == 31:
+                    registers[destination] = 0
+                elif source in registers:
+                    registers[destination] = registers[source]
+                else:
+                    registers.pop(destination, None)
             continue
 
         call_register = _decode_aarch64_blr_register(word)
