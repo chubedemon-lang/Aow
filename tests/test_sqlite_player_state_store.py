@@ -212,7 +212,12 @@ class SqlitePlayerStateStoreTests(unittest.TestCase):
         )
         self.assertEqual(
             self.store.verify_integrity(),
-            {"snapshots": 2, "mutations": 2},
+            {
+                "snapshots": 2,
+                "mutations": 2,
+                "anchored_snapshots": 2,
+                "legacy_unanchored_snapshots": 0,
+            },
         )
 
     def test_verify_integrity_rejects_missing_first_receipt(self):
@@ -254,6 +259,103 @@ class SqlitePlayerStateStoreTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(PlayerStoreError, "no mutation history"):
             self.store.verify_integrity()
+
+
+    def test_verify_integrity_rejects_missing_creation_receipt(self):
+        self.store.create("hero", currency=100)
+        self.db.execute(
+            "DELETE FROM player_state_creations WHERE character_id='hero'"
+        )
+        with self.assertRaisesRegex(PlayerStoreError, "creation receipt is missing"):
+            self.store.verify_integrity()
+
+    def test_verify_integrity_rejects_tampered_creation_baseline(self):
+        self.store.create("hero", currency=100)
+        self.store.apply("hero", "baseline-first", 0, currency_delta=-10)
+        self.db.execute(
+            "UPDATE player_state_creations SET currency=99 "
+            "WHERE character_id='hero'"
+        )
+        with self.assertRaisesRegex(
+            PlayerStoreError, "receipt does not match history"
+        ):
+            self.store.verify_integrity()
+
+    def test_verify_integrity_rejects_creation_receipt_without_snapshot(self):
+        self.db.execute(
+            """INSERT INTO player_state_creations
+               (character_id, level, experience, currency)
+               VALUES ('missing', 1, 0, 0)"""
+        )
+        with self.assertRaisesRegex(
+            PlayerStoreError, "creation receipt has no player snapshot"
+        ):
+            self.store.verify_integrity()
+
+    def test_create_and_creation_receipt_are_atomic(self):
+        self.db.execute(
+            """CREATE TRIGGER reject_player_creation_receipt
+               BEFORE INSERT ON player_state_creations
+               BEGIN SELECT RAISE(ABORT, 'blocked'); END"""
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.create("hero", currency=50)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM player_state_snapshots WHERE character_id='hero'"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_legacy_schema_migrates_as_unanchored(self):
+        legacy_path = os.path.join(self.temp.name, "legacy.sqlite3")
+        legacy = sqlite3.connect(legacy_path, isolation_level=None)
+        legacy.execute(
+            """CREATE TABLE player_state_snapshots (
+                character_id TEXT PRIMARY KEY,
+                level INTEGER NOT NULL,
+                experience INTEGER NOT NULL,
+                currency INTEGER NOT NULL,
+                revision INTEGER NOT NULL
+            )"""
+        )
+        legacy.execute(
+            """CREATE TABLE player_state_mutations (
+                request_id TEXT PRIMARY KEY,
+                character_id TEXT NOT NULL,
+                expected_revision INTEGER NOT NULL,
+                requested_level INTEGER,
+                experience_delta INTEGER NOT NULL,
+                currency_delta INTEGER NOT NULL,
+                result_level INTEGER NOT NULL,
+                result_experience INTEGER NOT NULL,
+                result_currency INTEGER NOT NULL,
+                result_revision INTEGER NOT NULL
+            )"""
+        )
+        legacy.execute(
+            "INSERT INTO player_state_snapshots VALUES ('legacy', 1, 5, 10, 1)"
+        )
+        legacy.execute(
+            """INSERT INTO player_state_mutations VALUES
+               ('legacy-1', 'legacy', 0, NULL, 5, 10, 1, 5, 10, 1)"""
+        )
+        legacy.close()
+
+        connection = sqlite3.connect(legacy_path, isolation_level=None)
+        try:
+            migrated = SqlitePlayerStateStore(connection)
+            self.assertEqual(
+                migrated.verify_integrity(),
+                {
+                    "snapshots": 1,
+                    "mutations": 1,
+                    "anchored_snapshots": 0,
+                    "legacy_unanchored_snapshots": 1,
+                },
+            )
+        finally:
+            connection.close()
 
     def test_verify_integrity_requires_idle_connection(self):
         self.store.create("hero")
