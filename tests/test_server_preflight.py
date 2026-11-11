@@ -42,6 +42,87 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
         self.database = Path(self.temp.name) / "mock.sqlite3"
         Domain(self.database)
 
+    def _create_schema_variant(
+        self, path, *, unique=True, foreign_keys=True, checks=True, quantity_type="INTEGER"
+    ):
+        unique_clause = " UNIQUE" if unique else ""
+        character_fk = (
+            ", FOREIGN KEY(account_id) REFERENCES accounts(id)"
+            if foreign_keys else ""
+        )
+        wallet_fk = (
+            ", FOREIGN KEY(character_id) REFERENCES characters(id)"
+            if foreign_keys else ""
+        )
+        inventory_fk = (
+            ", FOREIGN KEY(character_id) REFERENCES characters(id)"
+            if foreign_keys else ""
+        )
+        balance_check = " CHECK(balance >= 0)" if checks else ""
+        price_check = " CHECK(price > 0)" if checks else ""
+        enabled_check = " CHECK(enabled IN (0,1))" if checks else ""
+        quantity_check = " CHECK(quantity >= 0)" if checks else ""
+        with sqlite3.connect(path) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE accounts (
+                    id INTEGER PRIMARY KEY,
+                    username TEXT NOT NULL%s
+                );
+                CREATE TABLE characters (
+                    id INTEGER PRIMARY KEY,
+                    account_id INTEGER NOT NULL%s,
+                    name TEXT NOT NULL,
+                    map_id TEXT NOT NULL DEFAULT 'test_map',
+                    x INTEGER NOT NULL DEFAULT 0,
+                    y INTEGER NOT NULL DEFAULT 0%s
+                );
+                CREATE TABLE wallets (
+                    character_id INTEGER PRIMARY KEY,
+                    balance INTEGER NOT NULL DEFAULT 0%s%s
+                );
+                CREATE TABLE shop_catalog (
+                    item_id TEXT PRIMARY KEY,
+                    price INTEGER NOT NULL%s,
+                    enabled INTEGER NOT NULL DEFAULT 1%s
+                );
+                CREATE TABLE inventory (
+                    character_id INTEGER NOT NULL,
+                    item_id TEXT NOT NULL,
+                    quantity %s NOT NULL%s,
+                    PRIMARY KEY(character_id, item_id)%s
+                );
+                """ % (
+                    unique_clause, unique_clause, character_fk, balance_check,
+                    wallet_fk, price_check, enabled_check, quantity_type,
+                    quantity_check, inventory_fk,
+                )
+            )
+
+    def test_rejects_same_column_names_without_unique_constraints(self):
+        database = Path(self.temp.name) / "missing_unique.sqlite3"
+        self._create_schema_variant(database, unique=False)
+        with self.assertRaisesRegex(PreflightError, "unique constraints"):
+            inspect_synthetic_database(database)
+
+    def test_rejects_missing_foreign_key_constraints(self):
+        database = Path(self.temp.name) / "missing_foreign_keys.sqlite3"
+        self._create_schema_variant(database, foreign_keys=False)
+        with self.assertRaisesRegex(PreflightError, "foreign-key constraints"):
+            inspect_synthetic_database(database)
+
+    def test_rejects_missing_check_constraints(self):
+        database = Path(self.temp.name) / "missing_checks.sqlite3"
+        self._create_schema_variant(database, checks=False)
+        with self.assertRaisesRegex(PreflightError, "CHECK constraints"):
+            inspect_synthetic_database(database)
+
+    def test_rejects_wrong_required_column_affinity(self):
+        database = Path(self.temp.name) / "wrong_type.sqlite3"
+        self._create_schema_variant(database, quantity_type="TEXT")
+        with self.assertRaisesRegex(PreflightError, "column definitions"):
+            inspect_synthetic_database(database)
+
     def test_valid_database_passes_read_only_preflight(self):
         result = run_preflight("127.0.0.1", 8765, self.database)
         self.assertEqual(result["status"], "ready_for_local_synthetic_testing")
