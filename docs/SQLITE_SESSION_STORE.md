@@ -14,6 +14,12 @@
 - Concurrent revocation against separate SQLite connections has one winner.
 - Rejects an already-active caller transaction instead of committing work owned by the caller.
 
+## Expired-session cleanup
+
+`purge_expired()` preserves the original behavior and removes every expired row in one transaction.
+
+For larger stores, callers can bound the write-lock duration by using `purge_expired(batch_size=500)`. A batch size must be an integer from 1 through 10,000 (booleans are rejected). The store removes at most that many oldest expired rows, ordered by expiry and token digest, and returns the number deleted. Repeat the call until it returns zero. Active sessions are never selected. The batch size is a cleanup control only; expiry is still enforced on every resolve operation.
+
 ## Integration requirements
 
 The caller must authenticate the account before calling `issue`; this method is trusted server code, not a public route. The caller must verify account/character ownership and authorize every state-changing request after `resolve`. Keep tokens out of logs and never accept client-selected account ids. Use a persistent SQLite database file and an epoch-based clock; do not use `time.monotonic` for persisted expiries.
