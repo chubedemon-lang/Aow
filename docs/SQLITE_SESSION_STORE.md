@@ -7,6 +7,7 @@
 - Issues 256-bit random URL-safe bearer tokens.
 - Persists only the SHA-256 token digest, account id, creation time and expiry time.
 - Uses epoch time so expiry survives process restarts; tests inject a deterministic clock.
+- Rejects finite clock values when adding the requested TTL cannot produce a strictly later, finite expiry timestamp; this avoids leaking a SQLite constraint error for unrepresentable epochs.
 - Uses `BEGIN IMMEDIATE` for issue, resolve/expiry cleanup, revocation and purge operations.
 - Evaluates the clock after acquiring the write lock, so waiting for SQLite does not bypass expiry.
 - Enforces expiry at the exact boundary (`now >= expires_at`).
