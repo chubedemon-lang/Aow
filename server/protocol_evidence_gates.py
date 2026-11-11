@@ -10,7 +10,7 @@ from server.protocol_evidence_registry import Evidence, EvidenceError
 
 
 STAGES = (
-    "transport", "framing", "handshake", "login", "session",
+    "transport", "framing", "serialization", "handshake", "login", "session",
     "player", "map", "movement", "inventory", "shop", "combat", "quest",
 )
 
