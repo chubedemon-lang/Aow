@@ -1,17 +1,21 @@
-# Evidence-gated transport boundary
+# Evidence ledger and transport boundary
 
-`server/transport.py` is an **offline interface only**. It does not open sockets, parse AOW frames, claim that the original APK connects, or contact official services. Default behavior raises `UnverifiedProtocolError`.
+The evidence ledger is public metadata only. It tracks the provenance and
+review status of offline observations; it does not contain an AOW packet
+schema and does not prove APK compatibility.
 
-A future codec must be backed by an authorized offline APK analysis report with a SHA-256 source identifier, a specific observation, and a review reference. The evidence object is metadata, **not proof** that the codec matches the APK; the `configured` property currently means only that evidence metadata and both codec callbacks were supplied. Compatibility must be demonstrated separately through authorized, local end-to-end tests with the unchanged APK.
+References are restricted to short repository-local locators such as
+`issue:2`, `docs/PROTOCOL.md#framing`, and
+`metadata/type:123`. The validator rejects URI schemes, DNS hostnames,
+IPv4/IPv6 literals, localhost, host:port values, and secret-like identifiers.
+Path-and-line references remain allowed. This is a conservative metadata
+filter, not a general-purpose data-loss-prevention system.
 
-Review references are deliberately restricted to short, sanitized local locators such as `issue:2` or `docs/PROTOCOL.md#framing`. URLs, double-slash paths, secret-like identifiers and unbounded values are rejected. Do not place endpoint strings, credentials, raw packet bytes or private capture paths in evidence metadata.
+Never put APK bytes, extracted proprietary assets, raw packet/capture bytes,
+private capture paths, endpoint values, account data, or credentials in this
+public ledger. Keep original artifacts and detailed native analysis in the
+authorized private workspace.
 
-Before a real codec can be implemented, document: transport selection; message framing; primitive serialization; handshake order; authentication ownership; request/response identifiers; encryption/compression if present; errors and reconnect semantics. Each fact needs a reproducible source reference and negative test. Keep original APKs, assets, tokens, endpoints with private paths, and raw traffic out of public commits.
-
-Synthetic test fixtures in `tests/test_transport.py` exercise fail-closed behavior, input validation and codec boundaries. They are not evidence of an original wire format.
-
-The evidence readiness sequence is transport → framing → serialization → handshake → login → session → player initialization → map join → movement → inventory → shop → combat → quest. Each stage requires its own verified evidence record; a later record cannot bypass a missing prerequisite. These gates track evidence coverage only and do not claim APK compatibility.
-
-**Fingerprint isolation:** `evaluate_evidence()` requires all records in one evaluation to refer to a single artifact SHA-256. If multiple fingerprints are present, the caller must pass `artifact_sha256` explicitly; the gate then filters to that artifact before evaluating prerequisites. Evidence from different APK builds must never be combined to make a stage appear ready. This is a bookkeeping safeguard, not a compatibility test.
-
-Primitive serializer findings from the authorized offline APK pass are not by themselves a complete message schema or proof that a specific serializer is used by the active transport. The serialization gate is deliberately separate from framing and handshake.
+`protocol_ready()` is an evidence bookkeeping gate only. It requires all
+required topics to have authorized end-to-end evidence for one APK fingerprint;
+offline static analysis and synthetic fixtures cannot satisfy that gate.
