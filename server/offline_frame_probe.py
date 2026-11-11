@@ -12,6 +12,7 @@ class FrameSpec:
     byteorder: str
     includes_header: bool = False
     max_payload: int = 1024 * 1024
+    max_chunk_bytes: int = 4 * 1024 * 1024
 
     def __post_init__(self):
         if type(self.length_bytes) is not int or self.length_bytes not in (1, 2, 4):
@@ -22,6 +23,8 @@ class FrameSpec:
             raise ValueError("includes_header must be bool")
         if type(self.max_payload) is not int or not (1 <= self.max_payload <= 16 * 1024 * 1024):
             raise ValueError("invalid max_payload")
+        if type(self.max_chunk_bytes) is not int or not (1 <= self.max_chunk_bytes <= 16 * 1024 * 1024):
+            raise ValueError("invalid max_chunk_bytes")
 
 
 class FrameDecodeError(ValueError):
@@ -47,6 +50,12 @@ class LengthFrameDecoder:
             raise FrameDecodeError("decoder failed; create a new instance")
         if not isinstance(chunk, bytes):
             raise TypeError("chunk must be bytes")
+        # Bound the amount copied into the decoder on any one call. A frame
+        # larger than this limit may still arrive over multiple feed calls.
+        if len(chunk) > self.spec.max_chunk_bytes:
+            self._pending.clear()
+            self._failed = True
+            raise FrameDecodeError("input chunk exceeds maximum")
         # A complete frame may be followed by another frame in one feed.
         self._pending.extend(chunk)
         frames = []

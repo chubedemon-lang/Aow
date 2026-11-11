@@ -44,6 +44,30 @@ class OfflineFrameProbeTests(unittest.TestCase):
         with self.assertRaises(FrameDecodeError):
             decoder.finish()
 
+    def test_oversized_feed_is_rejected_before_buffering_and_poisoned(self):
+        decoder = LengthFrameDecoder(
+            FrameSpec(1, "big", max_payload=8, max_chunk_bytes=3)
+        )
+        with self.assertRaises(FrameDecodeError):
+            decoder.feed(b"\x02abc")
+        self.assertEqual(decoder.pending_bytes, 0)
+        with self.assertRaises(FrameDecodeError):
+            decoder.feed(b"\x01x")
+
+    def test_fragmented_frame_can_exceed_per_feed_limit(self):
+        decoder = LengthFrameDecoder(
+            FrameSpec(1, "big", max_payload=8, max_chunk_bytes=3)
+        )
+        self.assertEqual(decoder.feed(b"\x04a"), [])
+        self.assertEqual(decoder.feed(b"bc"), [])
+        self.assertEqual(decoder.feed(b"d"), [b"abcd"])
+        decoder.finish()
+
+    def test_invalid_chunk_limits(self):
+        for value in (True, 0, -1, 16 * 1024 * 1024 + 1, "4"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                FrameSpec(1, "big", max_chunk_bytes=value)
+
     def test_reject_unbounded_or_ambiguous_config(self):
         for args in ((3, "big"), (2, "middle")):
             with self.assertRaises(ValueError):
