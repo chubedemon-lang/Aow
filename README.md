@@ -11,7 +11,7 @@ This repository does not rebuild Unity, modify APKs, or provide game client arti
 - No full game server is ready. See docs/SERVER_STATUS.md.
 
 ## Local synthetic runbook
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the localhost-only prototype startup and read-only SQLite preflight. This is not a production deployment or APK compatibility claim.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for server layering and protocol evidence gates, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the localhost-only prototype startup and read-only SQLite preflight. Neither is a production deployment or APK compatibility claim.
 
 ## Reproducible tests
 Run from the repository root:
