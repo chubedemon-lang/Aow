@@ -127,5 +127,28 @@ class AowPrimitiveCodecTests(unittest.TestCase):
         self.assertIs(reader.require_consumed(), reader)
 
 
+    def test_reader_snapshots_mutable_bytearray_input(self):
+        source = bytearray.fromhex("01020304")
+        reader = AowPrimitiveReader(source)
+        source[:] = bytes.fromhex("aabbccdd")
+        self.assertEqual(reader.read_int(), 0x01020304)
+        reader.require_consumed()
+
+    def test_reader_snapshots_readonly_view_of_mutable_input(self):
+        source = bytearray.fromhex("01020304")
+        readonly_view = memoryview(source).toreadonly()
+        reader = AowPrimitiveReader(readonly_view)
+        source[:] = bytes.fromhex("aabbccdd")
+        self.assertEqual(reader.read_int(), 0x01020304)
+        reader.require_consumed()
+
+    def test_reader_accepts_non_contiguous_memoryview(self):
+        source = bytearray.fromhex("01ff02ff03ff04ff")
+        strided_view = memoryview(source)[::2]
+        reader = AowPrimitiveReader(strided_view)
+        self.assertEqual(reader.read_int(), 0x01020304)
+        reader.require_consumed()
+
+
 if __name__ == "__main__":
     unittest.main()
