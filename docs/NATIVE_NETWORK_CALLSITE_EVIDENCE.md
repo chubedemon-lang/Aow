@@ -121,7 +121,7 @@ that a conservative linear scan can still prove in AArch64 argument registers
 x0-x7 immediately before selected direct calls to the stream-buffer methods
 listed by the tool.
 
-The scan supports only MOVZ/MOVN/MOVK and ADD-immediate register updates. Any
+The scan supports MOVZ/MOVN/MOVK, the unshifted MOV-register alias (ORR with XZR and LSL #0), and ADD-immediate register updates. Any
 unrecognized instruction clears its abstract register state; an unconditional
 branch clears all state; a direct call clears caller-saved registers. Ambiguous
 targets and values above 0xffff are omitted. Output contains method labels,
