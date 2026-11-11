@@ -4,6 +4,8 @@
 
 A future codec must be backed by an authorized offline APK analysis report with a SHA-256 source identifier, a specific observation, and a review reference. The evidence object is metadata, **not proof** that the codec matches the APK; the `configured` property currently means only that evidence metadata and both codec callbacks were supplied. Compatibility must be demonstrated separately through authorized, local end-to-end tests with the unchanged APK.
 
+Review references are deliberately restricted to short, sanitized local locators such as `issue:2` or `docs/PROTOCOL.md#framing`. URLs, double-slash paths, secret-like identifiers and unbounded values are rejected. Do not place endpoint strings, credentials, raw packet bytes or private capture paths in evidence metadata.
+
 Before a real codec can be implemented, document: transport selection; message framing; primitive serialization; handshake order; authentication ownership; request/response identifiers; encryption/compression if present; errors and reconnect semantics. Each fact needs a reproducible source reference and negative test. Keep original APKs, assets, tokens, endpoints with private paths, and raw traffic out of public commits.
 
 Synthetic test fixtures in `tests/test_transport.py` exercise fail-closed behavior, input validation and codec boundaries. They are not evidence of an original wire format.
