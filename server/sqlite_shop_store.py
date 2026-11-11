@@ -244,14 +244,26 @@ class SqliteShopStore:
 
         inventory = value["inventory"]
         try:
+            if type(inventory) is not dict:
+                raise ShopStoreError("invalid shop inventory receipt shape")
+            inventory_value = dict(inventory)
+            nested_character_id = inventory_value.get("character_id", character_id)
+            if nested_character_id != character_id:
+                raise ShopStoreError("shop inventory receipt character mismatch")
+            # Shop receipts historically keep character_id at the root rather
+            # than inside the nested inventory object. Supply that already
+            # validated identity to the shared strict inventory decoder.
+            inventory_value["character_id"] = character_id
             inventory_json = json.dumps(
-                inventory, separators=(",", ":"), ensure_ascii=True
+                inventory_value, separators=(",", ":"), ensure_ascii=True
             )
             inventory_snapshot = SqliteInventoryStore._decode_snapshot(
                 inventory_json,
                 expected_character_id=character_id,
                 expected_revision=expected_inventory_revision,
             )
+        except ShopStoreError:
+            raise
         except (InventoryStoreError, TypeError, ValueError) as exc:
             raise ShopStoreError("invalid shop inventory receipt") from exc
 
