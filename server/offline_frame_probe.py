@@ -28,7 +28,7 @@ class FrameSpec:
 
 
 class FrameDecodeError(ValueError):
-    """Malformed or oversized frame."""
+    """Malformed, oversized, or post-EOF frame input."""
 
 
 class LengthFrameDecoder:
@@ -40,6 +40,7 @@ class LengthFrameDecoder:
         self.spec = spec
         self._pending = bytearray()
         self._failed = False
+        self._finished = False
 
     @property
     def pending_bytes(self):
@@ -48,6 +49,8 @@ class LengthFrameDecoder:
     def feed(self, chunk):
         if self._failed:
             raise FrameDecodeError("decoder failed; create a new instance")
+        if self._finished:
+            raise FrameDecodeError("decoder already finished; create a new instance")
         if not isinstance(chunk, bytes):
             raise TypeError("chunk must be bytes")
         # Bound the amount copied into the decoder on any one call. A frame
@@ -80,8 +83,17 @@ class LengthFrameDecoder:
         return frames
 
     def finish(self):
-        """Reject truncated streams instead of silently dropping bytes."""
+        """End the stream; reject and discard any truncated final frame.
+
+        EOF is terminal even when the stream ends cleanly. Create a new
+        decoder for a new connection rather than feeding bytes after finish().
+        """
         if self._failed:
             raise FrameDecodeError("decoder failed")
+        if self._finished:
+            raise FrameDecodeError("decoder already finished")
+        self._finished = True
         if self._pending:
+            self._pending.clear()
+            self._failed = True
             raise FrameDecodeError("truncated final frame")
