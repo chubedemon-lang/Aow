@@ -161,15 +161,85 @@ class SqliteInventoryStore:
         )
 
     @staticmethod
-    def _decode_snapshot(raw):
-        value = json.loads(raw)
+    def _decode_snapshot(raw, *, expected_character_id=None,
+                         expected_revision=None):
+        """Decode and validate a durable idempotency receipt before replay.
+
+        SQLite receipt rows are durable state, not trusted merely because this
+        process originally wrote them. Reject ambiguous JSON and values that
+        Python would otherwise coerce (notably bool to int or numbers to str).
+        """
+        def reject_constant(_value):
+            raise InventoryStoreError(
+                "non-finite JSON value in inventory receipt snapshot"
+            )
+
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise InventoryStoreError(
+                        "duplicate JSON key in inventory receipt snapshot"
+                    )
+                result[key] = value
+            return result
+
+        if type(raw) is not str or len(raw) > 512 * 1024:
+            raise InventoryStoreError("invalid inventory receipt snapshot JSON")
+        try:
+            value = json.loads(
+                raw,
+                object_pairs_hook=unique_object,
+                parse_constant=reject_constant,
+            )
+        except InventoryStoreError:
+            raise
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise InventoryStoreError(
+                "invalid inventory receipt snapshot JSON"
+            ) from exc
+
+        expected_keys = {
+            "character_id", "capacity", "max_stack", "revision", "items"
+        }
+        if type(value) is not dict or set(value) != expected_keys:
+            raise InventoryStoreError("invalid inventory receipt snapshot")
+
+        character_id = SqliteInventoryStore._character_id(value["character_id"])
+        capacity = value["capacity"]
+        max_stack = value["max_stack"]
+        revision = value["revision"]
+        items = value["items"]
+        if (type(capacity) is not int or not 1 <= capacity <= _MAX_CAPACITY
+                or type(max_stack) is not int
+                or not 1 <= max_stack <= _MAX_STACK
+                or type(revision) is not int
+                or not 0 <= revision <= _MAX_REVISION
+                or type(items) is not list or len(items) > capacity):
+            raise InventoryStoreError("invalid inventory receipt snapshot")
+        if (expected_character_id is not None
+                and character_id != expected_character_id):
+            raise InventoryStoreError("inventory receipt character mismatch")
+        if (expected_revision is not None
+                and (type(expected_revision) is not int
+                     or revision != expected_revision)):
+            raise InventoryStoreError("inventory receipt revision mismatch")
+
+        decoded = []
+        previous_id = None
+        for pair in items:
+            if type(pair) is not list or len(pair) != 2:
+                raise InventoryStoreError("invalid inventory receipt item")
+            item_id = SqliteInventoryStore._item_id(pair[0])
+            quantity = pair[1]
+            if (type(quantity) is not int or not 1 <= quantity <= max_stack
+                    or (previous_id is not None and item_id <= previous_id)):
+                raise InventoryStoreError("invalid inventory receipt item")
+            decoded.append((item_id, quantity))
+            previous_id = item_id
+
         return InventorySnapshot(
-            character_id=value["character_id"],
-            capacity=int(value["capacity"]),
-            max_stack=int(value["max_stack"]),
-            revision=int(value["revision"]),
-            items=tuple((str(item_id), int(quantity))
-                        for item_id, quantity in value["items"]),
+            character_id, capacity, max_stack, revision, tuple(decoded)
         )
 
     @staticmethod
@@ -456,8 +526,9 @@ class SqliteInventoryStore:
             self.db.execute("BEGIN IMMEDIATE")
         try:
             previous = self.db.execute(
-                "SELECT character_id, expected_revision, payload_json, result_json "
-                "FROM inventory_mutations WHERE request_id=?", (request_id,)
+                "SELECT character_id, expected_revision, payload_json, result_json, "
+                "result_revision FROM inventory_mutations WHERE request_id=?",
+                (request_id,),
             ).fetchone()
             if previous is not None:
                 if tuple(previous[:3]) != (
@@ -466,7 +537,15 @@ class SqliteInventoryStore:
                     raise InventoryOperationConflict(
                         "request id reused with different inventory mutation"
                     )
-                snapshot = self._decode_snapshot(previous[3])
+                result_revision = previous[4]
+                if (type(result_revision) is not int
+                        or result_revision != expected_revision + 1):
+                    raise InventoryStoreError("invalid inventory receipt revision")
+                snapshot = self._decode_snapshot(
+                    previous[3],
+                    expected_character_id=character_id,
+                    expected_revision=result_revision,
+                )
                 if owns_transaction:
                     self.db.commit()
                 return InventoryMutation(snapshot, True)
