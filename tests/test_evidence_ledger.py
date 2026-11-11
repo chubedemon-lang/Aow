@@ -51,6 +51,28 @@ class EvidenceLedgerTests(unittest.TestCase):
             with self.subTest(ref=ref), self.assertRaises(ValueError):
                 self.record(reference=ref)
 
+    def test_reject_dns_ip_ipv6_localhost_and_host_port_references(self):
+        examples = (
+            "ftp://private.example/path",
+            "file:///tmp/capture",
+            "wss://private.example/socket",
+            "game.example.org",
+            "192.168.1.20",
+            "2001:db8::1",
+            "[2001:db8::1]:443",
+            "localhost:8080",
+            "internal-host:9000",
+        )
+        for ref in examples:
+            with self.subTest(ref=ref), self.assertRaises(ValueError):
+                self.record(reference=ref)
+
+    def test_accepts_local_issue_and_repository_references(self):
+        for ref in ("issue:2", "docs/PROTOCOL.md#framing",
+                    "metadata/type:123", "tests/test_evidence_ledger.py"):
+            with self.subTest(ref=ref):
+                self.record(reference=ref)
+
     def test_reject_unsubstantiated_e2e(self):
         with self.assertRaises(ValueError):
             self.record(status=EvidenceStatus.VERIFIED_END_TO_END)
