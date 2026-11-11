@@ -436,9 +436,16 @@ def _relocated_indirect_call_targets(code, start_va, relocations):
 
 
 def _summarize_relocated_indirect_calls(code, start_va, relocations, method_targets):
-    """Resolve statically loaded indirect calls to unique metadata method labels."""
+    """Resolve indirect calls and preserve order among uniquely resolved labels.
+
+    The sequence is only for relocation-backed indirect events in this bounded
+    linear window. It omits unresolved/ambiguous events and is not interleaved
+    with direct BL calls or a control-flow execution trace.
+    """
     calls = Counter()
     tails = Counter()
+    call_sequence = []
+    tail_sequence = []
     unresolved_calls = 0
     unresolved_tails = 0
     ambiguous_calls = 0
@@ -446,7 +453,13 @@ def _summarize_relocated_indirect_calls(code, start_va, relocations, method_targ
     for kind, target in _relocated_indirect_call_events(code, start_va, relocations):
         labels = method_targets.get(target, ()) if target is not None else ()
         if len(labels) == 1:
-            (calls if kind == "call" else tails)[labels[0]] += 1
+            label = labels[0]
+            if kind == "call":
+                calls[label] += 1
+                call_sequence.append(label)
+            else:
+                tails[label] += 1
+                tail_sequence.append(label)
         elif len(labels) > 1:
             if kind == "call":
                 ambiguous_calls += 1
@@ -458,14 +471,14 @@ def _summarize_relocated_indirect_calls(code, start_va, relocations, method_targ
             unresolved_tails += 1
     return {
         "resolved_indirect_method_call_counts": dict(sorted(calls.items())),
+        "resolved_indirect_method_call_sequence": call_sequence,
         "resolved_indirect_tail_method_call_counts": dict(sorted(tails.items())),
+        "resolved_indirect_tail_method_call_sequence": tail_sequence,
         "unresolved_indirect_call_count": unresolved_calls,
         "unresolved_indirect_tail_call_count": unresolved_tails,
         "ambiguous_indirect_call_count": ambiguous_calls,
         "ambiguous_indirect_tail_call_count": ambiguous_tails,
     }
-
-
 def _summarize_aarch64_calls(code, start_va, helper_targets):
     """Summarize direct calls to allowlisted serializer helpers without addresses."""
     if not isinstance(code, bytes) or len(code) % 4:
