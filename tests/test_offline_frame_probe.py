@@ -73,7 +73,10 @@ class OfflineFrameProbeTests(unittest.TestCase):
         self.assertEqual(
             FrameSpec(1, "big", includes_header=True).max_payload, 254
         )
-        self.assertEqual(FrameSpec(2, "big").max_payload, 1024 * 1024)
+        self.assertEqual(FrameSpec(2, "big").max_payload, 65535)
+        self.assertEqual(
+            FrameSpec(2, "big", includes_header=True).max_payload, 65533
+        )
         self.assertEqual(FrameSpec(4, "big").max_payload, 1024 * 1024)
 
     def test_payload_limit_must_fit_length_field(self):
