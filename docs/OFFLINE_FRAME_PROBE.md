@@ -11,7 +11,7 @@ Before claiming APK compatibility: trace the IL2CPP transport and serialization 
 
 ## Resource bounds
 
-`FrameSpec.max_chunk_bytes` caps each individual `feed()` call (default 4 MiB, hard maximum 16 MiB). A frame may be fragmented across multiple calls, so `max_payload` can exceed the per-call limit. An oversized feed poisons the decoder and clears pending bytes before copying the chunk into its internal buffer. This is a synthetic parser safety limit, not an AOW protocol limit.
+`FrameSpec.max_chunk_bytes` caps each individual `feed()` call (default 4 MiB, hard maximum 16 MiB). A frame may be fragmented across multiple calls, so `max_payload` can exceed the per-call limit. The configured payload cap must also fit the maximum value representable by the selected length field (subtracting the header width when the length includes the header); impossible configurations fail at construction instead of silently advertising unreachable limits. An oversized feed poisons the decoder and clears pending bytes before copying the chunk into its internal buffer. These are synthetic parser safety limits, not AOW protocol limits.
 
 ## End-of-stream semantics
 
