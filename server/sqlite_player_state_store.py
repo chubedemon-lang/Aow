@@ -371,6 +371,14 @@ class SqlitePlayerStateStore:
                     raise PlayerStoreError(
                         "player snapshot revision has no mutation history"
                     )
+            elif historical.revision != snapshot.revision:
+                if snapshot.revision > historical.revision:
+                    raise PlayerStoreError(
+                        "player snapshot revision has no mutation history"
+                    )
+                raise PlayerStoreError(
+                    "current player snapshot does not match mutation history"
+                )
             elif historical != snapshot:
                 raise PlayerStoreError(
                     "current player snapshot does not match mutation history"
