@@ -20,6 +20,14 @@ def movz_w(register, immediate, shift=0):
     return 0x52800000 | ((shift // 16) << 21) | (immediate << 5) | register
 
 
+def mov_x(destination, source):
+    return 0xAA0003E0 | (source << 16) | destination
+
+
+def mov_w(destination, source):
+    return 0x2A0003E0 | (source << 16) | destination
+
+
 def add_x(register, source, immediate):
     return 0x91000000 | (immediate << 10) | (source << 5) | register
 
@@ -77,7 +85,7 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 4})
 
     def test_unknown_instruction_clears_register_state(self):
-        code = words(movz_x(1, 4), 0xAA0003E0, bl(0x1008, self.target))
+        code = words(movz_x(1, 4), 0x8B010000, bl(0x1008, self.target))
         result = summarize_small_argument_constants(
             code, 0x1000, self.targets, target_prefixes=self.prefixes
         )
@@ -132,6 +140,42 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
             summarize_small_argument_constants(
                 b"", 0x1000, self.targets, target_prefixes=()
             )
+
+    def test_tracks_unshifted_x_register_move_alias(self):
+        code = words(movz_x(2, 4), mov_x(1, 2), bl(0x1008, self.target))
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"]["x1"], 4)
+
+    def test_tracks_w_register_move_with_zero_extension(self):
+        code = words(movz_x(2, 1, 32), mov_w(1, 2), bl(0x1008, self.target))
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 0})
+
+    def test_move_from_zero_register_produces_zero(self):
+        code = words(mov_x(1, 31), bl(0x1004, self.target))
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 0})
+
+    def test_move_to_zero_register_does_not_clobber_other_constants(self):
+        code = words(movz_x(1, 4), mov_x(31, 2), bl(0x1008, self.target))
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"]["x1"], 4)
+
+    def test_shifted_orr_is_not_misclassified_as_mov_alias(self):
+        shifted_orr = 0xAA0007E0 | (2 << 16) | 1
+        code = words(movz_x(1, 4), shifted_orr, bl(0x1008, self.target))
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result, [])
 
     def test_move_wide_decoder_rejects_invalid_register_and_shift(self):
         self.assertIsNone(_decode_move_wide(0xD280003F))  # XZR destination
