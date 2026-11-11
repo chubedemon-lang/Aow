@@ -24,8 +24,11 @@ class SqliteQuestInventoryAwardStoreTests(unittest.TestCase):
         self.awards = SqliteQuestInventoryAwardStore(self.db, self.inventory)
 
     def grant(self, request_id="quest-once"):
+        return self.grant_for("hero", request_id)
+
+    def grant_for(self, character_id, request_id):
         return self.awards.grant_once(
-            "hero", request_id, 0, 42, "potion", 2
+            character_id, request_id, 0, 42, "potion", 2
         )
 
     def tamper_result(self, request_id, raw):
@@ -89,10 +92,13 @@ class SqliteQuestInventoryAwardStoreTests(unittest.TestCase):
         for index, raw in enumerate(cases):
             with self.subTest(index=index):
                 request_id = "bad-value-" + str(index)
-                self.grant(request_id)
+                character_id = "hero-" + str(index)
+                self.inventory.create(character_id, capacity=5, max_stack=20)
+                self.grant_for(character_id, request_id)
+                raw = raw.replace('"hero"', '"' + character_id + '"')
                 self.tamper_result(request_id, raw)
                 with self.assertRaises(QuestInventoryAwardError):
-                    self.grant(request_id)
+                    self.grant_for(character_id, request_id)
 
     def test_replay_rejects_noncanonical_item_order(self):
         self.grant()
