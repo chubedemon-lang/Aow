@@ -19,6 +19,13 @@ on:
       - 'server/aow_primitive_codec.py'
       - 'tests/test_aow_primitive_codec.py'
       - 'docs/AOW_PRIMITIVE_SERIALIZATION.md'
+      - 'server/protocol_evidence_registry.py'
+      - 'tests/test_protocol_evidence_registry.py'
+      - 'server/protocol_evidence_gates.py'
+      - 'tests/test_protocol_evidence_gates.py'
+      - 'server/evidence_ledger.py'
+      - 'tests/test_evidence_ledger.py'
+      - 'docs/TRANSPORT_EVIDENCE_GATE.md'
       - 'docs/PROTOCOL.md'
       - 'docs/IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md'
       - '.github/workflows/protocol-tests.yml'
@@ -33,8 +40,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Compile offline analysis tools
-        run: python -m py_compile tools/protocol_candidates.py tools/il2cpp_metadata_inventory.py tools/il2cpp_type_inventory.py tools/il2cpp_native_method_evidence.py tools/il2cpp_network_callsite_evidence.py server/aow_primitive_codec.py
+      - name: Compile offline analysis and evidence tools
+        run: |
+          python -m py_compile \
+            tools/protocol_candidates.py \
+            tools/il2cpp_metadata_inventory.py \
+            tools/il2cpp_type_inventory.py \
+            tools/il2cpp_native_method_evidence.py \
+            tools/il2cpp_network_callsite_evidence.py \
+            server/aow_primitive_codec.py \
+            server/protocol_evidence_registry.py \
+            server/protocol_evidence_gates.py \
+            server/evidence_ledger.py
       - name: Protocol candidate scanner tests (synthetic input only)
         run: python -m unittest discover -s tests -p 'test_protocol_candidates.py' -v
       - name: IL2CPP metadata inventory tests (synthetic fixtures only)
@@ -47,3 +64,9 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_il2cpp_network_callsite_evidence.py' -v
       - name: AOW primitive codec tests (synthetic vectors only)
         run: python -m unittest discover -s tests -p 'test_aow_primitive_codec.py' -v
+      - name: Protocol evidence registry tests (metadata only)
+        run: python -m unittest discover -s tests -p 'test_protocol_evidence_registry.py' -v
+      - name: Ordered protocol evidence gate tests (metadata only)
+        run: python -m unittest discover -s tests -p 'test_protocol_evidence_gates.py' -v
+      - name: End-to-end evidence ledger tests (metadata only)
+        run: python -m unittest discover -s tests -p 'test_evidence_ledger.py' -v
