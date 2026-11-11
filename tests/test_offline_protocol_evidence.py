@@ -81,14 +81,17 @@ class EvidenceManifestTests(unittest.TestCase):
         for field in ("method", "reproduction", "test_reference", "notes"):
             with self.subTest(field=field):
                 with self.assertRaises(EvidenceError):
-                    validate_record(sample(**{field: "review https://example.invalid/private?q=token"}))
+                    validate_record(sample(**{
+                        field: "review https://example.invalid/private?q=token"
+                    }))
 
     def test_rejects_ipv4_endpoints_in_free_text(self):
         with self.assertRaises(EvidenceError):
             validate_record(sample(notes="observed endpoint 192.0.2.10"))
 
     def test_rejects_credential_assignments(self):
-        for value in ("token=abc123", "password:secret", "api_key=xyz", "Authorization:Bearer abc123"):
+        for value in ("token=abc123", "password:secret", "api_key=xyz",
+                      "Authorization:Bearer abc123"):
             with self.subTest(value=value):
                 with self.assertRaises(EvidenceError):
                     validate_record(sample(notes=value))
@@ -110,6 +113,42 @@ class EvidenceManifestTests(unittest.TestCase):
             notes="Credentials and endpoint values omitted",
         ))
         self.assertEqual(item["status"], "unverified")
+
+    def test_rejects_non_http_uri_schemes(self):
+        examples = (
+            "ftp://capture.example.invalid/trace",
+            "file:///private/capture.pcap",
+            "wss://capture.example.invalid/socket",
+        )
+        for value in examples:
+            with self.subTest(value=value), self.assertRaises(EvidenceError):
+                validate_record(sample(notes=value))
+
+    def test_rejects_dns_hostnames_and_host_ports(self):
+        examples = (
+            "capture.example.invalid",
+            "capture.example.invalid:443",
+            "private-host.internal",
+            "localhost:8765",
+        )
+        for value in examples:
+            with self.subTest(value=value), self.assertRaises(EvidenceError):
+                validate_record(sample(notes=value))
+
+    def test_rejects_ipv6_literals(self):
+        for value in ("2001:db8::1", "[2001:db8::1]:443", "::1"):
+            with self.subTest(value=value), self.assertRaises(EvidenceError):
+                validate_record(sample(notes=value))
+
+    def test_allows_local_repository_file_references(self):
+        for value in (
+            "tests/test_offline_protocol_evidence.py",
+            "docs/PROTOCOL.md",
+            "server/offline_protocol_evidence.py",
+        ):
+            with self.subTest(value=value):
+                item = validate_record(sample(test_reference=value))
+                self.assertEqual(item["test_reference"], value)
 
 
 if __name__ == "__main__":
