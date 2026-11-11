@@ -119,7 +119,7 @@ The repository now contains a local-only PBKDF2-HMAC-SHA256 credential verifier 
 
 ## Conservative relocation-backed indirect-call analysis — 2026-11-11
 
-The offline native-method analyzer now has an additional **tool capability** for a narrow AArch64 pattern: a contiguous ADRP, optional 64-bit ADD immediate, 64-bit unsigned-offset LDR, then BLR or BR. The loaded pointer is accepted only when the corresponding ELF relocation is R_AARCH64_RELATIVE, and the target must also match a unique metadata-backed executable method entry before a method label is reported.
+The offline native-method analyzer now has an additional **tool capability** for a narrow AArch64 pattern: a conservative ADRP/optional 64-bit ADD/64-bit unsigned-offset LDR sequence with optional unshifted 64-bit MOV-register aliases (`MOV Xd, Xm`) before BLR or BR. The loaded pointer is accepted only when the corresponding ELF relocation is R_AARCH64_RELATIVE, and the target must also match a unique metadata-backed executable method entry before a method label is reported.
 
 The scanner clears its tracked register state on any unrecognized instruction (except NOP). Missing/non-relative relocations, ambiguous metadata targets, ordinary virtual calls and runtime-computed pointers remain unresolved. Output contains method labels and aggregate counts only; no native addresses or instruction words are emitted.
 
@@ -129,3 +129,10 @@ This change adds synthetic instruction/relocation tests only. **No new APK analy
 ## Framing candidate update — 2026-11-11
 
 A read-only disassembly pass over the exact APK fingerprint recorded in docs/NATIVE_NETWORK_CALLSITE_EVIDENCE.md found a receive-side four-byte read followed by deserializeInt and a second read count derived from the returned integer. The send-side entry window contains serializeInt, compression and stream-write callsites. This is consistent with a four-byte big-endian length-prefix path, but remains a static candidate: no authorized wire fixture or runtime trace confirms the field relationship, active branch, or complete frame. In particular, do not equate the candidate with NetworkSettings.HeaderLength until its value and use are traced. The actual APK adapter remains blocked.
+
+
+The resolver also tracks the exact unshifted 64-bit `MOV Xd, Xm` alias when
+it copies a previously tracked value. It treats XZR as zero, ignores writes
+to XZR, and does not accept shifted ORR, W-register aliases, or unknown source
+values as pointer evidence. This is synthetic analyzer coverage only; it does
+not add a new APK observation or change the framing/login confidence level.
