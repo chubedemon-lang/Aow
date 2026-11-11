@@ -73,9 +73,9 @@ The analyzer bounds each method window at the next distinct executable entry
 in the same ELF section, with a maximum window size. Such a window can include
 multiple branches, cold paths, shared code or instructions after an early
 return. Direct-call counts are not a statement of execution order. Indirect
-calls are resolved only for the narrow relocation-backed ADRP/ADD/LDR/BLR-or-BR
-pattern and a unique metadata method target; all other indirect calls remain
-unresolved.
+calls are resolved only for a narrow relocation-backed ADRP/ADD/LDR chain
+with optional unshifted MOV X-register copies before BLR or BR, and a unique
+metadata method target; all other indirect calls remain unresolved.
 
 ## Next native investigation
 
@@ -154,3 +154,19 @@ control-flow graph, a complete serializer field order, or proof that every
 listed call executes on a real login path. It is useful for selecting the next
 offline inspection targets, but cannot establish the LoginRequest wire schema
 or enable the APK adapter.
+
+
+## Unshifted MOV X-register copy support — tooling only
+
+The conservative indirect-call resolver also recognizes the exact AArch64
+64-bit MOV-register alias `ORR Xd, XZR, Xm, LSL #0`. A tracked pointer value
+may be copied between X registers before the relocation-backed indirect call.
+Writing to XZR has no effect on tracked state; reading XZR produces the known
+zero value, which is not promoted to a metadata method target. Unknown source
+registers invalidate only the destination value. Shifted ORR forms, W-register
+moves, and other variants remain unsupported and therefore clear tracked
+state as unrecognized instructions.
+
+Synthetic instruction-vector tests cover copied pointers, unknown sources,
+zero-register behavior and rejection of shifted/non-64-bit aliases. This is a
+tooling capability only; no new APK pass or runtime trace is implied.
