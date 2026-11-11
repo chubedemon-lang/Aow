@@ -11,6 +11,7 @@
 - Guards mutations with an expected inventory revision.
 - Stores an idempotency receipt in the same `BEGIN IMMEDIATE` transaction as the inventory change.
 - An exact retry returns the original committed snapshot, even after later mutations.
+- Before replay, receipt JSON is schema-checked: duplicate keys, non-finite values, booleans in integer fields, malformed item rows, non-canonical item ordering, and character/revision mismatches are rejected as inventory corruption.
 - Reusing a request ID for a different character, expected revision or payload is rejected.
 - Rejects underflow, stack overflow, capacity overflow, empty net mutations and oversized batches without changing state.
 - Supports reopening the same private SQLite database file.
