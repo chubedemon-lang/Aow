@@ -116,6 +116,7 @@ def _validate_reproduction(value):
         type(value) is not str
         or _REPRODUCTION.fullmatch(value) is None
         or value != value.strip()
+        or value.startswith("/")
         or "//" in value
         or any(part in {".", ".."} for part in value.split("/"))
         or _contains_sensitive_material(value)
