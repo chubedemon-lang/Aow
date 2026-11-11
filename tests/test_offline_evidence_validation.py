@@ -51,15 +51,24 @@ class EvidenceValidationTests(unittest.TestCase):
                 with self.assertRaises(EvidenceError):
                     validate_record({**self.valid, field: value})
 
-
     def test_rejects_sensitive_locations_and_credential_hints(self):
         examples = (
             "https://example.org/trace",
+            "ftp://example.org/trace",
+            "wss://example.org/socket",
             "www.example.org",
+            "api.example.org:443",
             "192.168.1.20",
+            "2001:db8::1",
+            "[2001:db8::1]:443",
+            "localhost:8080",
             "token=sample",
             "password: sample",
             "api_key=sample",
+            "authorization: Bearer sample-value",
+            "Bearer abcdefghijklmnop",
+            "packet_bytes=deadbeef",
+            "-----BEGIN PRIVATE KEY-----",
             "person@example.org",
             " trailing ",
         )
@@ -69,10 +78,22 @@ class EvidenceValidationTests(unittest.TestCase):
                     with self.assertRaises(EvidenceError):
                         validate_record({**self.valid, field: value})
 
+    def test_accepts_sanitized_repository_local_references(self):
+        for value in (
+            "issue:2",
+            "docs/PROTOCOL.md#framing",
+            "tests/test_offline_evidence_validation.py",
+        ):
+            for field in ("source", "observation"):
+                with self.subTest(field=field, value=value):
+                    result = validate_record({**self.valid, field: value})
+                    self.assertEqual(getattr(result, field), value)
+
     def test_rejects_whitespace_only_even_if_unverified(self):
         for field in ("source", "observation"):
             with self.subTest(field=field), self.assertRaises(EvidenceError):
                 validate_record({**self.valid, field: "   ", "verified": False})
+
 
 if __name__ == "__main__":
     unittest.main()
