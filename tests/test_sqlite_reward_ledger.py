@@ -64,6 +64,52 @@ class DurableRewardTests(unittest.TestCase):
         finally:
             second.close()
 
+    def test_constructor_rejects_non_sqlite_connection(self):
+        with self.assertRaises(TypeError):
+            SqliteRewardLedger(None)
+
+    def test_constructor_does_not_commit_caller_transaction(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        try:
+            connection.execute("CREATE TABLE caller_work (value INTEGER)")
+            connection.execute("BEGIN")
+            connection.execute("INSERT INTO caller_work VALUES (1)")
+            with self.assertRaisesRegex(ValueError, "active transaction"):
+                SqliteRewardLedger(connection)
+            self.assertTrue(connection.in_transaction)
+            connection.rollback()
+            self.assertEqual(
+                connection.execute("SELECT count(*) FROM caller_work").fetchone()[0],
+                0,
+            )
+            tables = {
+                row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            self.assertNotIn("reward_balances", tables)
+            self.assertNotIn("reward_receipts", tables)
+        finally:
+            connection.close()
+
+    def test_grant_rejects_caller_transaction_without_rolling_it_back(self):
+        self.db.execute("CREATE TABLE caller_work (value INTEGER)")
+        self.db.commit()
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_work VALUES (7)")
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            self.ledger.grant_once("nested", "p1", 3, "gem", 2)
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM caller_work").fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM reward_receipts").fetchone()[0],
+            0,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

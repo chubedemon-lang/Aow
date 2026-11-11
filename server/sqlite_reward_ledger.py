@@ -12,6 +12,10 @@ class RewardConflict(ValueError):
 
 class SqliteRewardLedger:
     def __init__(self, connection: sqlite3.Connection):
+        if not isinstance(connection, sqlite3.Connection):
+            raise TypeError("sqlite connection required")
+        if connection.in_transaction:
+            raise ValueError("connection must not have an active transaction")
         self.db = connection
         self.db.execute("""CREATE TABLE IF NOT EXISTS reward_balances (
             player_id TEXT NOT NULL, item_id TEXT NOT NULL,
@@ -28,7 +32,9 @@ class SqliteRewardLedger:
         """Return True on new grant, False on identical replay.
 
         BEGIN IMMEDIATE serializes writers to the same SQLite database.
-        The caller must use a connection not already inside a transaction.
+        The connection must be idle before this operation. Reject an active
+        caller transaction before issuing BEGIN so caller-owned work is never
+        accidentally committed or rolled back by this method.
         """
         if not all(type(v) is str and v.strip() for v in (request_id, player_id, item_id)):
             raise ValueError("invalid identifier")
@@ -36,6 +42,8 @@ class SqliteRewardLedger:
             raise ValueError("invalid quest")
         if type(quantity) is not int or quantity <= 0:
             raise ValueError("invalid quantity")
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
         self.db.execute("BEGIN IMMEDIATE")
         try:
             previous = self.db.execute(
