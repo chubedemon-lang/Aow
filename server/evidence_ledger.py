@@ -10,11 +10,11 @@ import re
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _REFERENCE = re.compile(r"^[A-Za-z0-9_./:#-]{1,160}$")
-_URI_SCHEME = re.compile(r"\\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+_URI_SCHEME = re.compile(r"\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _IPV4 = re.compile(
     r"(?<![A-Za-z0-9_.])"
     r"(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])"
-    r"(?:\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
+    r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
     r"(?![A-Za-z0-9_.])"
 )
 _IPV6 = re.compile(
@@ -24,7 +24,7 @@ _IPV6 = re.compile(
 )
 _HOSTNAME = re.compile(
     r"(?<![A-Za-z0-9_-])"
-    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
     r"[A-Za-z]{2,}(?::[0-9]{1,5})?"
     r"(?![A-Za-z0-9_-])",
     re.IGNORECASE,
