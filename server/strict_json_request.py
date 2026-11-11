@@ -10,6 +10,9 @@ class JsonRequestError(ValueError):
     """The HTTP body is not one bounded, unambiguous JSON object."""
 
 
+_MAX_JSON_INTEGER_DIGITS = 128
+
+
 def _unique_object(pairs):
     result = {}
     for key, value in pairs:
@@ -24,11 +27,14 @@ def _reject_constant(value):
 
 
 def _parse_integer(value):
-    """Normalize Python's configurable integer-digit failure to our API error."""
+    """Bound integer tokens independently of interpreter conversion settings."""
+    digits = value[1:] if value.startswith("-") else value
+    if len(digits) > _MAX_JSON_INTEGER_DIGITS:
+        raise JsonRequestError("JSON integer exceeds the digit limit")
     try:
         return int(value)
     except ValueError as exc:
-        raise JsonRequestError("invalid or oversized JSON integer") from exc
+        raise JsonRequestError("invalid JSON integer") from exc
 
 
 def _parse_float(value):
