@@ -13,8 +13,10 @@ It checks:
 
 The audit requires an idle connection and never repairs data. It is intended for local preflight, diagnostics and tests; it does not establish any AOW progression rules or wire fields.
 
-## Baseline limitation
+## Creation baseline receipts and legacy migration
 
-The current schema does not store a separate receipt for create(). Therefore the audit can validate revision zero and every subsequent mutation chain, but cannot independently prove the original level/experience/currency baseline against an attacker who can rewrite both the initial state and all dependent receipts. If a first mutation overrides level, the original level is not recoverable from that receipt; the resulting level is checked against the requested override.
+New snapshots are written with a `baseline_version=1` marker and a matching row in `player_state_creations`, in the same transaction as the initial snapshot. The read-only audit requires that receipt, checks its value ranges, and replays every later mutation from the recorded level/experience/currency baseline. A missing or altered baseline receipt therefore fails the audit instead of silently treating the first mutation as the starting point.
 
-This is a consistency check, not a cryptographic tamper-evidence system or production database security boundary.
+Existing databases are migrated additively: the new marker is added with value `0`, and old snapshots remain readable as `legacy_unanchored_snapshots`. Their mutation deltas and later revision chain are still checked, but their original level cannot be independently reconstructed. New snapshots created after migration are anchored.
+
+The marker and receipts improve consistency detection; they are not cryptographic tamper evidence. An attacker able to rewrite the snapshot, marker, creation receipt and all mutation receipts can rewrite them together. Protect the database file and backups with operating-system access controls.
