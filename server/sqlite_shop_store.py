@@ -13,7 +13,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from server.synthetic_player_state import PlayerSnapshot
-from server.sqlite_inventory_store import InventorySnapshot
+from server.sqlite_inventory_store import InventorySnapshot, InventoryStoreError
 from server.sqlite_inventory_store import _MAX_REVISION as _MAX_INVENTORY_REVISION
 from server.sqlite_player_state_store import _MAX_REVISION as _MAX_PLAYER_REVISION
 from server.sqlite_inventory_store import SqliteInventoryStore
@@ -176,26 +176,106 @@ class SqliteShopStore:
         )
 
     @staticmethod
-    def _decode_result(raw, replayed):
-        value = json.loads(raw)
+    def _decode_result(raw, replayed, *, expected_character_id,
+                       expected_offer_id, expected_quantity,
+                       expected_player_revision, expected_inventory_revision):
+        """Decode a durable purchase receipt without coercing untrusted values."""
+        def reject_constant(_value):
+            raise ShopStoreError("non-finite value in shop receipt")
+
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ShopStoreError("duplicate JSON key in shop receipt")
+                result[key] = value
+            return result
+
+        if type(raw) is not str or len(raw) > 512 * 1024:
+            raise ShopStoreError("invalid shop receipt JSON")
+        try:
+            value = json.loads(
+                raw,
+                object_pairs_hook=unique_object,
+                parse_constant=reject_constant,
+            )
+        except ShopStoreError:
+            raise
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise ShopStoreError("invalid shop receipt JSON") from exc
+
+        if (type(value) is not dict
+                or set(value) != {
+                    "character_id", "offer_id", "quantity", "total",
+                    "player", "inventory",
+                }):
+            raise ShopStoreError("invalid shop receipt shape")
+        character_id = SqliteShopStore._character_id(value["character_id"])
+        offer_id = value["offer_id"]
+        quantity = value["quantity"]
+        total = value["total"]
+        if (character_id != expected_character_id
+                or not isinstance(offer_id, str)
+                or not _ID_PATTERN.fullmatch(offer_id)
+                or offer_id != expected_offer_id
+                or type(quantity) is not int
+                or quantity != expected_quantity
+                or not 1 <= quantity <= _MAX_PURCHASE_QUANTITY
+                or type(total) is not int
+                or not 1 <= total <= _MAX_CURRENCY):
+            raise ShopStoreError("shop receipt identity or amount mismatch")
+
         player = value["player"]
+        if (type(player) is not dict
+                or set(player) != {"level", "experience", "currency", "revision"}):
+            raise ShopStoreError("invalid shop player receipt")
+        level = player["level"]
+        experience = player["experience"]
+        currency = player["currency"]
+        player_revision = player["revision"]
+        if (type(level) is not int or not 1 <= level <= 1000
+                or type(experience) is not int
+                or not 0 <= experience <= 2**63 - 1
+                or type(currency) is not int
+                or not 0 <= currency <= _MAX_CURRENCY
+                or type(player_revision) is not int
+                or player_revision != expected_player_revision):
+            raise ShopStoreError("invalid shop player receipt values")
+
         inventory = value["inventory"]
+        try:
+            if type(inventory) is not dict:
+                raise ShopStoreError("invalid shop inventory receipt shape")
+            inventory_value = dict(inventory)
+            nested_character_id = inventory_value.get("character_id", character_id)
+            if nested_character_id != character_id:
+                raise ShopStoreError("shop inventory receipt character mismatch")
+            # Shop receipts historically keep character_id at the root rather
+            # than inside the nested inventory object. Supply that already
+            # validated identity to the shared strict inventory decoder.
+            inventory_value["character_id"] = character_id
+            inventory_json = json.dumps(
+                inventory_value, separators=(",", ":"), ensure_ascii=True
+            )
+            inventory_snapshot = SqliteInventoryStore._decode_snapshot(
+                inventory_json,
+                expected_character_id=character_id,
+                expected_revision=expected_inventory_revision,
+            )
+        except ShopStoreError:
+            raise
+        except (InventoryStoreError, TypeError, ValueError) as exc:
+            raise ShopStoreError("invalid shop inventory receipt") from exc
+
         return ShopPurchase(
-            character_id=value["character_id"],
-            offer_id=value["offer_id"],
-            quantity=int(value["quantity"]),
-            total=int(value["total"]),
+            character_id=character_id,
+            offer_id=offer_id,
+            quantity=quantity,
+            total=total,
             player=PlayerSnapshot(
-                value["character_id"], int(player["level"]),
-                int(player["experience"]), int(player["currency"]),
-                int(player["revision"]),
+                character_id, level, experience, currency, player_revision
             ),
-            inventory=InventorySnapshot(
-                value["character_id"], int(inventory["capacity"]),
-                int(inventory["max_stack"]), int(inventory["revision"]),
-                tuple((str(item_id), int(quantity))
-                      for item_id, quantity in inventory["items"]),
-            ),
+            inventory=inventory_snapshot,
             replayed=replayed,
         )
 
@@ -257,7 +337,8 @@ class SqliteShopStore:
             self.db.execute("BEGIN IMMEDIATE")
         try:
             previous = self.db.execute(
-                """SELECT character_id, payload_json, result_json
+                """SELECT character_id, payload_json, result_json,
+                          player_revision, inventory_revision
                    FROM shop_purchase_receipts WHERE request_id=?""",
                 (request_id,),
             ).fetchone()
@@ -266,7 +347,22 @@ class SqliteShopStore:
                     raise ShopOperationConflict(
                         "request id reused with a different purchase"
                     )
-                result = self._decode_result(previous[2], replayed=True)
+                player_result_revision = previous[3]
+                inventory_result_revision = previous[4]
+                if (type(player_result_revision) is not int
+                        or player_result_revision != expected_player_revision + 1
+                        or type(inventory_result_revision) is not int
+                        or inventory_result_revision != expected_inventory_revision + 1):
+                    raise ShopStoreError("invalid shop receipt revision columns")
+                result = self._decode_result(
+                    previous[2],
+                    replayed=True,
+                    expected_character_id=character_id,
+                    expected_offer_id=offer_id,
+                    expected_quantity=quantity,
+                    expected_player_revision=player_result_revision,
+                    expected_inventory_revision=inventory_result_revision,
+                )
                 if owns_transaction:
                     self.db.commit()
                 return result

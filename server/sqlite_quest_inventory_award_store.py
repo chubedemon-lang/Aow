@@ -11,7 +11,11 @@ import re
 import sqlite3
 from dataclasses import dataclass
 
-from server.sqlite_inventory_store import InventorySnapshot, SqliteInventoryStore
+from server.sqlite_inventory_store import (
+    InventorySnapshot,
+    InventoryStoreError,
+    SqliteInventoryStore,
+)
 
 
 _MAX_SQLITE_INTEGER = 2**63 - 1
@@ -85,16 +89,19 @@ class SqliteQuestInventoryAwardStore:
         return value
 
     @staticmethod
-    def _decode_snapshot(raw):
-        value = json.loads(raw)
-        return InventorySnapshot(
-            character_id=value["character_id"],
-            capacity=int(value["capacity"]),
-            max_stack=int(value["max_stack"]),
-            revision=int(value["revision"]),
-            items=tuple((str(item_id), int(quantity))
-                        for item_id, quantity in value["items"]),
-        )
+    def _decode_snapshot(raw, *, expected_character_id=None,
+                         expected_revision=None):
+        """Reuse the strict inventory receipt decoder at the quest boundary."""
+        try:
+            return SqliteInventoryStore._decode_snapshot(
+                raw,
+                expected_character_id=expected_character_id,
+                expected_revision=expected_revision,
+            )
+        except InventoryStoreError as exc:
+            raise QuestInventoryAwardError(
+                "invalid quest inventory award receipt"
+            ) from exc
 
     @staticmethod
     def _mutation_id(request_id):
@@ -133,16 +140,29 @@ class SqliteQuestInventoryAwardStore:
             self.db.execute("BEGIN IMMEDIATE")
         try:
             previous = self.db.execute(
-                """SELECT payload_json, result_json
+                """SELECT character_id, expected_inventory_revision,
+                          payload_json, result_json, result_revision
                    FROM quest_inventory_awards WHERE request_id=?""",
                 (request_id,),
             ).fetchone()
             if previous is not None:
-                if previous[0] != payload_json:
+                if tuple(previous[:3]) != (
+                    character_id, expected_inventory_revision, payload_json
+                ):
                     raise QuestInventoryAwardConflict(
                         "request id reused with a different quest award"
                     )
-                snapshot = self._decode_snapshot(previous[1])
+                result_revision = previous[4]
+                if (type(result_revision) is not int
+                        or result_revision != expected_inventory_revision + 1):
+                    raise QuestInventoryAwardError(
+                        "invalid quest inventory award receipt revision"
+                    )
+                snapshot = self._decode_snapshot(
+                    previous[3],
+                    expected_character_id=character_id,
+                    expected_revision=result_revision,
+                )
                 if owns_transaction:
                     self.db.commit()
                 return QuestInventoryAward(snapshot, awarded=False, replayed=True)

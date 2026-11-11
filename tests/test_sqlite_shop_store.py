@@ -255,5 +255,79 @@ class SqliteShopStoreTests(unittest.TestCase):
         self.assertEqual(self.inventory.get("hero").items, ())
 
 
+
+    def test_replay_rejects_duplicate_json_keys(self):
+        self.shop.purchase("hero", "tampered-duplicate", 0, 0, "potion-pack", 1)
+        self.db.execute(
+            "UPDATE shop_purchase_receipts SET result_json=? WHERE request_id=?",
+            ('{"character_id":"hero","character_id":"hero",'
+             '"offer_id":"potion-pack","quantity":1,"total":12,'
+             '"player":{"level":3,"experience":17,"currency":88,"revision":1},'
+             '"inventory":{"capacity":1,"max_stack":5,"revision":1,'
+             '"items":[["potion",1]]}}', "tampered-duplicate"),
+        )
+        with self.assertRaisesRegex(ShopStoreError, "duplicate JSON key"):
+            self.shop.purchase("hero", "tampered-duplicate", 0, 0, "potion-pack", 1)
+
+    def test_replay_rejects_receipt_for_another_character(self):
+        self.shop.purchase("hero", "tampered-owner", 0, 0, "potion-pack", 1)
+        self.db.execute(
+            "UPDATE shop_purchase_receipts SET result_json=? WHERE request_id=?",
+            ('{"character_id":"other","offer_id":"potion-pack","quantity":1,'
+             '"total":12,"player":{"level":3,"experience":17,"currency":88,'
+             '"revision":1},"inventory":{"capacity":1,"max_stack":5,'
+             '"revision":1,"items":[["potion",1]]}}', "tampered-owner"),
+        )
+        with self.assertRaisesRegex(ShopStoreError, "identity or amount"):
+            self.shop.purchase("hero", "tampered-owner", 0, 0, "potion-pack", 1)
+
+    def test_replay_rejects_boolean_quantity_and_nonfinite_total(self):
+        cases = (
+            ('{"character_id":"hero","offer_id":"potion-pack","quantity":true,'
+             '"total":12,"player":{"level":3,"experience":17,"currency":88,'
+             '"revision":1},"inventory":{"capacity":1,"max_stack":5,'
+             '"revision":1,"items":[["potion",1]]}}', "boolean quantity"),
+            ('{"character_id":"hero","offer_id":"potion-pack","quantity":1,'
+             '"total":NaN,"player":{"level":3,"experience":17,"currency":88,'
+             '"revision":1},"inventory":{"capacity":1,"max_stack":5,'
+             '"revision":1,"items":[["potion",1]]}}', "non-finite total"),
+        )
+        for index, (raw, label) in enumerate(cases):
+            with self.subTest(case=label):
+                request_id = "tampered-number-" + str(index)
+                character_id = "hero-" + str(index)
+                self.players.create(character_id, level=3, experience=17, currency=100)
+                self.inventory.create(character_id, capacity=1, max_stack=5)
+                self.shop.purchase(character_id, request_id, 0, 0, "potion-pack", 1)
+                raw = raw.replace('"hero"', '"' + character_id + '"')
+                self.db.execute(
+                    "UPDATE shop_purchase_receipts SET result_json=? WHERE request_id=?",
+                    (raw, request_id),
+                )
+                with self.assertRaises(ShopStoreError):
+                    self.shop.purchase(character_id, request_id, 0, 0, "potion-pack", 1)
+
+    def test_replay_rejects_result_revision_column_mismatch(self):
+        self.shop.purchase("hero", "tampered-revision", 0, 0, "potion-pack", 1)
+        self.db.execute(
+            "UPDATE shop_purchase_receipts SET player_revision=2 WHERE request_id=?",
+            ("tampered-revision",),
+        )
+        with self.assertRaisesRegex(ShopStoreError, "revision columns"):
+            self.shop.purchase("hero", "tampered-revision", 0, 0, "potion-pack", 1)
+
+    def test_replay_rejects_corrupt_nested_inventory_snapshot(self):
+        self.shop.purchase("hero", "tampered-inventory", 0, 0, "potion-pack", 1)
+        self.db.execute(
+            "UPDATE shop_purchase_receipts SET result_json=? WHERE request_id=?",
+            ('{"character_id":"hero","offer_id":"potion-pack","quantity":1,'
+             '"total":12,"player":{"level":3,"experience":17,"currency":88,'
+             '"revision":1},"inventory":{"capacity":1,"max_stack":5,'
+             '"revision":1,"items":[["potion",true]]}}', "tampered-inventory"),
+        )
+        with self.assertRaisesRegex(ShopStoreError, "inventory receipt"):
+            self.shop.purchase("hero", "tampered-inventory", 0, 0, "potion-pack", 1)
+
+
 if __name__ == "__main__":
     unittest.main()
