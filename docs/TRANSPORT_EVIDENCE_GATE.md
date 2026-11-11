@@ -14,6 +14,8 @@ The evidence readiness sequence is transport → framing → serialization → h
 
 **Fingerprint isolation:** `evaluate_evidence()` requires all records in one evaluation to refer to a single artifact SHA-256. If multiple fingerprints are present, the caller must pass `artifact_sha256` explicitly; the gate then filters to that artifact before evaluating prerequisites. Evidence from different APK builds must never be combined to make a stage appear ready. This is a bookkeeping safeguard, not a compatibility test.
 
+**Reproducibility requirement:** records in `server.protocol_evidence_registry.Evidence` marked `verified=True` must include both a sanitized repository-local `test_reference` and a reproducible local `reproduction` command. Verified records must identify an offline APK-analysis or authorized-local-test method; a `synthetic_test` method alone cannot unlock a protocol stage. The command/reference are provenance metadata, not proof by themselves, and the registry still does not establish wire compatibility.
+
 Primitive serializer findings from the authorized offline APK pass are not by themselves a complete message schema or proof that a specific serializer is used by the active transport. The serialization gate is deliberately separate from framing and handshake.
 
 ## Public evidence ledger locator policy
