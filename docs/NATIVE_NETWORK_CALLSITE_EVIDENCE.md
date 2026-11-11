@@ -170,3 +170,20 @@ state as unrecognized instructions.
 Synthetic instruction-vector tests cover copied pointers, unknown sources,
 zero-register behavior and rejection of shifted/non-64-bit aliases. This is a
 tooling capability only; no new APK pass or runtime trace is implied.
+
+
+## ADR-relative pointer candidate support — 2026-11-12
+
+The offline analyzer now recognizes the AArch64 `ADR` PC-relative address
+instruction separately from page-relative `ADRP`. In synthetic instruction
+fixtures it can follow an `ADR` address through the existing optional
+64-bit `ADD`, relocation-backed `LDR X`, optional `MOV Xd, Xm`, and
+`BLR`/`BR` path. A target is still reported only when the loaded pointer
+has an `R_AARCH64_RELATIVE` relocation and uniquely matches a metadata-backed
+executable method entry.
+
+This is a decoder/tool capability covered by synthetic instruction tests.
+No new APK bytes were read or analyzed for this change. It does not establish
+that the original APK uses an ADR-based pointer chain, and it does not change
+the framing, compression, message-ID, handshake, or LoginRequest confidence
+levels. Raw addresses and instruction words remain excluded from reports.
