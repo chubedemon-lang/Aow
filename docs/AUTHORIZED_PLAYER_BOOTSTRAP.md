@@ -2,15 +2,15 @@
 
 ## Scope
 
-\`server/sqlite_authorized_player_bootstrap_service.py\` combines the existing character, player-state, map-position and inventory stores into one session-authorized read model.
+The module `server/sqlite_authorized_player_bootstrap_service.py` combines the existing character, player-state, map-position and inventory stores into one session-authorized read model.
 
 This is a local synthetic domain service only. It is **not** an AOW login response, player-initialization packet, map-join message, inventory schema, or proof of APK compatibility. Item IDs, capacity, stack limits, map identifiers and player defaults remain synthetic.
 
 ## Consistency and authorization
 
-\`SqliteAuthorizedPlayerBootstrapService.get_snapshot(token, character_id)\`:
+`SqliteAuthorizedPlayerBootstrapService.get_snapshot(token, character_id)`:
 
-1. Starts one \`BEGIN IMMEDIATE\` transaction.
+1. Starts one `BEGIN IMMEDIATE` transaction.
 2. Resolves the durable synthetic session and verifies character ownership in that transaction.
 3. Reads the character row, player snapshot, map-position snapshot and inventory snapshot using the same SQLite connection.
 4. Commits the read transaction and returns one immutable aggregate.
@@ -21,7 +21,7 @@ The constructor initializes missing auxiliary store tables, consistent with the 
 
 ## Example
 
-\`\`\`python
+~~~python
 import sqlite3
 from server.sqlite_authorized_player_bootstrap_service import (
     SqliteAuthorizedPlayerBootstrapService,
@@ -30,16 +30,16 @@ from server.sqlite_authorized_player_bootstrap_service import (
 db = sqlite3.connect("./var/aow_synthetic.sqlite3", isolation_level=None)
 service = SqliteAuthorizedPlayerBootstrapService(db)
 snapshot = service.get_snapshot(server_issued_token, character_id)
-\`\`\`
+~~~
 
 The token must have been issued only after a trusted authentication step. This module does not authenticate credentials and is not exposed as an HTTP route.
 
 ## Validation
 
-\`\`\`sh
+~~~sh
 python -m unittest discover -s tests -p 'test_sqlite_authorized_player_bootstrap_service.py' -v
 python -m unittest discover -s tests -p 'test_*.py' -v
-\`\`\`
+~~~
 
 Tests cover the coherent aggregate, read-only behavior, missing inventory, foreign/unknown character indistinguishability, expiry/revocation and serialization of revocation against the complete read.
 
