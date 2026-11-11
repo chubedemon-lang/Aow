@@ -49,16 +49,16 @@ class OfflineFrameProbeTests(unittest.TestCase):
             FrameSpec(1, "big", max_payload=8, max_chunk_bytes=3)
         )
         with self.assertRaises(FrameDecodeError):
-            decoder.feed(b"\\x02abc")
+            decoder.feed(b"\x02abc")
         self.assertEqual(decoder.pending_bytes, 0)
         with self.assertRaises(FrameDecodeError):
-            decoder.feed(b"\\x01x")
+            decoder.feed(b"\x01x")
 
     def test_fragmented_frame_can_exceed_per_feed_limit(self):
         decoder = LengthFrameDecoder(
             FrameSpec(1, "big", max_payload=8, max_chunk_bytes=3)
         )
-        self.assertEqual(decoder.feed(b"\\x04a"), [])
+        self.assertEqual(decoder.feed(b"\x04a"), [])
         self.assertEqual(decoder.feed(b"bc"), [])
         self.assertEqual(decoder.feed(b"d"), [b"abcd"])
         decoder.finish()
