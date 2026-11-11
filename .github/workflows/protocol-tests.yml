@@ -22,6 +22,8 @@ on:
       - 'server/offline_frame_probe.py'
       - 'tests/test_offline_frame_probe.py'
       - 'docs/OFFLINE_FRAME_PROBE.md'
+      - 'server/transport.py'
+      - 'tests/test_transport.py'
       - 'server/protocol_evidence_registry.py'
       - 'tests/test_protocol_evidence_registry.py'
       - 'server/protocol_evidence_gates.py'
@@ -53,6 +55,7 @@ jobs:
             tools/il2cpp_network_callsite_evidence.py \
             server/aow_primitive_codec.py \
             server/offline_frame_probe.py \
+            server/transport.py \
             server/protocol_evidence_registry.py \
             server/protocol_evidence_gates.py \
             server/evidence_ledger.py
@@ -70,6 +73,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_aow_primitive_codec.py' -v
       - name: Synthetic frame decoder tests (fabricated streams only)
         run: python -m unittest discover -s tests -p 'test_offline_frame_probe.py' -v
+      - name: Transport evidence boundary tests (synthetic codec only)
+        run: python -m unittest discover -s tests -p 'test_transport.py' -v
       - name: Protocol evidence registry tests (metadata only)
         run: python -m unittest discover -s tests -p 'test_protocol_evidence_registry.py' -v
       - name: Ordered protocol evidence gate tests (metadata only)
