@@ -443,6 +443,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(summary["resolved_indirect_method_call_counts"], {})
         self.assertEqual(summary["ambiguous_indirect_call_count"], 1)
+        self.assertEqual(summary["resolved_indirect_method_call_sequence"], [])
         self.assertEqual(summary["unresolved_indirect_call_count"], 0)
 
     def test_indirect_tail_branch_is_reported_separately(self):
