@@ -166,3 +166,6 @@ The LoginRequest serializer/deserializer windows contain direct primitive-helper
 These are direct callsite counts in bounded native entry windows, not a field schema or execution trace. The five-call integer discrepancy is unresolved; no LoginRequest field order is inferred.
 
 **Remaining proof gates:** the effective runtime value/use of `NetworkSettings.HeaderLength`; the complete send/receive framing relationship; compression/encryption activation and placement; message-ID mapping; handshake order; LoginRequest field order; and an authorized, redacted client-side byte fixture or local runtime trace. The adapter remains disabled. No official endpoint was contacted.
+
+
+See [connection-bootstrap dispatcher registration evidence](LOGIN_DISPATCH_REGISTRATION_EVIDENCE.md) for the newly mapped local registration keys and the explicit distinction from wire message IDs.
