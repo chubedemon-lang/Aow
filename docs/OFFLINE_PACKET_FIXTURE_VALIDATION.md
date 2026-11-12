@@ -1,6 +1,6 @@
 # Offline packet fixture provenance gate
 
-**Scope:** validate a private, authorized byte fixture locally. This document
+**Scope:** validate private, authorized byte fixtures locally. This document
 does not describe or infer the AOW packet format.
 
 ## Required source binding
@@ -11,16 +11,23 @@ from the operator's trusted private inventory for the exact APK build or local
 capture under examination. The record's self-declared source_sha256 must
 match that value.
 
-The validator also requires:
+For a batch containing more than one source artifact, call
+validate_fixture_batch with expected_source_sha256s: a finite collection of
+independently obtained digests from the same trusted inventory. Every record
+must match one of those digests before its payload is decoded. Do not build this
+allowlist from untrusted fixture records in production code.
+
+The validators also require:
 
 - an explicit boolean verified: true;
-- a lowercase SHA-256 digest for the payload;
+- a lowercase SHA-256 digest for each payload;
 - strict even-length hexadecimal payload text;
 - a payload digest matching the decoded bytes;
-- a caller-selected maximum size between 1 byte and 1 MiB.
+- caller-selected per-fixture and aggregate size limits.
 
-The function returns immutable bytes only after these checks. It does not log
-or persist payloads.
+The single-fixture function returns immutable bytes only after its checks.
+The batch function returns only count, aggregate byte size and payload digests;
+it never returns or logs the payloads.
 
 ## Limits
 
@@ -38,4 +45,6 @@ Run:
 
 ~~~sh
 python -m unittest discover -s tests -p 'test_offline_packet_fixture.py' -v
+python -m unittest discover -s tests -p 'test_offline_fixture_batch.py' -v
+python -m unittest discover -s tests -p 'test_offline_fixture_privacy_boundaries.py' -v
 ~~~
