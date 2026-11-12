@@ -41,3 +41,11 @@ These methods are intentionally **not exposed as HTTP routes**. No client-suppli
 ## Strict synthetic HTTP request parsing
 
 The localhost-only mock now accepts POST bodies only when they have one `Content-Type: application/json`, one decimal `Content-Length` within the 4 KiB limit, UTF-8 encoding, and a JSON object root. It rejects transfer-encoding, compressed bodies, duplicate request headers, duplicate JSON keys (including nested objects), non-finite numbers, invalid UTF-8 and truncated bodies. These are generic HTTP input-safety rules for the synthetic test API; they are not evidence about AOW's transport or serialization.
+
+
+## Server shutdown
+
+The command-line runner closes the listening socket in a `finally` block when
+`serve_forever()` returns or is interrupted (for example, by Ctrl+C). This
+only covers the local synthetic HTTP server lifecycle; it does not make the
+mock API production-ready or APK-compatible.
