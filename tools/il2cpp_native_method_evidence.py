@@ -385,7 +385,7 @@ def _decode_aarch64_br_register(word):
     return (word >> 5) & 0x1F
 
 
-def _relocated_indirect_call_events(code, start_va, relocations):
+def _relocated_indirect_call_events(code, start_va, relocations, *, include_offsets=False):
     """Resolve relocation-backed ADR/ADRP/ADD/LDR/MOV-X/BLR-or-BR chains.
 
     Any unrecognized instruction clears the small abstract register state.
@@ -453,13 +453,15 @@ def _relocated_indirect_call_events(code, start_va, relocations):
 
         call_register = _decode_aarch64_blr_register(word)
         if call_register is not None:
-            events.append(("call", registers.get(call_register)))
+            target = registers.get(call_register)
+            events.append((offset, "call", target) if include_offsets else ("call", target))
             registers.clear()
             continue
 
         tail_register = _decode_aarch64_br_register(word)
         if tail_register is not None:
-            events.append(("tail", registers.get(tail_register)))
+            target = registers.get(tail_register)
+            events.append((offset, "tail", target) if include_offsets else ("tail", target))
             registers.clear()
             continue
 
@@ -522,6 +524,96 @@ def _summarize_relocated_indirect_calls(code, start_va, relocations, method_targ
         "unresolved_indirect_tail_call_count": unresolved_tails,
         "ambiguous_indirect_call_count": ambiguous_calls,
         "ambiguous_indirect_tail_call_count": ambiguous_tails,
+    }
+
+
+def _summarize_ordered_serializer_helper_calls(code, start_va, relocations, helper_targets):
+    """Interleave uniquely resolved direct and relocation-backed helper callsites.
+
+    The result is a linear address-order observation inside one bounded method
+    window, not an execution trace: branches, loops and mutually exclusive
+    paths are not evaluated.
+    """
+    if not isinstance(code, bytes) or len(code) % 4:
+        raise ValueError("AArch64 code window must be a multiple of four bytes")
+    if type(start_va) is not int or start_va < 0 or start_va % 4:
+        raise ValueError("AArch64 code window start must be an aligned address")
+    if not isinstance(relocations, dict) or not isinstance(helper_targets, dict):
+        raise ValueError("relocations and helper targets must be mappings")
+
+    indirect_by_offset = {
+        offset: (kind, target)
+        for offset, kind, target in _relocated_indirect_call_events(
+            code, start_va, relocations, include_offsets=True
+        )
+    }
+    sequence = []
+    counts = Counter()
+    ambiguous_direct = 0
+    ambiguous_indirect = 0
+    indirect_not_resolved_as_helper = 0
+
+    def append_resolved(kind, label):
+        sequence.append({"kind": kind, "method": label})
+        counts[label] += 1
+
+    for offset in range(0, len(code), 4):
+        word = struct.unpack_from("<I", code, offset)[0]
+        pc = start_va + offset
+
+        direct_target = _decode_aarch64_bl_target(word, pc)
+        if direct_target is not None:
+            labels = helper_targets.get(direct_target, ())
+            if len(labels) == 1:
+                append_resolved("direct_call", labels[0])
+            elif len(labels) > 1:
+                sequence.append({
+                    "kind": "direct_call",
+                    "resolution": "ambiguous_serializer_helper",
+                })
+                ambiguous_direct += 1
+            continue
+
+        tail_target = _decode_aarch64_b_target(word, pc)
+        if tail_target is not None:
+            labels = helper_targets.get(tail_target, ())
+            if len(labels) == 1:
+                append_resolved("direct_tail_call", labels[0])
+            elif len(labels) > 1:
+                sequence.append({
+                    "kind": "direct_tail_call",
+                    "resolution": "ambiguous_serializer_helper",
+                })
+                ambiguous_direct += 1
+            continue
+
+        indirect = indirect_by_offset.get(offset)
+        if indirect is None:
+            continue
+        indirect_kind, target = indirect
+        call_kind = "indirect_call" if indirect_kind == "call" else "indirect_tail_call"
+        labels = helper_targets.get(target, ()) if target is not None else ()
+        if len(labels) == 1:
+            append_resolved(call_kind, labels[0])
+        elif len(labels) > 1:
+            sequence.append({
+                "kind": call_kind,
+                "resolution": "ambiguous_serializer_helper",
+            })
+            ambiguous_indirect += 1
+        else:
+            sequence.append({
+                "kind": call_kind,
+                "resolution": "not_resolved_as_serializer_helper",
+            })
+            indirect_not_resolved_as_helper += 1
+
+    return {
+        "linear_helper_callsite_order": sequence,
+        "linear_helper_callsite_counts": dict(sorted(counts.items())),
+        "ambiguous_direct_helper_callsite_count": ambiguous_direct,
+        "ambiguous_indirect_helper_callsite_count": ambiguous_indirect,
+        "indirect_callsite_not_resolved_as_helper_count": indirect_not_resolved_as_helper,
     }
 
 
@@ -769,6 +861,9 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         indirect_summary = _summarize_relocated_indirect_calls(
             code, target, relocations, method_targets
         )
+        ordered_summary = _summarize_ordered_serializer_helper_calls(
+            code, target, relocations, helper_targets
+        )
         callsite_summary.append({
             "type": method["type"],
             "method": method["method"],
@@ -779,6 +874,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             **summary,
             **named_summary,
             **indirect_summary,
+            **ordered_summary,
         })
     callsite_summary.sort(key=lambda x: (x["type"], x["method"]))
 
