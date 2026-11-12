@@ -3,6 +3,7 @@
 This is NOT the original AOW protocol. Do not expose it on a public interface.
 """
 import argparse
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import sqlite3
@@ -46,7 +47,7 @@ def initialize(conn):
 class Domain:
     def __init__(self, database):
         self.database = str(database)
-        with self.connect() as db:
+        with self.connection() as db:
             initialize(db)
 
     def connect(self):
@@ -55,12 +56,27 @@ class Domain:
         db.execute("PRAGMA foreign_keys = ON")
         return db
 
+    @contextmanager
+    def connection(self):
+        """Open one request-scoped connection and always close it.
+
+        sqlite3.Connection's context manager commits or rolls back transactions,
+        but does not close the connection. Keep transaction semantics while
+        ensuring every domain operation releases its file descriptor.
+        """
+        db = self.connect()
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
     def create_character(self, username, name):
         if not isinstance(username, str) or not 1 <= len(username) <= 64:
             raise ValueError("invalid username")
         if not isinstance(name, str) or not 1 <= len(name) <= 64:
             raise ValueError("invalid character name")
-        with self.connect() as db:
+        with self.connection() as db:
             db.execute("INSERT OR IGNORE INTO accounts(username) VALUES (?)", (username,))
             account = db.execute("SELECT id FROM accounts WHERE username=?", (username,)).fetchone()
             db.execute("INSERT INTO characters(account_id, name) VALUES (?,?)", (account["id"], name))
@@ -70,7 +86,7 @@ class Domain:
     def get_character(self, character_id):
         if type(character_id) is not int or character_id < 1:
             raise ValueError("invalid character id")
-        with self.connect() as db:
+        with self.connection() as db:
             row = db.execute("SELECT id,name,map_id,x,y FROM characters WHERE id=?", (character_id,)).fetchone()
             if row is None:
                 raise KeyError("character not found")
@@ -81,7 +97,7 @@ class Domain:
             raise ValueError("invalid character id")
         if type(x) is not int or type(y) is not int or abs(x) > 10000 or abs(y) > 10000:
             raise ValueError("invalid coordinates")
-        with self.connect() as db:
+        with self.connection() as db:
             result = db.execute("UPDATE characters SET x=?, y=? WHERE id=?", (x, y, character_id))
             if result.rowcount == 0:
                 raise KeyError("character not found")
@@ -92,7 +108,7 @@ class Domain:
         """List a character's synthetic items; does not represent APK item IDs."""
         if type(character_id) is not int or character_id < 1:
             raise ValueError("invalid character id")
-        with self.connect() as db:
+        with self.connection() as db:
             if db.execute("SELECT 1 FROM characters WHERE id=?", (character_id,)).fetchone() is None:
                 raise KeyError("character not found")
             rows = db.execute(
@@ -111,7 +127,7 @@ class Domain:
             raise ValueError("invalid item id")
         if type(delta) is not int or delta == 0 or abs(delta) > 1_000_000:
             raise ValueError("invalid quantity change")
-        with self.connect() as db:
+        with self.connection() as db:
             # Lock before reading to prevent lost updates between concurrent requests.
             db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT 1 FROM characters WHERE id=?", (character_id,)).fetchone() is None:
@@ -144,7 +160,7 @@ class Domain:
             raise ValueError("invalid character id")
         if type(amount) is not int or not 1 <= amount <= 1_000_000:
             raise ValueError("invalid credit amount")
-        with self.connect() as db:
+        with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT 1 FROM characters WHERE id=?", (character_id,)).fetchone() is None:
                 raise KeyError("character not found")
@@ -167,7 +183,7 @@ class Domain:
             raise ValueError("invalid price")
         if type(enabled) is not bool:
             raise ValueError("invalid enabled flag")
-        with self.connect() as db:
+        with self.connection() as db:
             db.execute(
                 """INSERT INTO shop_catalog(item_id, price, enabled) VALUES (?,?,?)
                    ON CONFLICT(item_id) DO UPDATE SET price=excluded.price, enabled=excluded.enabled""",
@@ -184,7 +200,7 @@ class Domain:
             raise ValueError("invalid item id")
         if type(count) is not int or not 1 <= count <= 100:
             raise ValueError("invalid count")
-        with self.connect() as db:
+        with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT 1 FROM characters WHERE id=?", (character_id,)).fetchone() is None:
                 raise KeyError("character not found")
