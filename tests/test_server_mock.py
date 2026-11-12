@@ -26,6 +26,27 @@ class DomainTests(unittest.TestCase):
         reopened = Domain(self.domain.database)
         self.assertEqual(reopened.get_character(created["id"]), moved)
 
+    def test_domain_closes_connections_after_success_and_exception(self):
+        original_connect = self.domain.connect
+        opened = []
+
+        def tracked_connect():
+            connection = original_connect()
+            opened.append(connection)
+            return connection
+
+        self.domain.connect = tracked_connect
+        created = self.domain.create_character("alice", "hero")
+        self.domain.get_character(created["id"])
+        with self.assertRaises(KeyError):
+            self.domain.get_character(9999)
+
+        self.assertEqual(len(opened), 3)
+        for connection in opened:
+            with self.subTest(connection=connection):
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    connection.execute("SELECT 1")
+
     def test_unique_character_per_account(self):
         self.domain.create_character("alice", "hero")
         with self.assertRaises(sqlite3.IntegrityError):
