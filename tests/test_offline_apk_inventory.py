@@ -1,8 +1,11 @@
 """Regression tests for safe APK ZIP inventory with synthetic fixtures only."""
 import hashlib
+import stat
+import warnings
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 from pathlib import Path
 
 from tools.offline_apk_inventory import inspect_apk
@@ -53,6 +56,88 @@ class OfflineInventoryTests(unittest.TestCase):
             path.write_bytes(b"not a ZIP")
             with self.assertRaises(zipfile.BadZipFile):
                 inspect_apk(path)
+
+
+    def test_apk_byte_limit_is_checked_before_hashing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic.apk"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("one.dat", b"x")
+            with patch("tools.offline_apk_inventory.MAX_APK_BYTES", path.stat().st_size - 1):
+                with self.assertRaisesRegex(ValueError, "APK size"):
+                    inspect_apk(path)
+
+    def test_total_uncompressed_limit_is_enforced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic.apk"
+            with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("one.dat", b"abc")
+                archive.writestr("two.dat", b"def")
+            with patch("tools.offline_apk_inventory.MAX_UNCOMPRESSED_BYTES", 5):
+                with self.assertRaisesRegex(ValueError, "uncompressed size"):
+                    inspect_apk(path)
+
+    def test_duplicate_member_names_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic.apk"
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                with zipfile.ZipFile(path, "w") as archive:
+                    archive.writestr("classes.dex", b"first")
+                    archive.writestr("classes.dex", b"second")
+            with self.assertRaisesRegex(ValueError, "duplicate ZIP member"):
+                inspect_apk(path)
+
+    def test_symlink_member_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic.apk"
+            link = zipfile.ZipInfo("lib/arm64-v8a/libfake.so")
+            link.create_system = 3
+            link.external_attr = (stat.S_IFLNK | 0o777) << 16
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr(link, b"target")
+            with self.assertRaisesRegex(ValueError, "symlink ZIP member"):
+                inspect_apk(path)
+
+    def test_non_regular_input_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "regular local file"):
+                inspect_apk(directory)
+
+    def test_symlink_path_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = root / "original.apk"
+            with zipfile.ZipFile(original, "w") as archive:
+                archive.writestr("one.dat", b"x")
+            link = root / "link.apk"
+            try:
+                link.symlink_to(original)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlink unavailable on this platform")
+            with self.assertRaisesRegex(ValueError, "regular local file"):
+                inspect_apk(link)
+
+
+    def test_zip_member_count_limit_is_enforced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic.apk"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("one.dat", b"1")
+                archive.writestr("two.dat", b"2")
+            with patch("tools.offline_apk_inventory.MAX_ENTRIES", 1):
+                with self.assertRaisesRegex(ValueError, "too many ZIP entries"):
+                    inspect_apk(path)
+
+    def test_metadata_member_size_limit_is_enforced_before_reading(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic.apk"
+            metadata_name = "assets/bin/Data/Managed/Metadata/global-metadata.dat"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr(metadata_name, b"12345678")
+            with patch("tools.offline_apk_inventory.MAX_METADATA_BYTES", 7):
+                with self.assertRaisesRegex(ValueError, "metadata size"):
+                    inspect_apk(path)
 
 
 if __name__ == "__main__":

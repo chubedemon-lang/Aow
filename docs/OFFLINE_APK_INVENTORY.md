@@ -12,3 +12,19 @@ Verified in a private offline inspection of the supplied APK (2026-11-04):
 These observations **do not** establish packet framing, handshake, login protocol, server address, or APK compatibility. Do not commit the APK, extracted libraries, asset files, credentials, endpoint strings, or proprietary code. A later evidence matrix must cite local class/method or native offsets, record tool versions and distinguish observed facts from hypotheses. Any protocol fixture checked into the public repository must be synthetic or reviewed for disclosure safety.
 
 Next: inventory the transport entry points with offline JADX and IL2CPP metadata tooling compatible with metadata version 31, then write evidence-gated codecs and synthetic protocol regression tests. Never contact production endpoints without authorization.
+
+
+## Additional archive safety checks
+
+The inventory command opens the input as a regular file (rejecting symlink paths
+where the platform exposes them), hashes and inspects it through the same open
+file descriptor, and rejects a file that changes during the read. It applies
+limits of 4 GiB to the APK, 100,000 ZIP entries, 16 GiB aggregate uncompressed
+member size, and 64 MiB to the IL2CPP metadata member. It rejects encrypted
+members, Unix symlink members and duplicate member names. It never extracts
+members or follows archive paths.
+
+**CRC limitation:** this inventory reads only the first eight bytes of the
+IL2CPP metadata member. It does not run a full ZIP CRC pass and must not be
+reported as ZIP CRC verification. Use a separate bounded, private integrity
+check when full archive integrity is required.
