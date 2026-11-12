@@ -15,6 +15,26 @@
 - Concurrent revocation against separate SQLite connections has one winner.
 - Rejects an already-active caller transaction instead of committing work owned by the caller.
 
+## Authorized state transactions
+
+Use `authorized_transaction(token)` when a protected read/write must be atomic
+with session authorization:
+
+```python
+with store.authorized_transaction(token) as account_id:
+    # Read and mutate account-owned rows using store.db here.
+    # Do not commit or roll back inside this block.
+    ...
+```
+
+The helper starts `BEGIN IMMEDIATE`, resolves the token after acquiring the
+SQLite write reservation, yields the account id, then commits on success or
+rolls back on any exception. A concurrent revocation on another connection
+therefore waits until the protected operation commits; a revocation that wins
+first causes the later authorization to fail. The connection must not already
+own a transaction. This is a synthetic SQLite integration helper, not an AOW
+handshake or login contract.
+
 ## Expired-session cleanup
 
 `purge_expired()` preserves the original behavior and removes every expired row in one transaction.
