@@ -204,6 +204,116 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
             self.assertFalse(network_fields["HeartbeatTimeout"]["default_value_record_present"])
             self.assertTrue(all(item["method_owner_matches"] for item in by_name.values()))
 
+    def test_maps_dispatcher_listener_delegate_signature(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "synthetic.apk"
+            types = [
+                {
+                    "namespace": "com.geargames.common.network",
+                    "name": "MessageDispatcher",
+                    "fields": [
+                        "m_listeners", "m_listenersByType",
+                        "m_lastProcessedServerSequenceNumber",
+                    ],
+                    "field_type_indexes": {
+                        "m_listeners": 10,
+                        "m_listenersByType": 11,
+                        "m_lastProcessedServerSequenceNumber": 12,
+                    },
+                    "methods": ["TypeRegister", "SafeRegister"],
+                    "method_signatures": {
+                        "TypeRegister": {
+                            "parameters": [
+                                {"name": "type", "type_index": 20},
+                                {"name": "listener", "type_index": 21},
+                            ],
+                        },
+                        "SafeRegister": {
+                            "parameters": [
+                                {"name": "type", "type_index": 20},
+                                {"name": "listener", "type_index": 21},
+                            ],
+                        },
+                    },
+                },
+                {
+                    "namespace": "com.geargames.common.network",
+                    "name": "OnMessageReceivedDelegate",
+                    "methods": [".ctor", "Invoke"],
+                    "method_signatures": {
+                        ".ctor": {
+                            "parameters": [
+                                {"name": "object", "type_index": 30},
+                                {"name": "method", "type_index": 31},
+                            ],
+                        },
+                        "Invoke": {
+                            "parameters": [
+                                {"name": "message", "type_index": 32},
+                            ],
+                        },
+                    },
+                },
+                {
+                    "namespace": "",
+                    "name": "OnMessageReceivedDelegateData",
+                    "fields": ["Delegate"],
+                    "field_type_indexes": {"Delegate": 33},
+                },
+            ]
+            write_apk(apk, make_metadata(types))
+            result = inspect_type_tables(apk)
+            by_key = {
+                (item["namespace"], item["name"]): item
+                for item in result["observed_type_definitions"]
+            }
+
+            dispatcher = by_key[("com.geargames.common.network", "MessageDispatcher")]
+            self.assertEqual(
+                dispatcher["field_names"],
+                [
+                    "m_listeners", "m_listenersByType",
+                    "m_lastProcessedServerSequenceNumber",
+                ],
+            )
+            methods = {item["name"]: item for item in dispatcher["method_records"]}
+            self.assertEqual(
+                methods["SafeRegister"]["parameters"],
+                [
+                    {"name": "type", "type_index": 20, "metadata_token": 0},
+                    {"name": "listener", "type_index": 21, "metadata_token": 0},
+                ],
+            )
+            self.assertEqual(
+                methods["TypeRegister"]["parameters"],
+                methods["SafeRegister"]["parameters"],
+            )
+
+            delegate = by_key[
+                ("com.geargames.common.network", "OnMessageReceivedDelegate")
+            ]
+            delegate_methods = {
+                item["name"]: item for item in delegate["method_records"]
+            }
+            self.assertEqual(
+                delegate_methods[".ctor"]["parameters"],
+                [
+                    {"name": "object", "type_index": 30, "metadata_token": 0},
+                    {"name": "method", "type_index": 31, "metadata_token": 0},
+                ],
+            )
+            self.assertEqual(
+                delegate_methods["Invoke"]["parameters"],
+                [{"name": "message", "type_index": 32, "metadata_token": 0}],
+            )
+
+            delegate_data = by_key[("", "OnMessageReceivedDelegateData")]
+            self.assertEqual(delegate_data["field_names"], ["Delegate"])
+            self.assertEqual(
+                delegate_data["field_records"][0]["type_index"], 33
+            )
+            self.assertTrue(all(item["method_owner_matches"] for item in by_key.values()))
+
     def test_limits_message_type_registry_fields_to_allowlist(self):
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / "synthetic.apk"
