@@ -34,8 +34,12 @@ loops unsafely.
 ## Output and limits
 
 Observations are emitted only for uniquely resolved direct BL targets whose
-metadata-derived method labels match an explicit allowlist prefix. Values above
-0xffff are omitted. Output includes the direct-call ordinal in byte order,
+metadata-derived method labels match an explicit allowlist prefix. Exact values
+above 0xffff are omitted. Callers may opt into `include_argument_classes=True`
+to receive only coarse x0-x7 value classes: `zero`, `small_nonzero_16bit`,
+`nonzero_32bit`, or `nonzero_64bit`. This permits a later offline pass to
+notice that a wide constant reaches an allowlisted helper without publishing
+the constant itself. Output includes the direct-call ordinal in byte order,
 the relative basic-block index, the relative instruction index, the allowlisted
 method label and any remaining small x0-x7 constants. Unreachable calls can
 therefore create ordinal gaps. No native addresses, raw instructions, APK

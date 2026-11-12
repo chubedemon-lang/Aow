@@ -8,6 +8,21 @@ import struct
 
 
 _MAX_REPORTED_CONSTANT = 0xFFFF
+
+
+def _classify_argument_constant(value):
+    """Return a coarse public class without exposing a wide native constant."""
+    if type(value) is not int or not 0 <= value <= 0xFFFFFFFFFFFFFFFF:
+        return None
+    if value == 0:
+        return "zero"
+    if value <= 0xFFFF:
+        return "small_nonzero_16bit"
+    if value <= 0xFFFFFFFF:
+        return "nonzero_32bit"
+    return "nonzero_64bit"
+
+
 _CALLER_SAVED_REGISTERS = frozenset(range(19)) | {30}
 _NOP = 0xD503201F
 _MAX_CODE_WINDOW_BYTES = 64 * 1024
@@ -225,7 +240,8 @@ def _build_control_flow_blocks(words, start_va):
 
 
 def summarize_small_argument_constants(
-    code, start_va, method_targets, *, target_prefixes
+    code, start_va, method_targets, *, target_prefixes,
+    include_argument_classes=False,
 ):
     """Return conservative small constants at resolved allowlisted direct BL sites.
 
@@ -237,9 +253,14 @@ def summarize_small_argument_constants(
     clear the abstract state. BL/BLR calls clobber caller-saved registers.
 
     Only MOVZ/MOVN/MOVK, the unshifted MOV-register alias and ADD-immediate
-    are modeled. Values above 0xffff are omitted. Output contains relative
-    instruction/block indexes, never native addresses or instruction bytes.
+    are modeled. Exact values above 0xffff are omitted. When
+    include_argument_classes=True, x0-x7 values also receive a coarse size
+    class (zero, small 16-bit, nonzero 32-bit, or nonzero 64-bit); no wide
+    numeric value is emitted. Output contains relative instruction/block
+    indexes, never native addresses or instruction bytes.
     """
+    if type(include_argument_classes) is not bool:
+        raise ValueError("include_argument_classes must be bool")
     if not isinstance(code, bytes) or len(code) % 4:
         raise ValueError("AArch64 code window must be a multiple of four bytes")
     if len(code) > _MAX_CODE_WINDOW_BYTES:
@@ -363,14 +384,22 @@ def summarize_small_argument_constants(
                             if register in registers
                             and 0 <= registers[register] <= _MAX_REPORTED_CONSTANT
                         }
-                        if arguments:
-                            observations.append({
+                        classes = {
+                            f"x{register}": _classify_argument_constant(registers[register])
+                            for register in range(8)
+                            if register in registers
+                        }
+                        if arguments or (include_argument_classes and classes):
+                            observation = {
                                 "linear_window_call_ordinal": call_ordinals[instruction_index],
                                 "control_flow_block_index": block_index,
                                 "instruction_index": instruction_index,
                                 "target_method": method_name,
                                 "known_small_argument_constants": arguments,
-                            })
+                            }
+                            if include_argument_classes:
+                                observation["known_argument_constant_classes"] = classes
+                            observations.append(observation)
                 for register in _CALLER_SAVED_REGISTERS:
                     registers.pop(register, None)
                 continue

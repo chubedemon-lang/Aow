@@ -114,6 +114,58 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(result, [])
 
+    def test_redacted_argument_classes_cover_wide_constants_without_values(self):
+        code = words(
+            movz_x(0, 0),
+            movz_x(1, 4),
+            movz_x(2, 0x5450),
+            movk_x(2, 0x4854, 16),
+            movz_x(3, 1, 32),
+            movz_x(4, 0x1234),
+            bl(0x1018, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes,
+            include_argument_classes=True,
+        )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(
+            result[0]["known_small_argument_constants"],
+            {"x0": 0, "x1": 4, "x4": 0x1234},
+        )
+        self.assertEqual(
+            result[0]["known_argument_constant_classes"],
+            {
+                "x0": "zero",
+                "x1": "small_nonzero_16bit",
+                "x2": "nonzero_32bit",
+                "x3": "nonzero_64bit",
+                "x4": "small_nonzero_16bit",
+            },
+        )
+        self.assertNotIn("0x48545450", repr(result))
+        self.assertNotIn(0x48545450, result[0]["known_small_argument_constants"].values())
+
+    def test_wide_constants_remain_silent_without_explicit_class_mode(self):
+        code = words(
+            movz_x(1, 0x5450),
+            movk_x(1, 0x4854, 16),
+            bl(0x1008, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result, [])
+
+    def test_argument_class_option_requires_boolean(self):
+        for invalid in (None, 0, 1, "yes"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                summarize_small_argument_constants(
+                    b"", 0x1000, self.targets,
+                    target_prefixes=self.prefixes,
+                    include_argument_classes=invalid,
+                )
+
     def test_tracks_zero_extending_w_register_move(self):
         code = words(movz_w(1, 4), bl(0x1004, self.target))
         result = summarize_small_argument_constants(
