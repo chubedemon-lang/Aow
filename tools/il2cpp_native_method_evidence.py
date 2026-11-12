@@ -617,6 +617,306 @@ def _summarize_ordered_serializer_helper_calls(code, start_va, relocations, help
     }
 
 
+
+
+def _decode_aarch64_conditional_branch(word, pc):
+    """Decode B.cond, CBZ/CBNZ or TBZ/TBNZ into (kind, target)."""
+    if (type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+            or type(pc) is not int or pc < 0 or pc % 4):
+        return None
+
+    if (word & 0xFF000010) == 0x54000000:  # B.cond, signed imm19
+        immediate = (word >> 5) & 0x7FFFF
+        bits = 19
+        kind = "b_cond"
+    elif (word & 0x7E000000) == 0x34000000:  # CBZ/CBNZ, signed imm19
+        immediate = (word >> 5) & 0x7FFFF
+        bits = 19
+        kind = "cbz_cbnz"
+    elif (word & 0x7E000000) == 0x36000000:  # TBZ/TBNZ, signed imm14
+        immediate = (word >> 5) & 0x3FFF
+        bits = 14
+        kind = "tbz_tbnz"
+    else:
+        return None
+
+    sign = 1 << (bits - 1)
+    immediate = (immediate ^ sign) - sign
+    return kind, pc + (immediate << 2)
+
+
+def _is_aarch64_return(word):
+    """Recognize RET Xn, including RET X30, without interpreting its target."""
+    return (
+        type(word) is int
+        and 0 <= word <= 0xFFFFFFFF
+        and (word & 0xFFFFFC1F) == 0xD65F0000
+    )
+
+
+def _summarize_control_flow_serializer_helper_blocks(
+    code, start_va, relocations, helper_targets
+):
+    """Group helper callsites by reachable intraprocedural basic block.
+
+    This is a bounded static CFG summary, not symbolic execution. Conditional
+    edges are both considered possible; branches leaving the method window are
+    exits. No native addresses or instruction words are emitted.
+    """
+    if not isinstance(code, bytes) or len(code) % 4:
+        raise ValueError("AArch64 code window must be a multiple of four bytes")
+    if type(start_va) is not int or start_va < 0 or start_va % 4:
+        raise ValueError("AArch64 code window start must be an aligned address")
+    if not isinstance(relocations, dict) or not isinstance(helper_targets, dict):
+        raise ValueError("relocations and helper targets must be mappings")
+
+    instruction_count = len(code) // 4
+    if instruction_count == 0:
+        return {
+            "control_flow_analysis_kind": "bounded_intraprocedural_basic_blocks",
+            "control_flow_block_count": 0,
+            "control_flow_basic_blocks": [],
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_reachable_callsite_observation_count": 0,
+            "control_flow_unreachable_callsite_observation_count": 0,
+            "control_flow_reachable_resolved_helper_callsite_count": 0,
+            "control_flow_unreachable_resolved_helper_callsite_count": 0,
+            "control_flow_conditional_branch_count": 0,
+            "control_flow_external_branch_exit_count": 0,
+        }
+
+    window_end = start_va + len(code)
+    indirect_by_offset = {
+        offset: (kind, target)
+        for offset, kind, target in _relocated_indirect_call_events(
+            code, start_va, relocations, include_offsets=True
+        )
+    }
+    branch_at = {}
+    calls_at = defaultdict(list)
+    conditional_count = 0
+    external_exit_count = 0
+
+    def in_window(target):
+        return (
+            type(target) is int
+            and start_va <= target < window_end
+            and (target - start_va) % 4 == 0
+        )
+
+    def target_index(target):
+        return (target - start_va) // 4 if in_window(target) else None
+
+    def helper_event(kind, target, *, include_unresolved):
+        labels = helper_targets.get(target, ()) if target is not None else ()
+        if len(labels) == 1:
+            return {"kind": kind, "method": labels[0]}
+        if len(labels) > 1:
+            return {"kind": kind, "resolution": "ambiguous_serializer_helper"}
+        if include_unresolved:
+            return {
+                "kind": kind,
+                "resolution": "not_resolved_as_serializer_helper",
+            }
+        return None
+
+    for index in range(instruction_count):
+        offset = index * 4
+        pc = start_va + offset
+        word = struct.unpack_from("<I", code, offset)[0]
+
+        direct_call_target = _decode_aarch64_bl_target(word, pc)
+        if direct_call_target is not None:
+            event = helper_event(
+                "direct_call", direct_call_target, include_unresolved=False
+            )
+            if event is not None:
+                calls_at[index].append(event)
+            continue
+
+        conditional = _decode_aarch64_conditional_branch(word, pc)
+        if conditional is not None:
+            kind, target = conditional
+            target_slot = target_index(target)
+            if target_slot is None:
+                external_exit_count += 1
+            branch_at[index] = {
+                "kind": kind,
+                "conditional": True,
+                "target_index": target_slot,
+            }
+            conditional_count += 1
+            continue
+
+        direct_branch_target = _decode_aarch64_b_target(word, pc)
+        if direct_branch_target is not None:
+            target_slot = target_index(direct_branch_target)
+            if target_slot is None:
+                event = helper_event(
+                    "direct_tail_call",
+                    direct_branch_target,
+                    include_unresolved=False,
+                )
+                if event is not None:
+                    calls_at[index].append(event)
+                else:
+                    external_exit_count += 1
+            branch_at[index] = {
+                "kind": "b",
+                "conditional": False,
+                "target_index": target_slot,
+            }
+            continue
+
+        indirect = indirect_by_offset.get(offset)
+        if indirect is not None:
+            indirect_kind, target = indirect
+            if indirect_kind == "call":
+                calls_at[index].append(
+                    helper_event(
+                        "indirect_call", target, include_unresolved=True
+                    )
+                )
+                continue
+
+            target_slot = target_index(target)
+            if target_slot is not None:
+                branch_at[index] = {
+                    "kind": "indirect_branch",
+                    "conditional": False,
+                    "target_index": target_slot,
+                }
+            else:
+                calls_at[index].append(
+                    helper_event(
+                        "indirect_tail_call", target, include_unresolved=True
+                    )
+                )
+                branch_at[index] = {
+                    "kind": "indirect_tail",
+                    "conditional": False,
+                    "target_index": None,
+                }
+                external_exit_count += 1
+            continue
+
+        if _decode_aarch64_br_register(word) is not None:
+            branch_at[index] = {
+                "kind": "indirect_branch_unresolved",
+                "conditional": False,
+                "target_index": None,
+            }
+            external_exit_count += 1
+            continue
+
+        if _is_aarch64_return(word):
+            branch_at[index] = {
+                "kind": "return",
+                "conditional": False,
+                "target_index": None,
+            }
+
+    starts = {0}
+    for index, branch in branch_at.items():
+        if index + 1 < instruction_count:
+            starts.add(index + 1)
+        target_slot = branch["target_index"]
+        if target_slot is not None:
+            starts.add(target_slot)
+
+    ordered_starts = sorted(starts)
+    blocks = []
+    block_for_instruction = {}
+    for block_index, block_start in enumerate(ordered_starts):
+        block_end = (
+            ordered_starts[block_index + 1]
+            if block_index + 1 < len(ordered_starts)
+            else instruction_count
+        )
+        block = {
+            "block_index": block_index,
+            "instruction_start": block_start,
+            "instruction_count": block_end - block_start,
+            "successors": [],
+        }
+        blocks.append(block)
+        for instruction_index in range(block_start, block_end):
+            block_for_instruction[instruction_index] = block_index
+
+    for block in blocks:
+        block_end = block["instruction_start"] + block["instruction_count"]
+        terminator = branch_at.get(block_end - 1)
+        successors = []
+        if terminator is None:
+            if block_end < instruction_count:
+                successors.append(block_for_instruction[block_end])
+        elif terminator["conditional"]:
+            target_slot = terminator["target_index"]
+            if target_slot is not None:
+                successors.append(block_for_instruction[target_slot])
+            if block_end < instruction_count:
+                successors.append(block_for_instruction[block_end])
+        else:
+            target_slot = terminator["target_index"]
+            if target_slot is not None:
+                successors.append(block_for_instruction[target_slot])
+        block["successors"] = sorted(set(successors))
+        block["terminator"] = (
+            None if terminator is None else terminator["kind"]
+        )
+
+    reachable = set()
+    pending = [0]
+    while pending:
+        block_index = pending.pop()
+        if block_index in reachable:
+            continue
+        reachable.add(block_index)
+        pending.extend(
+            successor for successor in blocks[block_index]["successors"]
+            if successor not in reachable
+        )
+
+    reachable_observations = 0
+    unreachable_observations = 0
+    reachable_helpers = 0
+    unreachable_helpers = 0
+    for block in blocks:
+        block_index = block["block_index"]
+        block_calls = []
+        start = block["instruction_start"]
+        end = start + block["instruction_count"]
+        for instruction_index in range(start, end):
+            for event in calls_at.get(instruction_index, ()):
+                block_calls.append({
+                    "instruction_index": instruction_index,
+                    **event,
+                })
+        block["reachable"] = block_index in reachable
+        block["callsite_observations"] = block_calls
+        resolved_helpers = sum("method" in event for event in block_calls)
+        if block["reachable"]:
+            reachable_observations += len(block_calls)
+            reachable_helpers += resolved_helpers
+        else:
+            unreachable_observations += len(block_calls)
+            unreachable_helpers += resolved_helpers
+
+    max_reported_blocks = 512
+    return {
+        "control_flow_analysis_kind": "bounded_intraprocedural_basic_blocks",
+        "control_flow_block_count": len(blocks),
+        "control_flow_basic_blocks": blocks[:max_reported_blocks],
+        "control_flow_basic_blocks_truncated": len(blocks) > max_reported_blocks,
+        "control_flow_reachable_callsite_observation_count": reachable_observations,
+        "control_flow_unreachable_callsite_observation_count": unreachable_observations,
+        "control_flow_reachable_resolved_helper_callsite_count": reachable_helpers,
+        "control_flow_unreachable_resolved_helper_callsite_count": unreachable_helpers,
+        "control_flow_conditional_branch_count": conditional_count,
+        "control_flow_external_branch_exit_count": external_exit_count,
+    }
+
+
 def _summarize_aarch64_calls(code, start_va, helper_targets):
     """Summarize direct calls to allowlisted serializer helpers without addresses."""
     if not isinstance(code, bytes) or len(code) % 4:
@@ -864,6 +1164,9 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         ordered_summary = _summarize_ordered_serializer_helper_calls(
             code, target, relocations, helper_targets
         )
+        control_flow_summary = _summarize_control_flow_serializer_helper_blocks(
+            code, target, relocations, helper_targets
+        )
         callsite_summary.append({
             "type": method["type"],
             "method": method["method"],
@@ -875,6 +1178,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             **named_summary,
             **indirect_summary,
             **ordered_summary,
+            **control_flow_summary,
         })
     callsite_summary.sort(key=lambda x: (x["type"], x["method"]))
 

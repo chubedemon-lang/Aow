@@ -8,7 +8,8 @@ from tools.il2cpp_native_method_evidence import (
     _decode_aarch64_adr, _decode_aarch64_adrp, _decode_aarch64_add_imm64,
     _decode_aarch64_ldr_x_unsigned, _decode_aarch64_mov_x_register,
     _decode_aarch64_bl_target,
-    _decode_aarch64_b_target, _summarize_aarch64_calls,
+    _decode_aarch64_b_target, _decode_aarch64_conditional_branch,
+    _summarize_aarch64_calls, _summarize_control_flow_serializer_helper_blocks,
     _summarize_relocated_indirect_calls,
     _summarize_ordered_serializer_helper_calls, inspect_bytes,
 )
@@ -728,6 +729,166 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             summary["indirect_callsite_not_resolved_as_helper_count"], 1
         )
         self.assertEqual(summary["ambiguous_indirect_helper_callsite_count"], 0)
+
+
+
+    @staticmethod
+    def _encode_b(pc, target):
+        delta = target - pc
+        if delta % 4:
+            raise ValueError("unaligned branch target")
+        immediate = delta // 4
+        if not -(1 << 25) <= immediate < (1 << 25):
+            raise ValueError("branch target outside AArch64 B range")
+        return 0x14000000 | (immediate & 0x03FFFFFF)
+
+    @staticmethod
+    def _encode_b_cond(pc, target, condition=0):
+        delta = target - pc
+        if delta % 4:
+            raise ValueError("unaligned branch target")
+        immediate = delta // 4
+        if not -(1 << 18) <= immediate < (1 << 18):
+            raise ValueError("branch target outside AArch64 B.cond range")
+        return 0x54000000 | ((immediate & 0x7FFFF) << 5) | condition
+
+    def test_conditional_branch_decoder_handles_b_cond_cbz_and_tbz(self):
+        start = 0x5000
+        self.assertEqual(
+            _decode_aarch64_conditional_branch(
+                self._encode_b_cond(start, start + 12), start
+            ),
+            ("b_cond", start + 12),
+        )
+        self.assertEqual(
+            _decode_aarch64_conditional_branch(
+                0x34000000 | (2 << 5), start
+            ),
+            ("cbz_cbnz", start + 8),
+        )
+        self.assertEqual(
+            _decode_aarch64_conditional_branch(
+                0x36000000 | (((-2) & 0x3FFF) << 5), start
+            ),
+            ("tbz_tbnz", start - 8),
+        )
+        self.assertIsNone(
+            _decode_aarch64_conditional_branch(0xD65F03C0, start)
+        )
+
+    def test_control_flow_summary_separates_mutually_exclusive_serializer_paths(self):
+        start = 0x5000
+        words = (
+            self._encode_b_cond(start, start + 12),
+            self._encode_bl(start + 4, 0x2000),
+            self._encode_b(start + 8, start + 16),
+            self._encode_bl(start + 12, 0x2020),
+            0xD65F03C0,  # ret
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code,
+            start,
+            {},
+            {
+                0x2000: ["SimpleSerializer::serializeInt"],
+                0x2020: ["SimpleSerializer::serializeString"],
+            },
+        )
+        blocks = summary["control_flow_basic_blocks"]
+        self.assertEqual(summary["control_flow_block_count"], 4)
+        self.assertEqual(blocks[0]["successors"], [1, 2])
+        self.assertEqual(blocks[1]["successors"], [3])
+        self.assertEqual(blocks[2]["successors"], [3])
+        self.assertEqual(blocks[1]["callsite_observations"], [{
+            "instruction_index": 1,
+            "kind": "direct_call",
+            "method": "SimpleSerializer::serializeInt",
+        }])
+        self.assertEqual(blocks[2]["callsite_observations"], [{
+            "instruction_index": 3,
+            "kind": "direct_call",
+            "method": "SimpleSerializer::serializeString",
+        }])
+        self.assertTrue(all(block["reachable"] for block in blocks))
+        self.assertEqual(summary["control_flow_conditional_branch_count"], 1)
+        rendered = json.dumps(summary)
+        for address in ("0x2000", "0x2020", "0x5000", "0x500c"):
+            self.assertNotIn(address, rendered)
+
+    def test_control_flow_summary_excludes_unreachable_helper_callsite_from_reachable_path(self):
+        start = 0x6000
+        words = (
+            self._encode_b(start, start + 8),
+            self._encode_bl(start + 4, 0x2000),
+            self._encode_bl(start + 8, 0x2020),
+            0xD65F03C0,  # ret
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code,
+            start,
+            {},
+            {
+                0x2000: ["SimpleSerializer::serializeInt"],
+                0x2020: ["SimpleSerializer::serializeString"],
+            },
+        )
+        blocks = summary["control_flow_basic_blocks"]
+        self.assertEqual(summary["control_flow_block_count"], 3)
+        self.assertFalse(blocks[1]["reachable"])
+        self.assertEqual(blocks[1]["callsite_observations"][0]["method"],
+                         "SimpleSerializer::serializeInt")
+        self.assertTrue(blocks[2]["reachable"])
+        self.assertEqual(blocks[2]["callsite_observations"][0]["method"],
+                         "SimpleSerializer::serializeString")
+        self.assertEqual(summary["control_flow_reachable_resolved_helper_callsite_count"], 1)
+        self.assertEqual(summary["control_flow_unreachable_resolved_helper_callsite_count"], 1)
+        self.assertEqual(summary["control_flow_unreachable_callsite_observation_count"], 1)
+
+    def test_control_flow_conditional_external_edge_keeps_fallthrough_reachable(self):
+        start = 0x7000
+        words = (
+            self._encode_b_cond(start, start + 0x1000),
+            self._encode_bl(start + 4, 0x2000),
+            0xD65F03C0,
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code, start, {},
+            {0x2000: ["SimpleSerializer::serializeInt"]},
+        )
+        self.assertEqual(summary["control_flow_external_branch_exit_count"], 1)
+        self.assertTrue(summary["control_flow_basic_blocks"][1]["reachable"])
+        self.assertEqual(
+            summary["control_flow_basic_blocks"][1]["callsite_observations"][0]["method"],
+            "SimpleSerializer::serializeInt",
+        )
+
+    def test_control_flow_summary_marks_unresolved_indirect_tail_as_exit(self):
+        start = 0x8000
+        words = (
+            self._encode_adrp(start, 0x3000, 8),
+            self._encode_add_x(8, 8, 0x80),
+            self._encode_ldr_x(9, 8),
+            0xD61F0000 | (9 << 5),
+            self._encode_bl(start + 16, 0x2000),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code,
+            start,
+            {0x3080: (R_AARCH64_RELATIVE, 0x6010)},
+            {0x2000: ["SimpleSerializer::serializeInt"]},
+        )
+        blocks = summary["control_flow_basic_blocks"]
+        self.assertEqual(blocks[0]["terminator"], "indirect_tail")
+        self.assertFalse(blocks[1]["reachable"])
+        self.assertEqual(summary["control_flow_reachable_resolved_helper_callsite_count"], 0)
+        self.assertEqual(summary["control_flow_unreachable_resolved_helper_callsite_count"], 1)
+        self.assertEqual(summary["control_flow_reachable_callsite_observation_count"], 1)
+        self.assertEqual(summary["control_flow_unreachable_callsite_observation_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
