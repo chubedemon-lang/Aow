@@ -150,14 +150,17 @@ class RegistryTests(unittest.TestCase):
     def test_concurrent_authentication_reserves_account_once(self):
         workers = 16
         registry = SessionRegistry()
-        for index in range(workers):
+        sessions = [
             registry.open("connection-" + str(index))
+            for index in range(workers)
+        ]
         barrier = threading.Barrier(workers)
 
         def authenticate_one(index):
             barrier.wait(timeout=5)
             try:
-                registry.authenticate("connection-" + str(index), "same-account")
+                # Exercise the retained public handle, not only registry methods.
+                sessions[index].authenticate("same-account")
                 return True
             except RegistryError:
                 return False
@@ -176,16 +179,18 @@ class RegistryTests(unittest.TestCase):
     def test_concurrent_character_selection_reserves_character_once(self):
         workers = 16
         registry = SessionRegistry()
+        sessions = []
         for index in range(workers):
-            key = "connection-" + str(index)
-            registry.open(key)
-            registry.authenticate(key, "account-" + str(index))
+            session = registry.open("connection-" + str(index))
+            session.authenticate("account-" + str(index))
+            sessions.append(session)
         barrier = threading.Barrier(workers)
 
         def select_one(index):
             barrier.wait(timeout=5)
             try:
-                registry.select_character("connection-" + str(index), "same-character")
+                # Exercise the retained public handle, not only registry methods.
+                sessions[index].select_character("same-character")
                 return True
             except RegistryError:
                 return False
