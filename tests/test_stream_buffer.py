@@ -52,6 +52,30 @@ class BoundedStreamBufferTests(unittest.TestCase):
         buffer.feed(b"d")
         self.assertEqual(buffer.read_exact(4), b"abcd")
 
+    def test_multibyte_memoryview_capacity_uses_nbytes(self):
+        # len(view) is the number of 32-bit elements (2), while nbytes is 8.
+        view = memoryview(bytearray(b"abcdefgh")).cast("I")
+        self.assertEqual(len(view), 2)
+        self.assertEqual(view.nbytes, 8)
+
+        buffer = BoundedStreamBuffer(max_buffer_bytes=8)
+        buffer.feed(b"xy")
+        with self.assertRaises(BufferLimitExceeded) as caught:
+            buffer.feed(view)
+        self.assertEqual(
+            (caught.exception.requested, caught.exception.available, caught.exception.limit),
+            (8, 2, 8),
+        )
+        self.assertEqual(buffer.read_available(), b"xy")
+
+    def test_multibyte_memoryview_is_snapshotted_as_raw_bytes(self):
+        source = bytearray(b"abcdefgh")
+        view = memoryview(source).cast("I")
+        buffer = BoundedStreamBuffer(max_buffer_bytes=8)
+        self.assertEqual(buffer.feed(view), 8)
+        source[:] = b"ABCDEFGH"
+        self.assertEqual(buffer.read_exact(8), b"abcdefgh")
+
     def test_close_allows_draining_then_reports_unexpected_eof(self):
         buffer = BoundedStreamBuffer(max_buffer_bytes=4)
         buffer.feed(b"ab")
