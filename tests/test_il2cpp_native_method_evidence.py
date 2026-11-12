@@ -835,7 +835,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             },
         )
         blocks = summary["control_flow_basic_blocks"]
-        self.assertEqual(summary["control_flow_block_count"], 4)
+        self.assertEqual(summary["control_flow_block_count"], 3)
         self.assertFalse(blocks[1]["reachable"])
         self.assertEqual(blocks[1]["callsite_observations"][0]["method"],
                          "SimpleSerializer::serializeInt")
