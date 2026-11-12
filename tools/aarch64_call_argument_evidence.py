@@ -1,8 +1,8 @@
 """Conservative, redacted AArch64 small-immediate and register-move evidence.
 
-This is a linear bounded-window analysis, not a control-flow graph or ABI
-proof. It reports only small constants in x0-x7 immediately before uniquely
-resolved, allowlisted direct calls. It never emits native addresses or bytes.
+This bounded intraprocedural CFG analysis reports only small constants in
+x0-x7 immediately before uniquely resolved, allowlisted direct calls. It is
+not a full emulator or ABI proof and never emits native addresses or bytes.
 """
 import struct
 
@@ -107,13 +107,40 @@ def _decode_unconditional_branch_target(word, pc):
 
 
 def _is_indirect_branch(word):
+    """Recognize bounded-CFG exits, including authenticated AArch64 branches."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return False
+
     # BR Xn and RET Xn. Register bits [9:5] are intentionally masked.
-    return (word & 0xFFFFFC1F) in (0xD61F0000, 0xD65F0000)
+    if (word & 0xFFFFFC1F) in (0xD61F0000, 0xD65F0000):
+        return True
+
+    # BRAA/BRAB Xn, Xm and zero-modifier BRAAZ/BRABZ Xn.
+    if (word & 0xFFFFFC00) in (0xD71F0800, 0xD71F0C00):
+        return True
+    if (word & 0xFFFFFC1F) in (0xD61F081F, 0xD61F0C1F):
+        return True
+
+    # Authenticated returns and exception/debug returns are terminal edges.
+    return word in {
+        0xD65F0BFF,  # RETAA
+        0xD65F0FFF,  # RETAB
+        0xD69F03E0,  # ERET
+        0xD69F0BFF,  # ERETAA
+        0xD69F0FFF,  # ERETAB
+        0xD6BF03E0,  # DRPS
+    }
 
 
 def _is_indirect_call(word):
-    # BLR Xn. It returns to the next instruction but clobbers caller-saved regs.
-    return (word & 0xFFFFFC1F) == 0xD63F0000
+    """Recognize BLR and pointer-authenticated BLRAA/BLRAB call forms."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return False
+    if (word & 0xFFFFFC1F) == 0xD63F0000:  # BLR Xn
+        return True
+    if (word & 0xFFFFFC00) in (0xD73F0800, 0xD73F0C00):  # BLRAA/BLRAB
+        return True
+    return (word & 0xFFFFFC1F) in (0xD63F081F, 0xD63F0C1F)  # BLRAAZ/BLRABZ
 
 
 def _build_control_flow_blocks(words, start_va):
@@ -203,7 +230,9 @@ def summarize_small_argument_constants(
     """Return conservative small constants at resolved allowlisted direct BL sites.
 
     A bounded intraprocedural CFG handles B.cond, CBZ/CBNZ, TBZ/TBNZ, B,
-    BR and RET. Constants flow only across a unique forward predecessor;
+    BR/RET, pointer-authenticated branch/return forms, ERET and DRPS. BLR
+    and pointer-authenticated BLR forms clobber caller-saved registers.
+    Constants flow only across a unique forward predecessor;
     joins and backedges start with unknown register state. Unknown instructions
     clear the abstract state. BL/BLR calls clobber caller-saved registers.
 
