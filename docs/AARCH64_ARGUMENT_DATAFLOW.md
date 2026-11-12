@@ -55,9 +55,11 @@ resolved callsite.
 ## Tests
 
 tests/test_aarch64_call_argument_evidence.py uses fabricated instruction words
-and synthetic relocation-backed method targets only. These tests verify the
-analyzer's conservative behavior; they do not analyze the AOW APK or prove
-any AOW packet, handshake, login field or wire format.
+and synthetic relocation-backed method targets only. Positive and negative
+fixtures cover supported pointer-authentication forms, nearby non-matching
+encodings, and invalid input types. These tests verify conservative
+classification only; they do not analyze the AOW APK or prove any AOW packet,
+handshake, login field or wire format.
 
 
 ## Encoding references
