@@ -40,3 +40,14 @@ Synthetic tests verify that the new roots are selected and that two small regist
 5. Keep the transport adapter disabled until framing, handshake, LoginRequest and end-to-end behavior are independently verified.
 
 No APK, native library, raw instruction bytes, packet capture, endpoint value, credential, player data or proprietary asset is included in this repository.
+
+
+## Fresh private revalidation — 2026-11-13
+
+The same authorized APK fingerprint was re-read in the isolated workspace and matched the existing ledger. The full bounded ZIP CRC pass succeeded. The metadata/codegen inventory again matched 165/165 images and 197,631/197,631 method-pointer slots.
+
+A fresh bounded CFG analysis of the connection-start state-machine entrypoint resolved two direct calls to `MessageDispatcher.SafeRegister`. The second integer argument in x1 was 5004 at one callsite and 5005 at the other.
+
+These observations reconfirm the two values as **client-side dispatcher registration keys**. They are still not wire message IDs: no authorized packet bytes or runtime trace links either key to a transmitted message. Callback target metadata references remain unresolved. Do not assign message names or build a wire dispatch table from these values alone.
+
+The receiver and sender entrypoint windows also retain two direct primitive integer helper callsites each (two `deserializeInt` calls in `Receiver.Cycle`, two `serializeInt` calls in `Sender.Cycle`). Their individual semantics and full control-flow relationship remain unresolved.
