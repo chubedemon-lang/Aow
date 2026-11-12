@@ -126,6 +126,20 @@ def _validate_reproduction(value):
         raise EvidenceError("reproduction must be a sanitized local command")
     return value
 
+ 
+def validate_public_evidence_text(value, field="observation", maximum=2000):
+    """Validate public evidence prose without exposing endpoints or secrets."""
+    if type(maximum) is not int or not 1 <= maximum <= 2000:
+        raise EvidenceError("maximum must be an integer in range 1..2000")
+    if type(field) is not str or not field or not field.isidentifier():
+        raise EvidenceError("field must be a simple identifier")
+    return _validate_public_text(value, field, maximum)
+
+
+def validate_local_evidence_reference(value):
+    """Validate a repository-local evidence locator; reject network locations."""
+    return _validate_test_reference(value)
+
 
 @dataclass(frozen=True)
 class Evidence:

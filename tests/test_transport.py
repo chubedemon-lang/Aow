@@ -13,7 +13,7 @@ class TransportTests(unittest.TestCase):
             adapter.send({"hello": 1})
 
     def test_reject_incomplete_codec(self):
-        evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "test-only")
+        evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "tests/test_transport.py")
         with self.assertRaises(ValueError):
             TransportAdapter(evidence, decode=lambda value: value)
         with self.assertRaises(TypeError):
@@ -22,7 +22,7 @@ class TransportTests(unittest.TestCase):
             ProtocolEvidence("bad", "test", "review")
 
     def test_injected_synthetic_codec(self):
-        evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "test-only")
+        evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "tests/test_transport.py")
         adapter = TransportAdapter(evidence, decode=lambda raw: raw.decode("ascii"),
                                    encode=lambda msg: msg.encode("ascii"))
         self.assertTrue(adapter.configured)
@@ -32,7 +32,7 @@ class TransportTests(unittest.TestCase):
             adapter.receive("not bytes")
 
     def test_payload_size_boundaries(self):
-        evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "test-only")
+        evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "tests/test_transport.py")
         adapter = TransportAdapter(evidence, decode=lambda raw: raw, encode=lambda msg: msg)
         from server.transport import MAX_SYNTHETIC_PAYLOAD_BYTES
         valid = b"x" * MAX_SYNTHETIC_PAYLOAD_BYTES
@@ -45,18 +45,18 @@ class TransportTests(unittest.TestCase):
 
     def test_configured_is_not_apk_compatibility(self):
         self.assertFalse(TransportAdapter().configured)
-        evidence = ProtocolEvidence("a" * 64, "synthetic test", "test-only")
+        evidence = ProtocolEvidence("a" * 64, "synthetic test", "tests/test_transport.py")
         self.assertFalse(TransportAdapter(evidence).configured)
 
     def test_reject_non_bytes_encoded_output(self):
-        evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "test-only")
+        evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "tests/test_transport.py")
         adapter = TransportAdapter(evidence, decode=lambda raw: raw,
                                    encode=lambda msg: "not bytes")
         with self.assertRaises(TypeError):
             adapter.send("hello")
 
     def test_accept_sanitized_local_review_references(self):
-        for reference in ("test-only", "issue:2", "docs/PROTOCOL.md#framing"):
+        for reference in ("tests/test_transport.py", "issue:2", "docs/PROTOCOL.md#framing"):
             with self.subTest(reference=reference):
                 evidence = ProtocolEvidence("a" * 64, "static observation", reference)
                 self.assertEqual(evidence.review_reference, reference)
@@ -67,12 +67,40 @@ class TransportTests(unittest.TestCase):
             "private//path",
             "token",
             "docs/PROTOCOL.md?api_key=hidden",
+            "127.0.0.1:8080",
+            "localhost:8765",
+            "game.example.invalid:443",
+            "tests/../private.py",
             "x" * 161,
             "contains whitespace",
         )
         for reference in invalid:
             with self.subTest(reference=reference), self.assertRaises(ValueError):
                 ProtocolEvidence("a" * 64, "static observation", reference)
+
+    def test_reject_sensitive_observation_metadata(self):
+        invalid = (
+            "https://private.example.invalid/capture",
+            "endpoint 192.0.2.10",
+            "endpoint 2001:db8::1",
+            "localhost:8765",
+            "game.example.invalid",
+            "token=do-not-publish",
+            "Authorization: Bearer abcdefghijklmnop",
+            "packet_bytes=00112233",
+            "-----BEGIN PRIVATE KEY-----",
+        )
+        for observation in invalid:
+            with self.subTest(observation=observation), self.assertRaises(ValueError):
+                ProtocolEvidence("a" * 64, observation, "issue:2")
+
+    def test_accept_sanitized_observation_and_local_reference(self):
+        evidence = ProtocolEvidence(
+            "a" * 64,
+            "Static native callsite observation; endpoint and bytes omitted",
+            "docs/PROTOCOL.md#framing",
+        )
+        self.assertEqual(evidence.review_reference, "docs/PROTOCOL.md#framing")
 
     def test_reject_unbounded_observation(self):
         with self.assertRaises(ValueError):

@@ -7,6 +7,12 @@ from dataclasses import dataclass
 import re
 from typing import Callable
 
+from server.protocol_evidence_registry import (
+    EvidenceError,
+    validate_local_evidence_reference,
+    validate_public_evidence_text,
+)
+
 
 class UnverifiedProtocolError(RuntimeError):
     """The original APK wire format has not been established."""
@@ -30,21 +36,13 @@ class ProtocolEvidence:
             c not in "0123456789abcdef" for c in self.source_digest
         ):
             raise ValueError("source_digest must be lowercase SHA-256 hex")
-        if (
-            not isinstance(self.observation, str)
-            or not self.observation.strip()
-            or len(self.observation) > 2000
-        ):
-            raise ValueError("observation required (max 2000 characters)")
-        reference = self.review_reference
-        if (
-            not isinstance(reference, str)
-            or not _SAFE_REFERENCE.fullmatch(reference)
-            or "://" in reference
-            or "//" in reference
-            or _SECRET_REFERENCE.search(reference)
-        ):
-            raise ValueError("review reference must be a sanitized local locator")
+        try:
+            validate_public_evidence_text(
+                self.observation, field="observation", maximum=2000
+            )
+            validate_local_evidence_reference(self.review_reference)
+        except EvidenceError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 MAX_SYNTHETIC_PAYLOAD_BYTES = 1024 * 1024
