@@ -1,4 +1,5 @@
 """Tests for synthetic session isolation, not APK protocol."""
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,7 +19,7 @@ class SessionTests(unittest.TestCase):
     def test_ownership_and_isolation(self):
         alice = self.domain.create_character("alice", "Alice")["id"]
         bob = self.domain.create_character("bob", "Bob")["id"]
-        with self.domain.connect() as db:
+        with self.domain.connection() as db:
             alice_account = db.execute("SELECT account_id FROM characters WHERE id=?", (alice,)).fetchone()[0]
             bob_account = db.execute("SELECT account_id FROM characters WHERE id=?", (bob,)).fetchone()[0]
         token = self.sessions.issue(alice_account)
@@ -30,6 +31,36 @@ class SessionTests(unittest.TestCase):
             self.sessions.require_character(other, alice, self.domain)
         with self.assertRaises(SessionError):
             self.sessions.require_character("forged", alice, self.domain)
+
+    def test_require_character_closes_connection_on_success_and_rejection(self):
+        alice = self.domain.create_character("alice", "Alice")["id"]
+        bob = self.domain.create_character("bob", "Bob")["id"]
+        with self.domain.connection() as db:
+            alice_account = db.execute(
+                "SELECT account_id FROM characters WHERE id=?", (alice,)
+            ).fetchone()[0]
+
+        token = self.sessions.issue(alice_account)
+        original_connect = self.domain.connect
+        opened = []
+
+        def tracked_connect():
+            connection = original_connect()
+            opened.append(connection)
+            return connection
+
+        self.domain.connect = tracked_connect
+        self.assertEqual(
+            self.sessions.require_character(token, alice, self.domain), alice
+        )
+        with self.assertRaises(SessionError):
+            self.sessions.require_character(token, bob, self.domain)
+
+        self.assertEqual(len(opened), 2)
+        for connection in opened:
+            with self.subTest(connection=connection):
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    connection.execute("SELECT 1")
 
     def test_expiry_revoke_and_purge(self):
         token = self.sessions.issue(1)

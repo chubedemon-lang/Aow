@@ -9,6 +9,7 @@ server/sessions.py implements a local-only session primitive:
 - Tokens are generated using secrets.token_urlsafe(32); never log or commit tokens.
 - A session maps to an internal account ID and expires according to a monotonic clock.
 - require_character checks ownership in SQLite before permitting future character actions.
+- The short-lived ownership-check connection is explicitly closed on both success and rejection. A sqlite3.Connection context manager alone only commits or rolls back; it does not close the connection.
 - Sessions are process-local and disappear on restart.
 - No password verification, login HTTP route, real client handshake, transport framing, or AOW packet IDs are implemented.
 
@@ -53,7 +54,6 @@ python -m unittest discover -s tests -p 'test_sqlite_authorized_map_service.py' 
 python -m unittest discover -s tests -p 'test_sqlite_authorized_player_state_service.py' -v
 ~~~
 
-
 ## Synthetic credential boundary
 
-`server/sqlite_account_auth_service.py` provides local PBKDF2-HMAC-SHA256 credential enrollment and verification for synthetic accounts. It issues a durable session only after re-reading the credential under `BEGIN IMMEDIATE`, using `SqliteSessionStore.issue_in_transaction` so credential verification and session insertion cannot be separated by a credential change. Enrollment is a trusted local setup operation; there is no HTTP route, APK password format, or APK login integration. The account service can accept an optional `SqliteAuthRateLimiter` that stores keyed username digests and clears failed-attempt buckets atomically on successful session issuance. It is not a source-IP/network limiter. See [SQLITE_ACCOUNT_AUTH_SERVICE.md](SQLITE_ACCOUNT_AUTH_SERVICE.md).
+server/sqlite_account_auth_service.py provides local PBKDF2-HMAC-SHA256 credential enrollment and verification for synthetic accounts. It issues a durable session only after re-reading the credential under BEGIN IMMEDIATE, using SqliteSessionStore.issue_in_transaction so credential verification and session insertion cannot be separated by a credential change. Enrollment is a trusted local setup operation; there is no HTTP route, APK password format, or APK login integration. The account service can accept an optional SqliteAuthRateLimiter that stores keyed username digests and clears failed-attempt buckets atomically on successful session issuance. It is not a source-IP/network limiter. See SQLITE_ACCOUNT_AUTH_SERVICE.md.
