@@ -351,6 +351,63 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
             )
 
 
+    def test_pointer_authenticated_branches_and_returns_terminate_cfg(self):
+        terminators = (
+            0xD71F0801,  # braa x0, x1
+            0xD71F0C01,  # brab x0, x1
+            0xD61F081F,  # braaz x0
+            0xD61F0C1F,  # brabz x0
+            0xD65F0BFF,  # retaa
+            0xD65F0FFF,  # retab
+            0xD69F03E0,  # eret
+            0xD69F0BFF,  # eretaa
+            0xD69F0FFF,  # eretab
+            0xD6BF03E0,  # drps
+        )
+        for terminator in terminators:
+            with self.subTest(terminator=hex(terminator)):
+                code = words(
+                    movz_x(1, 4),
+                    terminator,
+                    bl(0x1008, self.target),
+                )
+                result = summarize_small_argument_constants(
+                    code, 0x1000, self.targets, target_prefixes=self.prefixes
+                )
+                self.assertEqual(result, [])
+
+    def test_pointer_authenticated_indirect_calls_clobber_caller_saved_state(self):
+        calls = (
+            0xD73F0801,  # blraa x0, x1
+            0xD73F0C01,  # blrab x0, x1
+            0xD63F081F,  # blraaz x0
+            0xD63F0C1F,  # blrabz x0
+        )
+        for call in calls:
+            with self.subTest(call=hex(call)):
+                code = words(
+                    movz_x(1, 4),
+                    call,
+                    bl(0x1008, self.target),
+                )
+                result = summarize_small_argument_constants(
+                    code, 0x1000, self.targets, target_prefixes=self.prefixes
+                )
+                self.assertEqual(result, [])
+
+    def test_pointer_authenticated_indirect_call_keeps_return_fallthrough(self):
+        code = words(
+            0xD73F0801,  # blraa x0, x1
+            movz_x(1, 7),
+            bl(0x1008, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(
+            result[0]["known_small_argument_constants"], {"x1": 7}
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
