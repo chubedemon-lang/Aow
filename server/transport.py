@@ -4,7 +4,6 @@ An adapter cannot parse or emit bytes until a separately reviewed protocol
 contract is supplied. This module deliberately contains no network listener.
 """
 from dataclasses import dataclass
-import re
 from typing import Callable
 
 from server.protocol_evidence_registry import (
@@ -16,12 +15,6 @@ from server.protocol_evidence_registry import (
 
 class UnverifiedProtocolError(RuntimeError):
     """The original APK wire format has not been established."""
-
-
-_SAFE_REFERENCE = re.compile(r"[A-Za-z0-9_./:#-]{1,160}\Z")
-_SECRET_REFERENCE = re.compile(
-    r"(?i)(?:token|secret|password|apikey|api_key|credential)"
-)
 
 
 @dataclass(frozen=True)
