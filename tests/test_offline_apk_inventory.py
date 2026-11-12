@@ -5,6 +5,7 @@ import warnings
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 from pathlib import Path
 
 from tools.offline_apk_inventory import inspect_apk
