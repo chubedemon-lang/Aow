@@ -772,11 +772,8 @@ def _summarize_control_flow_serializer_helper_blocks(
         if indirect is not None:
             indirect_kind, target = indirect
             if indirect_kind == "call":
-                calls_at[index].append(
-                    helper_event(
-                        "indirect_call", target, include_unresolved=True
-                    )
-                )
+                # Resolve BLR targets after CFG construction so branch-local
+                # register state cannot leak through a linear scan.
                 continue
 
             target_slot = target_index(target)
@@ -876,6 +873,123 @@ def _summarize_control_flow_serializer_helper_blocks(
             successor for successor in blocks[block_index]["successors"]
             if successor not in reachable
         )
+
+    # Resolve BLR targets with the same bounded CFG used for the block report.
+    # State crosses only one reachable forward predecessor; joins and backedges
+    # deliberately lose it rather than merging potentially different pointers.
+    predecessors = [set() for _ in blocks]
+    for source, block in enumerate(blocks):
+        for destination in block["successors"]:
+            predecessors[destination].add(source)
+
+    outgoing_states = {}
+    for block in blocks:
+        block_index = block["block_index"]
+        block_start = block["instruction_start"]
+        block_end = block_start + block["instruction_count"]
+
+        if block_index not in reachable:
+            registers = {}
+        else:
+            incoming = predecessors[block_index] & reachable
+            if block_index == 0 or len(incoming) != 1:
+                registers = {}
+            else:
+                predecessor = next(iter(incoming))
+                if (
+                    predecessor < block_index
+                    and blocks[predecessor]["instruction_start"] < block_start
+                    and predecessor in outgoing_states
+                ):
+                    registers = dict(outgoing_states[predecessor])
+                else:
+                    registers = {}
+
+        for instruction_index in range(block_start, block_end):
+            word = struct.unpack_from("<I", code, instruction_index * 4)[0]
+            pc = start_va + instruction_index * 4
+
+            adr = _decode_aarch64_adr(word, pc)
+            if adr is not None:
+                destination, address = adr
+                registers[destination] = address
+                continue
+
+            adrp = _decode_aarch64_adrp(word, pc)
+            if adrp is not None:
+                destination, page = adrp
+                registers[destination] = page
+                continue
+
+            add = _decode_aarch64_add_imm64(word)
+            if add is not None:
+                destination, source, immediate = add
+                if source in registers:
+                    registers[destination] = registers[source] + immediate
+                else:
+                    registers.pop(destination, None)
+                continue
+
+            load = _decode_aarch64_ldr_x_unsigned(word)
+            if load is not None:
+                target_register, base_register, offset_bytes = load
+                base = registers.get(base_register)
+                relocation = (
+                    relocations.get(base + offset_bytes)
+                    if base is not None else None
+                )
+                if (
+                    isinstance(relocation, tuple)
+                    and len(relocation) == 2
+                    and relocation[0] == R_AARCH64_RELATIVE
+                    and type(relocation[1]) is int
+                    and relocation[1] >= 0
+                ):
+                    registers[target_register] = relocation[1]
+                else:
+                    registers.pop(target_register, None)
+                continue
+
+            move = _decode_aarch64_mov_x_register(word)
+            if move is not None:
+                destination, source = move
+                if destination != 31:
+                    if source == 31:
+                        registers[destination] = 0
+                    elif source in registers:
+                        registers[destination] = registers[source]
+                    else:
+                        registers.pop(destination, None)
+                continue
+
+            call_register = _decode_aarch64_blr_register(word)
+            if call_register is not None:
+                calls_at[instruction_index].append(
+                    helper_event(
+                        "indirect_call",
+                        registers.get(call_register),
+                        include_unresolved=True,
+                    )
+                )
+                registers.clear()
+                continue
+
+            if _decode_aarch64_bl_target(word, pc) is not None:
+                registers.clear()
+                continue
+
+            if (
+                _decode_aarch64_conditional_branch(word, pc) is not None
+                or _decode_aarch64_b_target(word, pc) is not None
+                or _decode_aarch64_br_register(word) is not None
+                or _is_aarch64_return(word)
+            ):
+                continue
+
+            if word != 0xD503201F:  # NOP
+                registers.clear()
+
+        outgoing_states[block_index] = registers
 
     reachable_observations = 0
     unreachable_observations = 0

@@ -230,3 +230,29 @@ This is a conservative static register-value observation, not a full ABI or
 data-flow proof. It does not establish serializer field order, message IDs,
 handshake, framing or APK/server compatibility. See
 [AArch64 argument data-flow limits](AARCH64_ARGUMENT_DATAFLOW.md).
+
+
+## CFG-aware relocation-backed indirect-call targets — tooling only
+
+The control-flow block summary now resolves plain BLR call targets using the
+same bounded intraprocedural graph that labels reachable and unreachable
+blocks. It follows only the narrow ADR/ADRP, 64-bit ADD-immediate,
+relocation-backed LDR X and unshifted MOV X-register subset.
+
+Abstract pointer state crosses a block boundary only when there is exactly
+one reachable forward predecessor. State is discarded at multi-predecessor
+joins, backedges, unreachable incoming paths, direct/indirect calls and
+unrecognized instructions. Unresolved or ambiguous indirect targets remain
+unresolved; raw addresses and instruction words are never emitted.
+
+The separate linear callsite summary remains explicitly linear and is not an
+execution trace. Indirect BR tail-edge discovery still uses its existing
+narrow relocation-backed scan; this change does not claim to resolve arbitrary
+virtual calls, authenticated indirect calls, runtime-computed pointers or
+conditional outcomes.
+
+Synthetic instruction-vector tests cover two mutually exclusive branch paths
+that resolve to different helper labels and a multi-predecessor join where the
+target must remain unresolved. This is analyzer capability only: no new APK
+bytes were read, no native pass was run, and no framing, message ID, handshake,
+LoginRequest field order or APK compatibility claim is added.
