@@ -59,6 +59,13 @@ class SyntheticHandshakeTests(unittest.TestCase):
         with self.assertRaises(HandshakeError):
             state.acknowledge(b"12345678")
 
+    def test_phase_is_read_only(self):
+        state = SyntheticHandshake()
+        with self.assertRaises(AttributeError):
+            state.phase = Phase.ESTABLISHED
+        self.assertEqual(state.phase, Phase.NEW)
+        self.assertFalse(state.established)
+
 
 if __name__ == "__main__":
     unittest.main()

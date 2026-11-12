@@ -1,8 +1,9 @@
 """Local synthetic handshake state machine; NOT derived from AOW APK.
 
-No network transport, authentication, or real protocol assumptions.
+No network transport, authentication, or real protocol assumptions. The phase
+is exposed as a read-only property so callers cannot accidentally bypass the
+transition checks by assigning an established phase directly.
 """
-from dataclasses import dataclass
 from enum import Enum, auto
 
 
@@ -17,38 +18,43 @@ class Phase(Enum):
     CLOSED = auto()
 
 
-@dataclass
 class SyntheticHandshake:
-    """Deterministic local fixture with explicit state and no secrets."""
+    """Deterministic local fixture with explicit, encapsulated state."""
 
-    phase: Phase = Phase.NEW
+    __slots__ = ("_phase", "_nonce")
 
-    def __post_init__(self):
-        if self.phase is not Phase.NEW:
+    def __init__(self, phase=Phase.NEW):
+        if phase is not Phase.NEW:
             raise HandshakeError("handshake must start new")
+        self._phase = Phase.NEW
+
+    @property
+    def phase(self) -> Phase:
+        """Current phase; transitions must go through this object's methods."""
+        return self._phase
 
     def challenge(self, nonce: bytes) -> None:
-        if self.phase is not Phase.NEW:
+        if self._phase is not Phase.NEW:
             raise HandshakeError("challenge out of order")
         if type(nonce) is not bytes or not 8 <= len(nonce) <= 32:
             raise HandshakeError("invalid fixture nonce")
         self._nonce = nonce
-        self.phase = Phase.CHALLENGED
+        self._phase = Phase.CHALLENGED
 
     def acknowledge(self, echoed_nonce: bytes) -> None:
-        if self.phase is not Phase.CHALLENGED:
+        if self._phase is not Phase.CHALLENGED:
             raise HandshakeError("acknowledgement out of order")
         if type(echoed_nonce) is not bytes or echoed_nonce != self._nonce:
             self.close()
             raise HandshakeError("fixture acknowledgement mismatch")
         del self._nonce
-        self.phase = Phase.ESTABLISHED
+        self._phase = Phase.ESTABLISHED
 
     def close(self) -> None:
         if hasattr(self, "_nonce"):
             del self._nonce
-        self.phase = Phase.CLOSED
+        self._phase = Phase.CLOSED
 
     @property
     def established(self) -> bool:
-        return self.phase is Phase.ESTABLISHED
+        return self._phase is Phase.ESTABLISHED
