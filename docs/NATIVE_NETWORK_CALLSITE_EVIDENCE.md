@@ -208,3 +208,25 @@ The bounded `Sender.Cycle` window has two `serializeInt` callsites, one `ZipComp
 The bounded LoginRequest serializer window contains direct calls to primitive helpers with counts: 19 integer, 16 string, 2 long and 1 boolean. The corresponding deserializer window contains 14 integer, 16 string, 2 long and 1 boolean direct helper calls. The integer-count difference remains unexplained. No field order is inferred from these counts.
 
 **Confidence update:** the receive-side four-byte big-endian length-prefix candidate is now supported by fixed-count argument evidence and the primitive helper bodies, rather than method names alone. It is still not a verified complete wire frame or a runtime observation. The relationship to the `NetworkSettings.HeaderLength` field, active branch behavior, compression/encryption placement, message IDs, handshake and LoginRequest field order remain unresolved. The AOW transport adapter must remain disabled pending an authorized, redacted client-side byte fixture or local runtime trace.
+
+
+## Bounded CFG-aware small-argument analysis — 2026-11-12
+
+The separate tools/aarch64_call_argument_evidence.py pass now builds a bounded
+intraprocedural control-flow graph for B.cond, CBZ/CBNZ, TBZ/TBNZ, direct B,
+BR and RET. It skips unreachable fallthrough bytes after unconditional exits,
+preserves constants across a unique forward predecessor, and drops state at
+multi-predecessor joins and backedges. BL and BLR calls clobber the modeled
+caller-saved registers. Unknown instructions clear the abstract state.
+
+Observations are restricted to uniquely resolved direct BL calls matching an
+explicit allowlist. They include relative basic-block and instruction indexes;
+no native addresses, instruction words, APK bytes or packet data are emitted.
+The method window is capped at 64 KiB. The synthetic tests cover conditional
+paths, joins, unreachable blocks, returns, indirect branches, indirect calls,
+out-of-window branches and backedges.
+
+This is a conservative static register-value observation, not a full ABI or
+data-flow proof. It does not establish serializer field order, message IDs,
+handshake, framing or APK/server compatibility. See
+[AArch64 argument data-flow limits](AARCH64_ARGUMENT_DATAFLOW.md).
