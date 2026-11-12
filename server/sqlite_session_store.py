@@ -5,6 +5,7 @@ Callers must authenticate an account before issue() and authorize ownership on
 every state-changing operation. This module does not verify passwords, parse
 packets, or make any APK compatibility claim.
 """
+from contextlib import contextmanager
 import hashlib
 import math
 import re
@@ -155,16 +156,10 @@ class SqliteSessionStore:
             raise SessionError("invalid session")
         return account_id
 
-    def resolve_in_transaction(self, token: str) -> int:
-        """Resolve an active token without opening or committing a transaction.
-
-        The caller must hold a transaction (preferably BEGIN IMMEDIATE) across
-        both this check and the protected state read/write. This makes session
-        revocation serialize with the protected operation.
-        """
+    def _resolve_digest_in_transaction(self, digest: bytes) -> int:
+        """Resolve a token digest while the caller owns an SQLite transaction."""
         if not self.db.in_transaction:
             raise ValueError("active SQLite transaction required")
-        digest = self._digest(token)
         now = self._now()
         row = self.db.execute(
             "SELECT account_id, expires_at FROM durable_sessions WHERE token_hash=?",
@@ -175,6 +170,39 @@ class SqliteSessionStore:
         if now >= float(row[1]):
             raise SessionError("expired session")
         return int(row[0])
+
+    def resolve_in_transaction(self, token: str) -> int:
+        """Resolve an active token without opening or committing a transaction.
+
+        The caller must hold a transaction (preferably BEGIN IMMEDIATE) across
+        both this check and the protected state read/write. This makes session
+        revocation serialize with the protected operation.
+        """
+        if not self.db.in_transaction:
+            raise ValueError("active SQLite transaction required")
+        return self._resolve_digest_in_transaction(self._digest(token))
+
+    @contextmanager
+    def authorized_transaction(self, token: str):
+        """Hold a write transaction while resolving a token and changing state.
+
+        The context commits when the protected operation succeeds and rolls
+        back when it raises. The yielded account id is resolved only after
+        BEGIN IMMEDIATE acquires SQLite's write reservation, so revocation
+        cannot interleave between authorization and the caller's database work.
+        The caller must not commit or roll back the connection inside the block.
+        """
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+        digest = self._digest(token)
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            account_id = self._resolve_digest_in_transaction(digest)
+            yield account_id
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
 
     def revoke(self, token: str) -> bool:
         """Revoke a token. Repeating the same revocation returns False."""

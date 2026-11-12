@@ -224,6 +224,117 @@ class SqliteSessionStoreTests(unittest.TestCase):
             self.store.resolve(token)
 
 
+    def test_authorized_transaction_commits_protected_state(self):
+        token = self.store.issue(81)
+        self.db.execute(
+            "CREATE TABLE protected_state (account_id INTEGER NOT NULL, value TEXT NOT NULL)"
+        )
+
+        with self.store.authorized_transaction(token) as account_id:
+            self.assertEqual(account_id, 81)
+            self.db.execute(
+                "INSERT INTO protected_state(account_id, value) VALUES (?, ?)",
+                (account_id, "committed"),
+            )
+
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT account_id, value FROM protected_state").fetchone(),
+            (81, "committed"),
+        )
+
+    def test_authorized_transaction_rolls_back_protected_state_on_error(self):
+        token = self.store.issue(82)
+        self.db.execute(
+            "CREATE TABLE protected_state (account_id INTEGER NOT NULL, value TEXT NOT NULL)"
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "abort protected operation"):
+            with self.store.authorized_transaction(token) as account_id:
+                self.db.execute(
+                    "INSERT INTO protected_state(account_id, value) VALUES (?, ?)",
+                    (account_id, "must-rollback"),
+                )
+                raise RuntimeError("abort protected operation")
+
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM protected_state").fetchone()[0],
+            0,
+        )
+
+    def test_authorized_transaction_rejects_expired_or_revoked_tokens(self):
+        expired = self.store.issue(83, ttl_seconds=2)
+        revoked = self.store.issue(84)
+        self.assertTrue(self.store.revoke(revoked))
+        self.now += 2
+
+        for token in (expired, revoked):
+            with self.subTest(token_hash=hashlib.sha256(token.encode()).hexdigest()[:8]):
+                with self.assertRaises(SessionError):
+                    with self.store.authorized_transaction(token):
+                        self.fail("unauthorized transaction must not yield")
+                self.assertFalse(self.db.in_transaction)
+
+    def test_authorized_transaction_does_not_take_over_caller_transaction(self):
+        token = self.store.issue(85)
+        self.db.execute("CREATE TABLE caller_state (value INTEGER)")
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_state VALUES (1)")
+
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            with self.store.authorized_transaction(token):
+                self.fail("must not enter caller-owned transaction")
+
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM caller_state").fetchone()[0],
+            0,
+        )
+
+    def test_authorized_transaction_serializes_concurrent_revocation(self):
+        token = self.store.issue(86)
+        started = threading.Event()
+
+        def revoke_from_another_connection():
+            connection = sqlite3.connect(
+                self.path, timeout=10, isolation_level=None
+            )
+            try:
+                store = SqliteSessionStore(
+                    connection, ttl_seconds=60, clock=lambda: self.now
+                )
+                started.set()
+                return store.revoke(token)
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with self.store.authorized_transaction(token) as account_id:
+                self.assertEqual(account_id, 86)
+                future = pool.submit(revoke_from_another_connection)
+                self.assertTrue(started.wait(timeout=5))
+                self.db.execute(
+                    "CREATE TABLE IF NOT EXISTS protected_state "
+                    "(account_id INTEGER NOT NULL, value TEXT NOT NULL)"
+                )
+                self.db.execute(
+                    "INSERT INTO protected_state(account_id, value) VALUES (?, ?)",
+                    (account_id, "authorized-before-revoke"),
+                )
+
+            self.assertTrue(future.result(timeout=5))
+
+        self.assertEqual(
+            self.db.execute(
+                "SELECT value FROM protected_state WHERE account_id=86"
+            ).fetchone()[0],
+            "authorized-before-revoke",
+        )
+        with self.assertRaises(SessionError):
+            self.store.resolve(token)
+
     def test_issue_in_transaction_requires_caller_transaction(self):
         with self.assertRaisesRegex(ValueError, "transaction"):
             self.store.issue_in_transaction(44)
