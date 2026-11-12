@@ -54,8 +54,11 @@ class StreamReaderTests(unittest.TestCase):
 
         reader = make_reader()
         self.assertEqual(read_next_frame(reader, recv), first)
-        self.assertEqual(read_next_frame(reader, lambda _size: self.fail("unexpected recv")), second)
-        self.assertEqual(calls, [65536])
+        self.assertEqual(
+            read_next_frame(reader, lambda _size: self.fail("unexpected recv")),
+            second,
+        )
+        self.assertEqual(calls, [64])
         self.assertEqual(reader.available, 0)
 
     def test_retries_interrupted_receive_without_losing_buffered_prefix(self):
@@ -69,7 +72,7 @@ class StreamReaderTests(unittest.TestCase):
 
         reader = make_reader()
         self.assertEqual(read_next_frame(reader, recv), b"\x02xy")
-        self.assertEqual(calls, [65536, 65536])
+        self.assertEqual(calls, [64, 64])
 
     def test_receive_request_is_capped_by_remaining_buffer_capacity(self):
         reader = make_reader(max_buffer_bytes=4)
@@ -90,7 +93,9 @@ class StreamReaderTests(unittest.TestCase):
         reader = make_reader()
         self.assertIsNone(read_next_frame(reader, lambda _size: b""))
         self.assertTrue(reader.closed)
-        self.assertIsNone(read_next_frame(reader, lambda _size: self.fail("closed reader received")))
+        self.assertIsNone(
+            read_next_frame(reader, lambda _size: self.fail("closed reader received"))
+        )
 
     def test_eof_with_partial_body_raises_and_preserves_buffer(self):
         reader = make_reader()
@@ -121,7 +126,6 @@ class StreamReaderTests(unittest.TestCase):
         self.assertEqual(reader.available, 1)
 
     def test_invalid_receive_types_are_rejected_without_feeding(self):
-        reader = make_reader()
         for value in (None, bytearray(b"x"), memoryview(b"x"), "x", 1):
             with self.subTest(value=type(value).__name__):
                 fresh = make_reader()
@@ -134,7 +138,7 @@ class StreamReaderTests(unittest.TestCase):
         reader = make_reader(max_buffer_bytes=4)
         with self.assertRaises(InvalidReadChunk) as caught:
             read_next_frame(reader, lambda _size: b"12345", max_chunk_bytes=4)
-        self.assertEqual((caught.exception.received, caught.exception.requested), (4, 4))
+        self.assertEqual((caught.exception.received, caught.exception.requested), (5, 4))
         self.assertEqual(reader.available, 0)
 
     def test_callback_exception_propagates_without_closing_reader(self):
@@ -160,21 +164,28 @@ class StreamReaderTests(unittest.TestCase):
         reader = make_reader()
         for value in (True, 0, -1, 1.5, "4"):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                read_next_frame(reader, lambda _size: self.fail("unexpected recv"),
-                                max_chunk_bytes=value)
+                read_next_frame(
+                    reader,
+                    lambda _size: self.fail("unexpected recv"),
+                    max_chunk_bytes=value,
+                )
         with self.assertRaises(TypeError):
             read_next_frame(object(), lambda _size: b"")
         with self.assertRaises(TypeError):
             read_next_frame(reader, None)
 
     def test_reader_exhaustion_is_reported_without_calling_receive(self):
-        # A pure probe that still asks for more after the entire buffer is full
-        # violates the reader's progress contract. The adapter fails closed.
-        reader = CallbackFrameReader(
-            lambda _prefix: None,
+        class StalledReader(CallbackFrameReader):
+            def read_frame(self):
+                return None
+
+        # This deliberately violates the base reader's progress contract to
+        # exercise the adapter's defensive capacity guard.
+        reader = StalledReader(
+            one_byte_synthetic_probe,
             max_frame_bytes=4,
             max_buffer_bytes=4,
-            max_probe_bytes=4,
+            max_probe_bytes=1,
         )
         reader.feed(b"abcd")
         with self.assertRaises(ReadBufferFull):
