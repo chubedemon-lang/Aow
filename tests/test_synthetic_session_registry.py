@@ -1,5 +1,7 @@
 """Synthetic registry regression tests; no APK claims."""
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
 from server.synthetic_session_registry import RegistryError, SessionRegistry
 from server.synthetic_session_state import Phase, SessionError
@@ -85,6 +87,79 @@ class RegistryTests(unittest.TestCase):
         registry.close("a")
         self.assertEqual(a.snapshot.phase, Phase.CLOSED)
         self.assertEqual(b.snapshot.phase, Phase.NEW)
+
+    def test_concurrent_opens_respect_capacity(self):
+        workers = 16
+        registry = SessionRegistry(capacity=1)
+        barrier = threading.Barrier(workers)
+
+        def open_one(index):
+            barrier.wait(timeout=5)
+            try:
+                registry.open("connection-" + str(index))
+                return True
+            except RegistryError:
+                return False
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(open_one, range(workers)))
+
+        self.assertEqual(sum(results), 1)
+        self.assertEqual(registry.active_count, 1)
+
+    def test_concurrent_authentication_reserves_account_once(self):
+        workers = 16
+        registry = SessionRegistry()
+        for index in range(workers):
+            registry.open("connection-" + str(index))
+        barrier = threading.Barrier(workers)
+
+        def authenticate_one(index):
+            barrier.wait(timeout=5)
+            try:
+                registry.authenticate("connection-" + str(index), "same-account")
+                return True
+            except RegistryError:
+                return False
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(authenticate_one, range(workers)))
+
+        self.assertEqual(sum(results), 1)
+        phases = [
+            registry.get("connection-" + str(index)).snapshot.phase
+            for index in range(workers)
+        ]
+        self.assertEqual(phases.count(Phase.AUTHENTICATED), 1)
+        self.assertEqual(phases.count(Phase.NEW), workers - 1)
+
+    def test_concurrent_character_selection_reserves_character_once(self):
+        workers = 16
+        registry = SessionRegistry()
+        for index in range(workers):
+            key = "connection-" + str(index)
+            registry.open(key)
+            registry.authenticate(key, "account-" + str(index))
+        barrier = threading.Barrier(workers)
+
+        def select_one(index):
+            barrier.wait(timeout=5)
+            try:
+                registry.select_character("connection-" + str(index), "same-character")
+                return True
+            except RegistryError:
+                return False
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(select_one, range(workers)))
+
+        self.assertEqual(sum(results), 1)
+        phases = [
+            registry.get("connection-" + str(index)).snapshot.phase
+            for index in range(workers)
+        ]
+        self.assertEqual(phases.count(Phase.CHARACTER_SELECTED), 1)
+        self.assertEqual(phases.count(Phase.AUTHENTICATED), workers - 1)
 
 
 if __name__ == "__main__":
