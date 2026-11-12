@@ -9,7 +9,7 @@ import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from server.mock import Domain, make_handler
+from server.mock import Domain, make_handler, serve_forever_and_close
 
 
 class DomainTests(unittest.TestCase):
@@ -231,6 +231,33 @@ class HandlerRouteTests(unittest.TestCase):
         connection.close()
         with self.assertRaises(KeyError):
             self.domain.get_character(2)
+
+
+
+
+class ServerLifecycleTests(unittest.TestCase):
+    class FakeServer:
+        def __init__(self, error=None):
+            self.error = error
+            self.closed = False
+
+        def serve_forever(self):
+            if self.error is not None:
+                raise self.error
+
+        def server_close(self):
+            self.closed = True
+
+    def test_listening_socket_is_closed_after_normal_stop(self):
+        server = self.FakeServer()
+        serve_forever_and_close(server)
+        self.assertTrue(server.closed)
+
+    def test_listening_socket_is_closed_when_serve_forever_is_interrupted(self):
+        server = self.FakeServer(KeyboardInterrupt())
+        with self.assertRaises(KeyboardInterrupt):
+            serve_forever_and_close(server)
+        self.assertTrue(server.closed)
 
 
 if __name__ == "__main__":
