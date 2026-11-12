@@ -681,7 +681,6 @@ def _summarize_control_flow_serializer_helper_blocks(
             "control_flow_unreachable_callsite_observation_count": 0,
             "control_flow_reachable_resolved_helper_callsite_count": 0,
             "control_flow_unreachable_resolved_helper_callsite_count": 0,
-            "control_flow_unreachable_helper_callsite_count": 0,
             "control_flow_conditional_branch_count": 0,
             "control_flow_external_branch_exit_count": 0,
         }
