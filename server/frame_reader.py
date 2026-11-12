@@ -115,13 +115,18 @@ class CallbackFrameReader:
     def max_frame_bytes(self):
         return self._max_frame_bytes
 
+    @property
+    def max_buffer_bytes(self):
+        """Maximum buffered bytes; generic caller-selected resource bound."""
+        return self._buffer.max_buffer_bytes
+
     def feed(self, data):
         """Append one transport chunk atomically under the buffer limit."""
         return self._buffer.feed(data)
 
     def close(self):
         """Mark end-of-stream; any incomplete buffered frame becomes an error."""
-        self._buffer.close()
+        return self._buffer.close()
 
     def read_frame(self):
         """Return one complete frame, or None when more input is required.
