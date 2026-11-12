@@ -65,7 +65,15 @@ NETWORK_SUPPORT_METHODS = {
         "GetMessageName", "CheckConnection",
     },
     ("com.geargames.serialization", "MessageMeta"): {".ctor"},
+    ("com.geargames.common.network", "OnMessageReceivedDelegate"): {".ctor"},
 }
+
+CALLSITE_ARGUMENT_TARGET_PREFIXES = (
+    "ClientNetworkStreamBuffer::SetDataAvailable",
+    "AbstractClientBuffer::Write",
+    "ClientStreamBuffer::Write",
+    "MessageDispatcher::SafeRegister",
+)
 
 
 def inspect_bytes(metadata, elf, apk_sha256=None):
@@ -74,6 +82,14 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
     allowlist = dict(TARGET_METHODS)
     for key, names in NETWORK_SUPPORT_METHODS.items():
         allowlist[key] = set(allowlist.get(key, ())) | set(names)
+    dispatcher_key = ("com.geargames.common.network", "MessageDispatcher")
+    allowlist[dispatcher_key] = set(allowlist.get(dispatcher_key, ())) | {
+        "SafeRegister",
+    }
+    # This async state machine owns the two connection-bootstrap listener
+    # registrations observed in the original APK. Keep the root exact and
+    # narrow; do not sweep every compiler-generated MoveNext method.
+    allowlist[("", "<StartConnectToServer>d__12")] = {"MoveNext"}
     methods = [
         method for method in _network_methods(metadata, info, allowlist)
         if method["category"] != "login_session_serializer"
@@ -155,11 +171,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
                     code,
                     target,
                     method_targets,
-                    target_prefixes=(
-                        "ClientNetworkStreamBuffer::SetDataAvailable",
-                        "AbstractClientBuffer::Write",
-                        "ClientStreamBuffer::Write",
-                    ),
+                    target_prefixes=CALLSITE_ARGUMENT_TARGET_PREFIXES,
                 )
             ),
         })

@@ -1,9 +1,12 @@
 """Synthetic tests for the redacted native network callsite inventory."""
 import json
+import struct
 import unittest
 
 from test_il2cpp_native_method_evidence import make_elf, make_metadata
+from tools.aarch64_call_argument_evidence import summarize_small_argument_constants
 from tools.il2cpp_network_callsite_evidence import (
+    CALLSITE_ARGUMENT_TARGET_PREFIXES,
     inspect_bytes,
     NETWORK_SUPPORT_METHODS,
 )
@@ -95,6 +98,83 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(report["selected_method_records"], 0)
         self.assertEqual(report["callsite_summary"], [])
+
+    def test_connection_bootstrap_state_machine_is_an_explicit_callsite_root(self):
+        report = inspect_bytes(
+            make_metadata(
+                ["MoveNext"],
+                type_name="<StartConnectToServer>d__12",
+                namespace="",
+            ),
+            make_elf(1),
+        )
+        self.assertEqual(report["selected_method_records"], 1)
+        self.assertEqual(report["resolved_entry_windows"], 1)
+        self.assertEqual(
+            (report["callsite_summary"][0]["type"],
+             report["callsite_summary"][0]["method"]),
+            ("<StartConnectToServer>d__12", "MoveNext"),
+        )
+
+    def test_safe_register_and_delegate_constructor_are_allowlisted(self):
+        dispatcher = inspect_bytes(
+            make_metadata(
+                ["SafeRegister"],
+                type_name="MessageDispatcher",
+                namespace="com.geargames.common.network",
+            ),
+            make_elf(1),
+        )
+        self.assertEqual(dispatcher["selected_method_records"], 1)
+        self.assertEqual(dispatcher["resolved_entry_windows"], 1)
+        self.assertIn(
+            "MessageDispatcher::SafeRegister",
+            CALLSITE_ARGUMENT_TARGET_PREFIXES,
+        )
+        self.assertIn(
+            ("com.geargames.common.network", "OnMessageReceivedDelegate"),
+            NETWORK_SUPPORT_METHODS,
+        )
+
+    def test_safe_register_small_arguments_are_reported_without_native_addresses(self):
+        target = 0x4000
+        label = (
+            "com.geargames.common.network.MessageDispatcher::SafeRegister/p2"
+        )
+
+        def movz_w(register, immediate):
+            return 0x52800000 | ((immediate & 0xFFFF) << 5) | register
+
+        def bl(pc, destination):
+            delta = destination - pc
+            if delta % 4:
+                raise ValueError("unaligned branch target")
+            return 0x94000000 | ((delta // 4) & 0x03FFFFFF)
+
+        code = b"".join(
+            struct.pack("<I", word)
+            for word in (
+                movz_w(1, 5004),
+                bl(0x1004, target),
+                movz_w(1, 5005),
+                bl(0x100C, target),
+            )
+        )
+        observations = summarize_small_argument_constants(
+            code,
+            0x1000,
+            {target: [label]},
+            target_prefixes=CALLSITE_ARGUMENT_TARGET_PREFIXES,
+        )
+        self.assertEqual(
+            [item["known_small_argument_constants"]["x1"]
+             for item in observations],
+            [5004, 5005],
+        )
+        rendered = json.dumps(observations)
+        self.assertNotIn("0x4000", rendered)
+        self.assertNotIn("0x1004", rendered)
+
 
 
 if __name__ == "__main__":
