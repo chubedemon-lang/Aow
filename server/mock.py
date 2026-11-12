@@ -280,6 +280,14 @@ def make_handler(domain):
     return Handler
 
 
+def serve_forever_and_close(server):
+    """Run the server and always release its listening socket on exit."""
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default="aow_mock.sqlite3")
@@ -291,7 +299,7 @@ def main():
     domain = Domain(Path(args.db))
     server = ThreadingHTTPServer((host, port), make_handler(domain))
     print(f"Synthetic AOW domain API on http://{host}:{port} (NOT APK compatible)")
-    server.serve_forever()
+    serve_forever_and_close(server)
 
 
 if __name__ == "__main__":
