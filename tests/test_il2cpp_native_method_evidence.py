@@ -885,7 +885,8 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertEqual(blocks[0]["terminator"], "indirect_tail")
         self.assertFalse(blocks[1]["reachable"])
         self.assertEqual(summary["control_flow_reachable_resolved_helper_callsite_count"], 0)
-        self.assertEqual(summary["control_flow_unreachable_resolved_helper_callsite_count"], 1)
+        self.assertEqual(summary["control_flow_unreachable_resolved_helper_callsite_count"], 0)
+        self.assertEqual(summary["control_flow_unreachable_callsite_observation_count"], 1)
 
 
 if __name__ == "__main__":
