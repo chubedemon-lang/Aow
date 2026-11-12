@@ -4,10 +4,13 @@ One active session per account and character. Caller-provided connection IDs are
 opaque local identifiers, never wire-level identifiers. Registry-managed
 operations are serialized with a re-entrant lock so capacity and uniqueness
 checks remain atomic under concurrent callers.
+
+Only immutable point-in-time snapshots leave the registry. Mutable Session
+instances remain private so callers cannot bypass account/character uniqueness.
 """
 import threading
 
-from .synthetic_session_state import Phase, Session, SessionError
+from .synthetic_session_state import Phase, Session, SessionError, Snapshot
 
 
 class RegistryError(ValueError):
@@ -37,20 +40,14 @@ class SessionRegistry:
                 raise RegistryError("capacity exceeded")
             session = Session()
             self._sessions[key] = session
-            return session
+            return session.snapshot
 
     def get(self, connection_id):
-        """Return the registered session for read-only inspection.
-
-        Callers must use registry methods for state transitions rather than
-        mutating the returned Session directly; doing so would bypass registry
-        uniqueness checks. The returned Session object is not independently
-        thread-safe.
-        """
+        """Return an immutable point-in-time view, never the mutable Session."""
         key = self._key(connection_id)
         with self._lock:
             try:
-                return self._sessions[key]
+                return self._sessions[key].snapshot
             except KeyError:
                 raise RegistryError("unknown connection") from None
 
@@ -101,7 +98,7 @@ class SessionRegistry:
                 raise RegistryError("target connection already registered")
             session = self._sessions.pop(old_key)
             self._sessions[new_key] = session
-            return session
+            return session.snapshot
 
     def close(self, connection_id):
         key = self._key(connection_id)
