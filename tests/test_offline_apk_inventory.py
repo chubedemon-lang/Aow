@@ -118,5 +118,26 @@ class OfflineInventoryTests(unittest.TestCase):
                 inspect_apk(link)
 
 
+    def test_zip_member_count_limit_is_enforced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic.apk"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("one.dat", b"1")
+                archive.writestr("two.dat", b"2")
+            with patch("tools.offline_apk_inventory.MAX_ENTRIES", 1):
+                with self.assertRaisesRegex(ValueError, "too many ZIP entries"):
+                    inspect_apk(path)
+
+    def test_metadata_member_size_limit_is_enforced_before_reading(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic.apk"
+            metadata_name = "assets/bin/Data/Managed/Metadata/global-metadata.dat"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr(metadata_name, b"12345678")
+            with patch("tools.offline_apk_inventory.MAX_METADATA_BYTES", 7):
+                with self.assertRaisesRegex(ValueError, "metadata size"):
+                    inspect_apk(path)
+
+
 if __name__ == "__main__":
     unittest.main()
