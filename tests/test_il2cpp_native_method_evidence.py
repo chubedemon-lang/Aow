@@ -800,12 +800,12 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertEqual(blocks[0]["successors"], [1, 2])
         self.assertEqual(blocks[1]["successors"], [3])
         self.assertEqual(blocks[2]["successors"], [3])
-        self.assertEqual(blocks[1]["helper_calls"], [{
+        self.assertEqual(blocks[1]["callsite_observations"], [{
             "instruction_index": 1,
             "kind": "direct_call",
             "method": "SimpleSerializer::serializeInt",
         }])
-        self.assertEqual(blocks[2]["helper_calls"], [{
+        self.assertEqual(blocks[2]["callsite_observations"], [{
             "instruction_index": 3,
             "kind": "direct_call",
             "method": "SimpleSerializer::serializeString",
@@ -837,13 +837,13 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         blocks = summary["control_flow_basic_blocks"]
         self.assertEqual(summary["control_flow_block_count"], 4)
         self.assertFalse(blocks[1]["reachable"])
-        self.assertEqual(blocks[1]["helper_calls"][0]["method"],
+        self.assertEqual(blocks[1]["callsite_observations"][0]["method"],
                          "SimpleSerializer::serializeInt")
         self.assertTrue(blocks[2]["reachable"])
-        self.assertEqual(blocks[2]["helper_calls"][0]["method"],
+        self.assertEqual(blocks[2]["callsite_observations"][0]["method"],
                          "SimpleSerializer::serializeString")
-        self.assertEqual(summary["control_flow_reachable_helper_callsite_count"], 1)
-        self.assertEqual(summary["control_flow_unreachable_helper_callsite_count"], 1)
+        self.assertEqual(summary["control_flow_reachable_resolved_helper_callsite_count"], 1)
+        self.assertEqual(summary["control_flow_unreachable_resolved_helper_callsite_count"], 1)
 
     def test_control_flow_conditional_external_edge_keeps_fallthrough_reachable(self):
         start = 0x7000
@@ -860,7 +860,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertEqual(summary["control_flow_external_branch_exit_count"], 1)
         self.assertTrue(summary["control_flow_basic_blocks"][1]["reachable"])
         self.assertEqual(
-            summary["control_flow_basic_blocks"][1]["helper_calls"][0]["method"],
+            summary["control_flow_basic_blocks"][1]["callsite_observations"][0]["method"],
             "SimpleSerializer::serializeInt",
         )
 
@@ -883,8 +883,8 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         blocks = summary["control_flow_basic_blocks"]
         self.assertEqual(blocks[0]["terminator"], "indirect_tail")
         self.assertFalse(blocks[1]["reachable"])
-        self.assertEqual(summary["control_flow_reachable_helper_callsite_count"], 0)
-        self.assertEqual(summary["control_flow_unreachable_helper_callsite_count"], 1)
+        self.assertEqual(summary["control_flow_reachable_resolved_helper_callsite_count"], 0)
+        self.assertEqual(summary["control_flow_unreachable_resolved_helper_callsite_count"], 1)
 
 
 if __name__ == "__main__":
