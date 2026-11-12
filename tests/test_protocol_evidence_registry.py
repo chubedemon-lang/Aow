@@ -126,5 +126,39 @@ class EvidenceRegistryTests(unittest.TestCase):
         self.assertEqual(EvidenceRegistry().summary()["handshake"]["verified"], 0)
 
 
+    def test_summary_rejects_mixed_artifacts_without_explicit_selector(self):
+        other_sha = EvidenceRegistry.digest(b"another APK build")
+        registry = EvidenceRegistry()
+        registry.add(Evidence(
+            "transport", self.sha, "offline observation", "il2cpp_offline", True,
+            "tests/test_protocol_evidence_registry.py",
+            "python -m unittest discover -s tests -p test_protocol_evidence_registry.py -v",
+        ))
+        registry.add(Evidence(
+            "framing", other_sha, "offline observation", "il2cpp_offline", True,
+            "tests/test_protocol_evidence_registry.py",
+            "python -m unittest discover -s tests -p test_protocol_evidence_registry.py -v",
+        ))
+
+        with self.assertRaisesRegex(EvidenceError, "multiple artifacts"):
+            registry.summary()
+
+        first = registry.summary(artifact_sha256=self.sha)
+        second = registry.summary(artifact_sha256=other_sha)
+        self.assertEqual(first["transport"], {"observations": 1, "verified": 1})
+        self.assertEqual(first["framing"], {"observations": 0, "verified": 0})
+        self.assertEqual(second["transport"], {"observations": 0, "verified": 0})
+        self.assertEqual(second["framing"], {"observations": 1, "verified": 1})
+
+    def test_summary_validates_explicit_artifact_selector(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence("transport", self.sha, "offline observation", "il2cpp_offline"))
+
+        for digest in ("BAD", "A" * 64, "b" * 64):
+            with self.subTest(digest=digest), self.assertRaises(EvidenceError):
+                registry.summary(artifact_sha256=digest)
+
+
+
 if __name__ == "__main__":
     unittest.main()
