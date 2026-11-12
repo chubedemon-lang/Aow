@@ -4,6 +4,8 @@ import unittest
 
 from tools.aarch64_call_argument_evidence import (
     _decode_move_wide,
+    _decode_conditional_branch_target,
+    _decode_unconditional_branch_target,
     summarize_small_argument_constants,
 )
 
@@ -39,6 +41,37 @@ def bl(pc, target):
     return 0x94000000 | ((delta >> 2) & 0x03FFFFFF)
 
 
+def b(pc, target):
+    delta = target - pc
+    if delta % 4:
+        raise ValueError("unaligned branch target")
+    return 0x14000000 | ((delta // 4) & 0x03FFFFFF)
+
+
+def b_cond(pc, target, condition=0):
+    delta = target - pc
+    if delta % 4:
+        raise ValueError("unaligned branch target")
+    return 0x54000000 | (((delta // 4) & 0x7FFFF) << 5) | condition
+
+
+def cbz(pc, target, register=0):
+    delta = target - pc
+    if delta % 4:
+        raise ValueError("unaligned branch target")
+    return 0x34000000 | (((delta // 4) & 0x7FFFF) << 5) | register
+
+
+def tbz(pc, target, register=0, bit=0):
+    delta = target - pc
+    if delta % 4:
+        raise ValueError("unaligned branch target")
+    return (
+        0x36000000 | (((delta // 4) & 0x3FFF) << 5)
+        | ((bit & 0x20) << 26) | ((bit & 0x1F) << 19) | register
+    )
+
+
 def words(*values):
     return b"".join(struct.pack("<I", value) for value in values)
 
@@ -57,6 +90,8 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(result, [{
             "linear_window_call_ordinal": 0,
+            "control_flow_block_index": 0,
+            "instruction_index": 1,
             "target_method": "com.geargames.common.utils.ClientNetworkStreamBuffer::SetDataAvailable",
             "known_small_argument_constants": {"x1": 4},
         }])
@@ -91,12 +126,13 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(result, [])
 
-    def test_unconditional_branch_clears_register_state(self):
-        code = words(movz_x(1, 4), 0x14000001, bl(0x1008, self.target))
+    def test_unconditional_branch_preserves_state_on_unique_forward_successor(self):
+        code = words(movz_x(1, 4), b(0x1004, 0x1008), bl(0x1008, self.target))
         result = summarize_small_argument_constants(
             code, 0x1000, self.targets, target_prefixes=self.prefixes
         )
-        self.assertEqual(result, [])
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 4})
+        self.assertEqual(result[0]["control_flow_block_index"], 1)
 
     def test_call_clobbers_caller_saved_argument_registers(self):
         second = self.target + 4
@@ -181,6 +217,139 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         self.assertIsNone(_decode_move_wide(0xD280003F))  # XZR destination
         invalid_w_shift = movz_w(1, 4, 32)
         self.assertIsNone(_decode_move_wide(invalid_w_shift))
+
+
+    def test_conditional_branch_decoder_handles_b_cond_cbz_and_tbz(self):
+        start = 0x5000
+        self.assertEqual(
+            _decode_conditional_branch_target(
+                b_cond(start, start + 12), start
+            ),
+            start + 12,
+        )
+        self.assertEqual(
+            _decode_conditional_branch_target(
+                cbz(start, start + 8), start
+            ),
+            start + 8,
+        )
+        self.assertEqual(
+            _decode_conditional_branch_target(
+                tbz(start, start - 8), start
+            ),
+            start - 8,
+        )
+        self.assertEqual(
+            _decode_unconditional_branch_target(
+                b(start, start + 16), start
+            ),
+            start + 16,
+        )
+        self.assertIsNone(
+            _decode_conditional_branch_target(0xD65F03C0, start)
+        )
+
+    def test_conditional_paths_keep_constants_when_they_do_not_join(self):
+        code = words(
+            movz_x(1, 4),
+            b_cond(0x1004, 0x1010),
+            bl(0x1008, self.target),
+            0xD65F03C0,  # ret
+            bl(0x1010, self.target),
+            0xD65F03C0,  # ret
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(len(result), 2)
+        self.assertEqual(
+            [item["known_small_argument_constants"] for item in result],
+            [{"x1": 4}, {"x1": 4}],
+        )
+        self.assertNotEqual(
+            result[0]["control_flow_block_index"],
+            result[1]["control_flow_block_index"],
+        )
+
+    def test_join_drops_constants_that_are_not_common_to_all_predecessors(self):
+        code = words(
+            b_cond(0x1000, 0x1010),
+            movz_x(1, 4),
+            b(0x1008, 0x1014),
+            0xD503201F,  # unreachable fallthrough after B
+            movz_x(1, 5),
+            bl(0x1014, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result, [])
+
+    def test_unconditional_branch_skips_unreachable_fallthrough_bytes(self):
+        code = words(
+            b(0x1000, 0x100C),
+            movz_x(1, 4),
+            bl(0x1008, self.target),
+            bl(0x100C, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result, [])
+
+    def test_return_and_indirect_branch_terminate_the_bounded_path(self):
+        for terminator in (0xD65F03C0, 0xD61F0000):
+            with self.subTest(terminator=terminator):
+                code = words(
+                    movz_x(1, 4),
+                    terminator,
+                    bl(0x1008, self.target),
+                )
+                result = summarize_small_argument_constants(
+                    code, 0x1000, self.targets, target_prefixes=self.prefixes
+                )
+                self.assertEqual(result, [])
+
+    def test_indirect_call_clobbers_argument_register_constants(self):
+        code = words(
+            movz_x(1, 4),
+            0xD63F0000,  # blr x0
+            bl(0x1008, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result, [])
+
+    def test_conditional_branch_outside_window_keeps_fallthrough_path(self):
+        code = words(
+            movz_x(1, 4),
+            b_cond(0x1004, 0x2000),
+            bl(0x1008, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 4})
+
+    def test_backedge_does_not_import_constants_into_loop_header(self):
+        code = words(
+            b_cond(0x1000, 0x1008),
+            movz_x(1, 4),
+            bl(0x1008, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result, [])
+
+    def test_rejects_code_windows_above_analysis_limit(self):
+        with self.assertRaisesRegex(ValueError, "64 KiB"):
+            summarize_small_argument_constants(
+                b"\0" * (64 * 1024 + 4), 0x1000,
+                self.targets, target_prefixes=self.prefixes
+            )
+
 
 
 if __name__ == "__main__":
