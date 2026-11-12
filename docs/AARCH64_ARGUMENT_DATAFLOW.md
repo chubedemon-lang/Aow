@@ -10,8 +10,10 @@ The analyzer recognizes these intraprocedural control-flow instructions:
 
 - B.cond, CBZ/CBNZ, and TBZ/TBNZ as two-way conditional branches;
 - direct B as an unconditional branch;
-- BR and RET as bounded-window exits;
-- BL and BLR as calls that clobber caller-saved abstract registers.
+- BR/RET and pointer-authenticated BRAA/BRAB/BRAAZ/BRABZ as bounded-window exits;
+- RETAA/RETAB, ERET/ERETAA/ERETAB and DRPS as terminal return/exception edges;
+- BL/BLR and pointer-authenticated BLRAA/BLRAB/BLRAAZ/BLRABZ as calls that
+  clobber caller-saved abstract registers.
 
 Branch targets outside the bounded method window are exits. The fallthrough
 path of a conditional branch remains reachable. Bytes after an unconditional
@@ -39,10 +41,14 @@ method label and any remaining small x0-x7 constants. Unreachable calls can
 therefore create ordinal gaps. No native addresses, raw instructions, APK
 bytes, endpoint values or packet data are emitted.
 
-The method window is capped at 64 KiB. This analysis does not evaluate branch
-conditions, model register writes outside its small instruction subset, follow
-indirect control flow, resolve exception edges, prove ABI argument semantics,
-or establish the execution order of serializer fields. A reported xN value
+The method window is capped at 64 KiB. Indirect branch targets are not
+resolved; the supported BR/PAC-branch forms terminate the bounded path, while
+BLR/PAC-call forms return to fallthrough after caller-saved state is cleared.
+The analyzer classifies pointer-authenticated instruction encodings only; it
+does not emulate pointer authentication. It does not evaluate branch
+conditions, model register writes outside its small instruction subset,
+resolve arbitrary exception edges, prove ABI argument semantics, or establish
+the execution order of serializer fields. A reported xN value
 is only a static abstract-register observation immediately before a uniquely
 resolved callsite.
 
@@ -52,3 +58,14 @@ tests/test_aarch64_call_argument_evidence.py uses fabricated instruction words
 and synthetic relocation-backed method targets only. These tests verify the
 analyzer's conservative behavior; they do not analyze the AOW APK or prove
 any AOW packet, handshake, login field or wire format.
+
+
+## Encoding references
+
+The branch/call and pointer-authentication instruction masks are cross-checked
+against the GNU binutils AArch64 opcode table and an A64 instruction reference.
+These references support instruction classification only; they do not establish
+that any such instruction occurs in the AOW APK.
+
+- [GNU binutils AArch64 opcode table](https://gnu.googlesource.com/binutils-gdb/+/7e8d2d875701971c77224079056a0c8272d63109/opcodes/aarch64-tbl.h)
+- [A64 instruction reference](https://shell-storm.org/armv8-a/)
