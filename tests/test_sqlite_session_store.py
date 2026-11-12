@@ -293,39 +293,33 @@ class SqliteSessionStoreTests(unittest.TestCase):
             0,
         )
 
-    def test_authorized_transaction_serializes_concurrent_revocation(self):
+    def test_authorized_transaction_holds_write_lock_against_revocation(self):
         token = self.store.issue(86)
-        started = threading.Event()
+        second_connection = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None
+        )
+        self.addCleanup(second_connection.close)
+        second_store = SqliteSessionStore(
+            second_connection, ttl_seconds=60, clock=lambda: self.now
+        )
+        # Make lock contention fail immediately and deterministically.
+        second_connection.execute("PRAGMA busy_timeout = 0")
+        self.db.execute(
+            "CREATE TABLE protected_state (account_id INTEGER NOT NULL, value TEXT NOT NULL)"
+        )
 
-        def revoke_from_another_connection():
-            connection = sqlite3.connect(
-                self.path, timeout=10, isolation_level=None
+        with self.store.authorized_transaction(token) as account_id:
+            self.assertEqual(account_id, 86)
+            with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                second_store.revoke(token)
+            self.assertTrue(self.db.in_transaction)
+            self.db.execute(
+                "INSERT INTO protected_state(account_id, value) VALUES (?, ?)",
+                (account_id, "authorized-before-revoke"),
             )
-            try:
-                store = SqliteSessionStore(
-                    connection, ttl_seconds=60, clock=lambda: self.now
-                )
-                started.set()
-                return store.revoke(token)
-            finally:
-                connection.close()
 
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            with self.store.authorized_transaction(token) as account_id:
-                self.assertEqual(account_id, 86)
-                future = pool.submit(revoke_from_another_connection)
-                self.assertTrue(started.wait(timeout=5))
-                self.db.execute(
-                    "CREATE TABLE IF NOT EXISTS protected_state "
-                    "(account_id INTEGER NOT NULL, value TEXT NOT NULL)"
-                )
-                self.db.execute(
-                    "INSERT INTO protected_state(account_id, value) VALUES (?, ?)",
-                    (account_id, "authorized-before-revoke"),
-                )
-
-            self.assertTrue(future.result(timeout=5))
-
+        # Once the protected operation commits, revocation can acquire the lock.
+        self.assertTrue(second_store.revoke(token))
         self.assertEqual(
             self.db.execute(
                 "SELECT value FROM protected_state WHERE account_id=86"
