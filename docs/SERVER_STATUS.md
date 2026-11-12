@@ -21,6 +21,7 @@
 - SQLite reward/quest ledgers and synthetic map/movement/combat/quest modules with local regression tests.
 - A session-authorized SQLite combat facade persists deterministic synthetic battle snapshots and turn events with optimistic revisions and idempotent receipts; actor selection remains a trusted server-coordinator responsibility, and no HTTP/AOW route is exposed.
 - Offline APK inventory, protocol-candidate and IL2CPP metadata/type/codegen analysis tools. They make no network requests and do not modify the APK.
+- A bounded generic byte-stream buffer supports fragmented/coalesced chunks, exact reads, peeking, EOF and atomic capacity enforcement. It does not open sockets, parse frames or assume an AOW header.
 - An isolated primitive payload codec mirrors the statically inspected SimpleSerializer/SimpleDeserializer operations: big-endian 16/32/64-bit values, UTF-16 code-unit strings, and one-byte boolean/byte values. Synthetic known-vector tests cover its behavior. It is not connected to network handlers and does not implement a packet frame or message schema.
 - GitHub Actions for synthetic server tests, protocol discovery tests and repository quality checks.
 
