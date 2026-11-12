@@ -19,7 +19,7 @@ class SessionTests(unittest.TestCase):
     def test_ownership_and_isolation(self):
         alice = self.domain.create_character("alice", "Alice")["id"]
         bob = self.domain.create_character("bob", "Bob")["id"]
-        with self.domain.connect() as db:
+        with self.domain.connection() as db:
             alice_account = db.execute("SELECT account_id FROM characters WHERE id=?", (alice,)).fetchone()[0]
             bob_account = db.execute("SELECT account_id FROM characters WHERE id=?", (bob,)).fetchone()[0]
         token = self.sessions.issue(alice_account)
