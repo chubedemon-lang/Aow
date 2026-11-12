@@ -20,7 +20,21 @@ from server.sqlite_session_store import SqliteSessionStore
 
 
 _MAX_REVISION = 2**63 - 1
+_MAX_RECEIPT_JSON_CHARS = 4096
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value):
+    raise ValueError("non-finite JSON constant")
 
 
 class CombatStoreError(ValueError):
@@ -199,19 +213,108 @@ class SqliteAuthorizedCombatService:
 
     @staticmethod
     def _decode_result(raw):
-        value = json.loads(raw)
-        battle_data = value["battle"]
-        first = Fighter(*battle_data["first"])
-        second = Fighter(*battle_data["second"])
-        battle = Battle(
-            first, second, battle_data["next_actor"], battle_data["turn"]
-        )
-        snapshot = CombatSnapshot(
-            value["battle_id"], value["owner_character_id"],
-            battle, value["revision"],
-        )
-        event = CombatEvent(**value["event"])
-        return snapshot, event
+        """Decode one bounded, unambiguous and internally consistent receipt."""
+        if not isinstance(raw, str) or len(raw) > _MAX_RECEIPT_JSON_CHARS:
+            raise CombatStoreError("invalid combat receipt")
+
+        try:
+            value = json.loads(
+                raw,
+                object_pairs_hook=_unique_json_object,
+                parse_constant=_reject_json_constant,
+            )
+        except (TypeError, ValueError, json.JSONDecodeError, RecursionError) as exc:
+            raise CombatStoreError("invalid combat receipt") from exc
+
+        try:
+            if type(value) is not dict or set(value) != {
+                "battle_id", "owner_character_id", "battle", "revision", "event"
+            }:
+                raise CombatStoreError("invalid combat receipt fields")
+
+            battle_id = SqliteAuthorizedCombatService._identifier(
+                value["battle_id"], "battle identifier"
+            )
+            owner_character_id = value["owner_character_id"]
+            if (not isinstance(owner_character_id, str)
+                    or not _IDENTIFIER.fullmatch(owner_character_id)):
+                raise CombatStoreError("invalid combat receipt owner")
+
+            revision = value["revision"]
+            if type(revision) is not int or not 1 <= revision <= _MAX_REVISION:
+                raise CombatStoreError("invalid combat receipt revision")
+
+            battle_data = value["battle"]
+            if type(battle_data) is not dict or set(battle_data) != {
+                "first", "second", "next_actor", "turn"
+            }:
+                raise CombatStoreError("invalid combat receipt battle")
+            first_data = battle_data["first"]
+            second_data = battle_data["second"]
+            if (type(first_data) is not list or len(first_data) != 4
+                    or type(second_data) is not list or len(second_data) != 4):
+                raise CombatStoreError("invalid combat receipt fighters")
+
+            next_actor = battle_data["next_actor"]
+            turn = battle_data["turn"]
+            if type(next_actor) is not int or type(turn) is not int:
+                raise CombatStoreError("invalid combat receipt turn")
+            first = Fighter(*first_data)
+            second = Fighter(*second_data)
+            battle = Battle(first, second, next_actor, turn)
+            if revision != battle.turn:
+                raise CombatStoreError("combat receipt revision/turn mismatch")
+
+            event_data = value["event"]
+            if type(event_data) is not dict or set(event_data) != {
+                "actor_id", "target_id", "damage", "target_hp",
+                "winner_id", "turn"
+            }:
+                raise CombatStoreError("invalid combat receipt event")
+            actor_id = event_data["actor_id"]
+            target_id = event_data["target_id"]
+            damage = event_data["damage"]
+            target_hp = event_data["target_hp"]
+            winner_id = event_data["winner_id"]
+            event_turn = event_data["turn"]
+            integer_values = (actor_id, target_id, damage, target_hp, event_turn)
+            if any(type(item) is not int for item in integer_values):
+                raise CombatStoreError("invalid combat receipt event values")
+            if (not 1 <= actor_id <= 1_000_000
+                    or not 1 <= target_id <= 1_000_000
+                    or actor_id == target_id
+                    or not 1 <= damage <= 1_000_000
+                    or not 0 <= target_hp <= 1_000_000
+                    or not 1 <= event_turn <= 1_000_000):
+                raise CombatStoreError("combat receipt event outside limits")
+            if winner_id is not None and (
+                type(winner_id) is not int or not 1 <= winner_id <= 1_000_000
+            ):
+                raise CombatStoreError("invalid combat receipt winner")
+
+            fighters = {first.fighter_id: first, second.fighter_id: second}
+            if actor_id not in fighters or target_id not in fighters:
+                raise CombatStoreError("combat receipt references an unknown fighter")
+            if fighters[target_id].hp != target_hp or event_turn != battle.turn:
+                raise CombatStoreError("combat receipt event does not match battle")
+            if winner_id is None:
+                if target_hp == 0 or battle.next_actor != target_id:
+                    raise CombatStoreError("invalid non-terminal combat receipt")
+            elif (target_hp != 0 or winner_id != actor_id
+                  or battle.next_actor != actor_id):
+                raise CombatStoreError("invalid terminal combat receipt")
+
+            snapshot = CombatSnapshot(
+                battle_id, owner_character_id, battle, revision
+            )
+            event = CombatEvent(
+                actor_id, target_id, damage, target_hp, winner_id, event_turn
+            )
+            return snapshot, event
+        except CombatStoreError:
+            raise
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise CombatStoreError("invalid combat receipt") from exc
 
     def create(self, token: str, character_id: int, battle_id: str,
                battle: Battle) -> CombatSnapshot:
@@ -320,6 +423,13 @@ class SqliteAuthorizedCombatService:
                         "request id reused with different combat action"
                     )
                 snapshot, event = self._decode_result(previous[4])
+                if (snapshot.battle_id != battle_id
+                        or snapshot.owner_character_id != owned_id
+                        or snapshot.revision != expected_revision + 1
+                        or event.actor_id != actor_id):
+                    raise CombatStoreError(
+                        "combat receipt does not match the original request"
+                    )
                 return CombatMutation(snapshot, event, True)
 
             current = self._snapshot_from_row(row)
