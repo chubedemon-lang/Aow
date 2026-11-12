@@ -9,7 +9,8 @@ from tools.il2cpp_native_method_evidence import (
     _decode_aarch64_ldr_x_unsigned, _decode_aarch64_mov_x_register,
     _decode_aarch64_bl_target,
     _decode_aarch64_b_target, _summarize_aarch64_calls,
-    _summarize_relocated_indirect_calls, inspect_bytes,
+    _summarize_relocated_indirect_calls,
+    _summarize_ordered_serializer_helper_calls, inspect_bytes,
 )
 
 
@@ -651,6 +652,82 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertIsNone(_decode_aarch64_add_imm64(0xD503201F))
         self.assertIsNone(_decode_aarch64_ldr_x_unsigned(0xD503201F))
 
+
+    def test_ordered_helper_summary_interleaves_direct_indirect_and_tail_calls(self):
+        start = 0x5000
+        words = (
+            self._encode_bl(start, 0x2000),
+            self._encode_adrp(start + 4, 0x3000, 8),
+            self._encode_add_x(8, 8, 0x80),
+            self._encode_ldr_x(9, 8),
+            self._encode_blr(9),
+            self._encode_bl(start + 20, 0x2020),
+            self._encode_adrp(start + 24, 0x4000, 10),
+            self._encode_add_x(10, 10, 0x28),
+            self._encode_ldr_x(11, 10),
+            0xD61F0000 | (11 << 5),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        helper_targets = {
+            0x2000: ["SimpleSerializer::serializeInt"],
+            0x6010: ["SimpleSerializer::serializeString"],
+            0x2020: ["SimpleSerializer::serializeBoolean"],
+            0x6020: ["SimpleSerializer::serializeChar"],
+        }
+        summary = _summarize_ordered_serializer_helper_calls(
+            code,
+            start,
+            {
+                0x3080: (R_AARCH64_RELATIVE, 0x6010),
+                0x4028: (R_AARCH64_RELATIVE, 0x6020),
+            },
+            helper_targets,
+        )
+        self.assertEqual(
+            summary["linear_helper_callsite_order"],
+            [
+                {"kind": "direct_call", "method": "SimpleSerializer::serializeInt"},
+                {"kind": "indirect_call", "method": "SimpleSerializer::serializeString"},
+                {"kind": "direct_call", "method": "SimpleSerializer::serializeBoolean"},
+                {"kind": "indirect_tail_call", "method": "SimpleSerializer::serializeChar"},
+            ],
+        )
+        self.assertEqual(
+            summary["linear_helper_callsite_counts"],
+            {
+                "SimpleSerializer::serializeBoolean": 1,
+                "SimpleSerializer::serializeChar": 1,
+                "SimpleSerializer::serializeInt": 1,
+                "SimpleSerializer::serializeString": 1,
+            },
+        )
+        rendered = json.dumps(summary)
+        for address in ("0x2000", "0x2020", "0x3080", "0x4028", "0x6010", "0x6020"):
+            self.assertNotIn(address, rendered)
+
+    def test_ordered_helper_summary_marks_unresolved_indirect_site_without_guessing(self):
+        start = 0x5000
+        words = (
+            self._encode_adrp(start, 0x3000, 8),
+            self._encode_add_x(8, 8, 0x80),
+            self._encode_ldr_x(9, 8),
+            self._encode_blr(9),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_ordered_serializer_helper_calls(
+            code, start, {}, {}
+        )
+        self.assertEqual(
+            summary["linear_helper_callsite_order"],
+            [{
+                "kind": "indirect_call",
+                "resolution": "not_resolved_as_serializer_helper",
+            }],
+        )
+        self.assertEqual(
+            summary["indirect_callsite_not_resolved_as_helper_count"], 1
+        )
+        self.assertEqual(summary["ambiguous_indirect_helper_callsite_count"], 0)
 
 if __name__ == "__main__":
     unittest.main()
