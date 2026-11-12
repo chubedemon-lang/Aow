@@ -171,6 +171,17 @@ class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
                 **valid,
                 "event": {**valid["event"], "actor_id": 9001},
             }),
+            json.dumps({
+                **valid,
+                "battle": {
+                    **valid["battle"],
+                    "first": [101, 0, 7, 2],
+                },
+            }),
+            json.dumps({
+                **valid,
+                "event": {**valid["event"], "damage": 1_000_000},
+            }),
         )
         for raw in invalid_receipts:
             with self.subTest(receipt=raw[:80]):
