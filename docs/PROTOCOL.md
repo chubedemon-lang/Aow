@@ -6,7 +6,7 @@
 |---|---|---|
 | Endpoint discovery | Address configuration type names only; no values published | Unknown |
 | Transport | Socket/TCP-related metadata identifiers | Active transport unverified |
-| Framing | `HeaderLength` metadata field and header/stream buffers; Receiver.Cycle has a fixed four-byte read followed by an integer-driven second read, with an HTTP-marker branch; Sender.Cycle has integer serialization and stream-write callsites | Four-byte big-endian length-prefix candidate only; `HeaderLength` value/use and runtime path are unverified |
+| Framing | Receiver.Cycle makes a fixed four-byte initial read, decodes it through SimpleDeserializer.deserializeInt, compares it with static marker `0x48545450` (ASCII `HTTP`), and on the non-marker branch uses the decoded value as the next read count; Sender.Cycle has integer serialization and stream-write callsites | Receive-side candidate only; HTTP response branch identified statically, but complete outer frame, active path, `HeaderLength` effective value/use and sender symmetry remain unverified |
 | Primitive serialization | Native helper bodies indicate big-endian 16/32/64-bit values, UTF-16 code-unit strings and one-byte boolean/byte operations; isolated codec and synthetic vectors exist | Primitive payload layer only |
 | Message schema | Message type registry and paired serializer/deserializer type definitions | Field order, optionality and wire IDs unknown |
 | Handshake | Login/registration/session type names | Application handshake sequence unknown |
@@ -196,3 +196,35 @@ A fresh method-entry mapping resolved the allowlisted `Receiver.Cycle`, `Sender.
 A fresh bounded CFG constant analysis of `<StartConnectToServer>d__12.MoveNext` again resolved two direct calls to `MessageDispatcher.SafeRegister`, with the second integer argument in x1 equal to 5004 and 5005. These remain **client-side dispatcher registration keys**, not confirmed wire message IDs. Delegate callback targets remain unresolved.
 
 **Interpretation limits:** direct callsite counts are static occurrences in bounded method-entry windows, not a runtime execution trace or a LoginRequest field schema. The integer-call discrepancy between serializer and deserializer remains unexplained. The analysis still does not establish the active transport, complete Sender/Receiver frame contract, effective `NetworkSettings.HeaderLength` use, HTTP marker value, compression/encryption placement, wire message IDs, handshake order, or APK-to-server compatibility. No packet fixture was available, and the real APK adapter remains disabled. Raw native addresses, instruction bytes, APK contents, and extracted assets remain private.
+
+
+## Receiver HTTP-marker static branch — 2026-11-13
+
+A fresh, read-only offline disassembly was performed against the authorized APK
+with SHA-256 `c00bd00d30f625b85dfcc0159b3b058ca459c10f9917844a5301163480c7624e`.
+The APK remained unchanged; no extracted binary, address, instruction bytes,
+packet capture or endpoint was added to this repository.
+
+The bounded `Receiver.Cycle` method window provides these static observations:
+
+- The initial read request is four bytes.
+- The returned value is passed through `SimpleDeserializer.deserializeInt`.
+- The resulting 32-bit value is compared with `0x48545450`, the big-endian
+  integer representation of the four ASCII bytes `HTTP`.
+- The equality branch passes the same marker value to
+  `Receiver.GetHttpMessageResponse`.
+- The non-marker branch uses the decoded integer as the next stream-buffer
+  read count.
+- A second `deserializeInt` call is present later in the bounded method
+  window, but its field/message semantics are not assigned.
+- The primitive helper body was rechecked: it combines the first 16-bit read
+  as the high half and the second 16-bit read as the low half.
+
+This establishes the static marker constant and branch structure in this APK
+build. It does **not** establish that the HTTP branch is active for gameplay,
+that the non-marker branch is the only active transport, that the full outer
+frame is always `4 + count`, or that Sender.Cycle emits a symmetric structure.
+The `NetworkSettings.HeaderLength` metadata field exists, but its effective
+runtime value and use remain unresolved. No authorized client-side byte
+fixture or end-to-end exchange is available, so the AOW adapter remains
+disabled.

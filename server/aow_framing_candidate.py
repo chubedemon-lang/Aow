@@ -2,13 +2,17 @@
 
 A private static trace documented in docs/PROTOCOL.md indicates one Receiver.Cycle
 branch reads four bytes, decodes a signed big-endian integer, and uses that
-integer as the next read count. This module models only that candidate branch.
-It deliberately requires the caller to supply the separately observed HTTP
-marker value and rejects that branch rather than guessing its handling.
+integer as the next read count. The value is compared with a static HTTP
+marker. This module models only that candidate branch and rejects the marker
+branch rather than guessing its response framing.
 
 Do not connect this helper to a listener or original APK without a redacted,
 authorized wire fixture for the exact client build.
 """
+
+# Static constant recovered from the authorized APK's Receiver.Cycle branch.
+# It does not prove that the HTTP branch is active for gameplay.
+OBSERVED_HTTP_MARKER_VALUE = 0x48545450
 
 
 class ReceiverLengthCandidateError(ValueError):
@@ -42,22 +46,27 @@ class ReceiverPayloadTooLarge(ReceiverLengthCandidateError):
         )
 
 
-def make_four_byte_length_candidate_probe(*, http_marker_value, max_payload_bytes):
+def make_four_byte_length_candidate_probe(
+    *, max_payload_bytes, http_marker_value=OBSERVED_HTTP_MARKER_VALUE
+):
     """Build a bounded probe for the documented four-byte receive-path candidate.
 
     The returned callback accepts immutable bytes and follows this *candidate*
     interpretation:
 
     - fewer than four bytes: return None;
-    - first four bytes equal the caller-supplied HTTP marker: raise
-      UnsupportedHttpMarkerBranch;
+    - first four bytes equal the statically observed HTTP marker by default:
+      raise UnsupportedHttpMarkerBranch;
     - otherwise decode a signed big-endian 32-bit count and return 4 + count.
 
-    The 4 + count total is inferred from the observed initial four-byte read
-    followed by a second read using the decoded count. The full outer frame,
-    active runtime branch, marker handling, compression placement and sender
-    symmetry remain unverified. The caller must choose an independent resource
-    limit; no AOW production limit is asserted here.
+    The default marker is the static Receiver.Cycle constant 0x48545450 (ASCII
+    "HTTP" in big-endian byte order). A caller may override it for synthetic
+    tests or a separately reviewed client build. The 4 + count total is inferred
+    from the initial four-byte read followed by a second read using the decoded
+    count. The full outer frame, active runtime branch, HTTP response framing,
+    compression placement and sender symmetry remain unverified. The caller
+    must choose an independent resource limit; no AOW production limit is
+    asserted here.
     """
     if type(http_marker_value) is not int or not -(1 << 31) <= http_marker_value < (1 << 31):
         raise ValueError("http_marker_value must fit signed 32-bit")
