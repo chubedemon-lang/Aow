@@ -9,12 +9,15 @@ re-entrant lock. This makes the capacity check and the one-active-session
 constraints for accounts and characters atomic for concurrent callers within
 one Python process.
 
-get() returns the mutable synthetic Session for read-only inspection.
-Callers must not invoke its transition methods directly: doing so bypasses
-registry uniqueness checks. The session object itself is not independently
-thread-safe. A future multi-process server must enforce these constraints in
-the durable database with unique indexes/transactions rather than relying on
-this process-local lock.
+The registry never returns its mutable Session instances. open(), get(), and
+transfer_connection() return frozen, point-in-time Snapshot values instead.
+Callers must use registry methods for state transitions, so an object returned
+for inspection cannot bypass account/character uniqueness checks. A snapshot
+does not update after later transitions; call get() again for current state.
+
+A future multi-process server must enforce these constraints in the durable
+database with unique indexes/transactions rather than relying on this
+process-local lock.
 
 Run:
 
