@@ -36,3 +36,29 @@ client/server compatibility.
 The tests use synthetic AArch64 instruction vectors and synthetic relocation
 maps only. No APK, native library, endpoint, raw capture, native address, or
 proprietary asset is committed.
+
+
+## Control-flow-aware basic-block summary
+
+Each bounded login/session serializer window also receives a
+control_flow_basic_blocks summary. The analyzer recognizes AArch64 B.cond,
+CBZ/CBNZ, TBZ/TBNZ, direct B, relocation-backed BR, and RET terminators. It
+groups helper callsites by basic block and marks blocks reachable from the
+entry block through the conservative intraprocedural CFG.
+
+Both outcomes of a conditional branch are considered possible. A branch that
+leaves the bounded method window is represented only as an exit; the analyzer
+does not follow another function or guess an external destination. An
+unresolved indirect branch is also an exit. The summary reports relative
+instruction indices and metadata-derived helper labels only, never native
+addresses or instruction words. Reports are capped at 512 blocks per method
+window and disclose truncation.
+
+This avoids presenting mutually exclusive callsites from separate branches as
+one apparent serializer sequence, and distinguishes unreachable bytes after
+an unconditional branch from reachable code. It still does not evaluate
+conditions, loops, register state at merge points, exception edges, or runtime
+paths. Reachability means graph reachability under the decoded branch subset,
+not proof that a branch executes. A field-order claim still requires full
+control/data-flow review, serializer/deserializer correlation, and preferably
+an authorized redacted local fixture.
