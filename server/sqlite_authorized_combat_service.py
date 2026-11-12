@@ -295,7 +295,11 @@ class SqliteAuthorizedCombatService:
             fighters = {first.fighter_id: first, second.fighter_id: second}
             if actor_id not in fighters or target_id not in fighters:
                 raise CombatStoreError("combat receipt references an unknown fighter")
-            if fighters[target_id].hp != target_hp or event_turn != battle.turn:
+            if fighters[actor_id].hp <= 0:
+                raise CombatStoreError("combat receipt actor is defeated")
+            if (fighters[target_id].hp != target_hp
+                    or target_hp + damage > 1_000_000
+                    or event_turn != battle.turn):
                 raise CombatStoreError("combat receipt event does not match battle")
             if winner_id is None:
                 if target_hp == 0 or battle.next_actor != target_id:
