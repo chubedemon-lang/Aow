@@ -9,6 +9,9 @@ implement the AOW wire protocol.
 
 - `feed(bytes_like)` appends an entire chunk or rejects it; overflow never
   partially mutates the buffer.
+- Capacity is checked before snapshotting input. For `memoryview`, the
+  preflight uses `nbytes`, not `len(view)`, because a view may contain
+  multi-byte elements or multiple dimensions.
 - `peek(n)` observes exactly `n` bytes without consuming them.
 - `read_exact(n)` consumes only if all `n` bytes are available.
 - `read_available(limit)` drains up to a caller-selected number of currently
@@ -17,8 +20,8 @@ implement the AOW wire protocol.
   read after close raises `UnexpectedStreamEOF`.
 - Before EOF, a short exact read raises `NeedMoreData` and leaves the buffer
   unchanged.
-- The configured maximum bounds buffered bytes. It is not a protocol frame
-  maximum and must not be presented as an AOW packet-size limit.
+- The configured maximum bounds currently buffered bytes. It is not a protocol
+  frame maximum and must not be presented as an AOW packet-size limit.
 
 ## Deliberate non-claims
 
@@ -26,4 +29,4 @@ This module does not choose a four-byte header, length byte order, compression,
 encryption, message ID, handshake, timeout, or reconnect policy. Those remain
 outside the helper until authorized evidence establishes the active wire
 contract. The synthetic tests cover fragmentation, coalescing, EOF, atomic
-overflow, and input validation only.
+overflow, memoryview byte-size accounting, and input validation only.
