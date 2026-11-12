@@ -843,7 +843,8 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertEqual(blocks[2]["callsite_observations"][0]["method"],
                          "SimpleSerializer::serializeString")
         self.assertEqual(summary["control_flow_reachable_resolved_helper_callsite_count"], 1)
-        self.assertEqual(summary["control_flow_unreachable_resolved_helper_callsite_count"], 1)
+        self.assertEqual(summary["control_flow_unreachable_resolved_helper_callsite_count"], 0)
+        self.assertEqual(summary["control_flow_unreachable_callsite_observation_count"], 1)
 
     def test_control_flow_conditional_external_edge_keeps_fallthrough_reachable(self):
         start = 0x7000
