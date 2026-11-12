@@ -43,7 +43,7 @@ proprietary asset is committed.
 Each bounded login/session serializer window also receives a
 control_flow_basic_blocks summary. The analyzer recognizes AArch64 B.cond,
 CBZ/CBNZ, TBZ/TBNZ, direct B, relocation-backed BR, and RET terminators. It
-groups helper callsites by basic block and marks blocks reachable from the
+groups callsite observations by basic block and marks blocks reachable from the
 entry block through the conservative intraprocedural CFG.
 
 Both outcomes of a conditional branch are considered possible. A branch that
@@ -62,3 +62,5 @@ paths. Reachability means graph reachability under the decoded branch subset,
 not proof that a branch executes. A field-order claim still requires full
 control/data-flow review, serializer/deserializer correlation, and preferably
 an authorized redacted local fixture.
+
+The reachable/unreachable observation counters include unresolved indirect callsites, while the separate resolved-helper counters include only uniquely named helper targets. This keeps an unresolved indirect target from being reported as a confirmed serializer helper.
