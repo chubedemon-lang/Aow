@@ -6,6 +6,8 @@ from tools.aarch64_call_argument_evidence import (
     _decode_move_wide,
     _decode_conditional_branch_target,
     _decode_unconditional_branch_target,
+    _is_indirect_branch,
+    _is_indirect_call,
     summarize_small_argument_constants,
 )
 
@@ -407,6 +409,40 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         self.assertEqual(
             result[0]["known_small_argument_constants"], {"x1": 7}
         )
+
+
+    def test_authenticated_branch_masks_reject_near_miss_encodings(self):
+        near_misses = (
+            0xD71F1801,  # altered fixed opcode bits in BRAA/BRAB family
+            0xD61F081E,  # invalid fixed low bits near BRAAZ
+            0xD61F0C1E,  # invalid fixed low bits near BRABZ
+            0xD65F0BFE,  # RETAA near miss
+            0xD65F0FFE,  # RETAB near miss
+            0xD69F03E1,  # ERET near miss
+            0xD69F0BFE,  # ERETAA near miss
+            0xD69F0FFE,  # ERETAB near miss
+            0xD6BF03E1,  # DRPS near miss
+        )
+        for word in near_misses:
+            with self.subTest(word=hex(word)):
+                self.assertFalse(_is_indirect_branch(word))
+
+    def test_authenticated_call_masks_reject_near_miss_encodings(self):
+        near_misses = (
+            0xD73F1801,  # altered fixed opcode bits in BLRAA/BLRAB family
+            0xD63F081E,  # invalid fixed low bits near BLRAAZ
+            0xD63F0C1E,  # invalid fixed low bits near BLRABZ
+        )
+        for word in near_misses:
+            with self.subTest(word=hex(word)):
+                self.assertFalse(_is_indirect_call(word))
+
+    def test_indirect_control_flow_recognizers_reject_non_word_inputs(self):
+        invalid_values = (None, True, -1, 0x1_0000_0000, 1.0, "0xD71F0801")
+        for value in invalid_values:
+            with self.subTest(value=repr(value)):
+                self.assertFalse(_is_indirect_branch(value))
+                self.assertFalse(_is_indirect_call(value))
 
 
 if __name__ == "__main__":
