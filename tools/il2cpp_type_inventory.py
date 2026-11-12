@@ -61,9 +61,11 @@ TARGET_TYPES.update({
     ("com.geargames.common.network", name) for name in (
         "INetwork", "Network", "NetworkSettings", "NetworkSocket",
         "Sender", "Receiver", "MessageDispatcher", "MessageHelper",
+        "OnMessageReceivedDelegate",
     )
 })
 TARGET_TYPES.add(("", "NetworkSocketStream"))
+TARGET_TYPES.add(("", "OnMessageReceivedDelegateData"))
 TARGET_TYPES.update({
     ("com.geargames.common.serialization", "IClientMessageSerializer"),
     ("com.geargames.common.serialization", "IClientMessageDeserializer"),
