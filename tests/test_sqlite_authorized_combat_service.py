@@ -1,4 +1,5 @@
 """Ownership, persistence and replay tests for synthetic durable combat."""
+import json
 import os
 import sqlite3
 import tempfile
@@ -149,6 +150,65 @@ class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
         self.assertEqual(
             self.service.get(self.owner_token, 101, "battle-1").revision, 1
         )
+
+    def test_replay_rejects_duplicate_keys_and_tampered_receipt_fields(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "tampered", 0, 101
+        )
+        valid = json.loads(self.db.execute(
+            "SELECT result_json FROM combat_mutations WHERE request_id='tampered'"
+        ).fetchone()[0])
+
+        invalid_receipts = (
+            '{"battle_id":"battle-1","battle_id":"battle-1"}',
+            json.dumps({
+                **valid,
+                "event": {**valid["event"], "damage": True},
+            }),
+            json.dumps({**valid, "battle_id": "another-battle"}),
+            json.dumps({
+                **valid,
+                "event": {**valid["event"], "actor_id": 9001},
+            }),
+            json.dumps({
+                **valid,
+                "battle": {
+                    **valid["battle"],
+                    "first": [101, 0, 7, 2],
+                },
+            }),
+            json.dumps({
+                **valid,
+                "event": {**valid["event"], "damage": 1_000_000},
+            }),
+        )
+        for raw in invalid_receipts:
+            with self.subTest(receipt=raw[:80]):
+                self.db.execute(
+                    "UPDATE combat_mutations SET result_json=? WHERE request_id=?",
+                    (raw, "tampered"),
+                )
+                with self.assertRaises(CombatStoreError):
+                    self.service.attack(
+                        self.owner_token, 101, "battle-1", "tampered", 0, 101
+                    )
+
+    def test_replay_rejects_oversized_or_non_object_receipt(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "oversized", 0, 101
+        )
+        for raw in ("x" * 4097, "[]", "null", '{"event":{"damage":NaN}}'):
+            with self.subTest(receipt=raw[:20]):
+                self.db.execute(
+                    "UPDATE combat_mutations SET result_json=? WHERE request_id=?",
+                    (raw, "oversized"),
+                )
+                with self.assertRaises(CombatStoreError):
+                    self.service.attack(
+                        self.owner_token, 101, "battle-1", "oversized", 0, 101
+                    )
 
     def test_stale_revision_and_wrong_turn_do_not_mutate(self):
         self.create_battle()

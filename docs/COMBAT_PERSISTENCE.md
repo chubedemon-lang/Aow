@@ -36,6 +36,13 @@ An exact retry returns the original snapshot and event, even after later turns.
 Reusing a request ID with another payload is rejected. Stale revisions and
 invalid turns do not create receipts or mutate the battle.
 
+Receipt replay is fail-closed: stored JSON is size-bounded, duplicate keys and
+non-finite numbers are rejected, the top-level/battle/event schemas are exact,
+and fighter, turn, revision and winner invariants are rechecked. The decoded
+receipt must also match the original battle, owner, actor and expected revision.
+A corrupt receipt raises CombatStoreError rather than returning a partial or
+misattributed result.
+
 ## Trusted actor boundary
 
 attack(..., actor_id=...) is an internal trusted-domain operation. The
