@@ -2,6 +2,7 @@
 
 Session tokens are server-issued, opaque, short-lived and never persisted.
 """
+from contextlib import closing
 import secrets
 import threading
 import time
@@ -43,11 +44,16 @@ class SessionManager:
             return account_id
 
     def require_character(self, token, character_id, domain):
-        """Authorize a character against the account linked to this session."""
+        """Authorize a character against the account linked to this session.
+
+        The domain owns the connection factory. Close the short-lived connection
+        explicitly: sqlite3.Connection's context manager manages transactions but
+        does not close the underlying database connection.
+        """
         if type(character_id) is not int or character_id < 1:
             raise SessionError("invalid character")
         account_id = self.resolve(token)
-        with domain.connect() as db:
+        with closing(domain.connect()) as db:
             owned = db.execute(
                 "SELECT 1 FROM characters WHERE id=? AND account_id=?",
                 (character_id, account_id),
