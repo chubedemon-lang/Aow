@@ -58,6 +58,7 @@ individual claims carry provenance and confidence.
 | Area | Current implementation | Boundary |
 |---|---|---|
 | HTTP mock | \`server.mock\` | Local synthetic API; IPv4 loopback only |
+| Generic stream buffer | `server.stream_buffer.BoundedStreamBuffer` | Bounded byte accumulation only; no socket, frame or AOW wire semantics |
 | Runtime safety | \`server.runtime_safety\` | Rejects non-loopback bind configuration |
 | Database preflight | \`tools.server_preflight\` | Read-only \`synthetic-v1\` schema check; not production readiness |
 | Authentication | Local PBKDF2/account primitives and durable session stores | Synthetic domain services; not the APK login flow |
@@ -101,7 +102,7 @@ to the active protocol until a real authorized fixture round-trips independently
 
 Once the gate is satisfied, implement small independently testable layers:
 
-1. Bounded stream reader/writer with fragmentation, coalescing, EOF and size-limit tests.
+1. Bounded stream reader/writer with fragmentation, coalescing, EOF and size-limit tests. The current `BoundedStreamBuffer` covers byte accumulation only; framing remains unimplemented.
 2. Frame parser/encoder using only verified header semantics.
 3. Compression/encryption wrapper only when activation and parameters are verified.
 4. Message dispatcher with an explicit versioned message-ID registry.
