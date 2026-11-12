@@ -2,6 +2,7 @@
 import unittest
 
 from server.aow_framing_candidate import (
+    OBSERVED_HTTP_MARKER_VALUE,
     InvalidReceiverLength,
     ReceiverPayloadTooLarge,
     UnsupportedHttpMarkerBranch,
@@ -10,8 +11,8 @@ from server.aow_framing_candidate import (
 from server.frame_reader import CallbackFrameReader, TruncatedFrame
 
 
-# Deliberately synthetic test sentinel. This is NOT an observed AOW marker.
-SYNTHETIC_HTTP_MARKER = 0x48545450
+# Deliberately synthetic override; the default marker is tested separately.
+SYNTHETIC_HTTP_MARKER = 0x13572468
 
 
 def make_probe(limit=32):
@@ -26,6 +27,16 @@ def candidate_frame(payload):
 
 
 class ReceiverLengthCandidateTests(unittest.TestCase):
+    def test_default_marker_matches_static_receiver_http_constant(self):
+        self.assertEqual(
+            OBSERVED_HTTP_MARKER_VALUE,
+            int.from_bytes(b"HTTP", "big", signed=True),
+        )
+        probe = make_four_byte_length_candidate_probe(max_payload_bytes=32)
+        with self.assertRaises(UnsupportedHttpMarkerBranch) as caught:
+            probe(b"HTTP")
+        self.assertEqual(caught.exception.marker_value, OBSERVED_HTTP_MARKER_VALUE)
+
     def test_probe_waits_until_all_four_prefix_bytes_are_available(self):
         probe = make_probe()
         for prefix in (b"", b"\x00", b"\x00\x00", b"\x00\x00\x00"):
