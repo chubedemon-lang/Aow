@@ -81,16 +81,27 @@ class BoundedStreamBuffer:
         return self._closed
 
     def feed(self, data):
-        """Append a bytes-like chunk without partially accepting overflow."""
+        """Append a bytes-like chunk without copying rejected oversized input.
+
+        A memoryview's `len()` counts its first dimension (or elements), not
+        necessarily bytes. Use `nbytes` for the capacity preflight, then take
+        an immutable snapshot only after the chunk is known to fit.
+        """
         if self._closed:
             raise StreamClosedError("cannot feed a closed stream buffer")
         if not isinstance(data, (bytes, bytearray, memoryview)):
             raise TypeError("stream chunk must be bytes-like")
-        chunk = bytes(data)
-        if len(chunk) > self._max_buffer_bytes - len(self._buffer):
+
+        chunk_size = data.nbytes if isinstance(data, memoryview) else len(data)
+        available = len(self._buffer)
+        if chunk_size > self._max_buffer_bytes - available:
             raise BufferLimitExceeded(
-                len(chunk), len(self._buffer), self._max_buffer_bytes
+                chunk_size, available, self._max_buffer_bytes
             )
+
+        chunk = bytes(data)
+        # For supported bytes-like inputs, bytes(data) contains exactly the
+        # preflighted number of bytes, including multi-byte memoryview formats.
         self._buffer.extend(chunk)
         return len(chunk)
 
