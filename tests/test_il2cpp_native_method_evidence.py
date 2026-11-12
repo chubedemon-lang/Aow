@@ -890,5 +890,93 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertEqual(summary["control_flow_unreachable_callsite_observation_count"], 1)
 
 
+    def test_control_flow_resolves_indirect_calls_on_unique_forward_paths(self):
+        start = 0x5000
+        words = (
+            self._encode_adrp(start, 0x3000, 8),
+            self._encode_b_cond(start + 4, start + 24),
+            self._encode_add_x(8, 8, 0x80),
+            self._encode_ldr_x(9, 8),
+            self._encode_blr(9),
+            0xD65F03C0,  # ret
+            self._encode_ldr_x(10, 8),
+            self._encode_blr(10),
+            0xD65F03C0,  # ret
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code,
+            start,
+            {
+                0x3080: (R_AARCH64_RELATIVE, 0x6010),
+                0x3000: (R_AARCH64_RELATIVE, 0x6020),
+            },
+            {
+                0x6010: ["SimpleSerializer::serializeInt"],
+                0x6020: ["SimpleSerializer::serializeString"],
+            },
+        )
+
+        blocks = summary["control_flow_basic_blocks"]
+        self.assertEqual(summary["control_flow_block_count"], 3)
+        self.assertEqual(blocks[0]["successors"], [1, 2])
+        self.assertEqual(
+            blocks[1]["callsite_observations"],
+            [{
+                "instruction_index": 4,
+                "kind": "indirect_call",
+                "method": "SimpleSerializer::serializeInt",
+            }],
+        )
+        self.assertEqual(
+            blocks[2]["callsite_observations"],
+            [{
+                "instruction_index": 7,
+                "kind": "indirect_call",
+                "method": "SimpleSerializer::serializeString",
+            }],
+        )
+        self.assertEqual(
+            summary["control_flow_reachable_resolved_helper_callsite_count"], 2
+        )
+        rendered = json.dumps(summary)
+        for address in ("0x3000", "0x3080", "0x6010", "0x6020", "0x5000"):
+            self.assertNotIn(address, rendered)
+
+    def test_control_flow_drops_indirect_pointer_state_at_multi_predecessor_join(self):
+        start = 0x7000
+        words = (
+            self._encode_adrp(start, 0x3000, 8),
+            self._encode_b_cond(start + 4, start + 16),
+            self._encode_add_x(8, 8, 0x80),
+            self._encode_b(start + 12, start + 20),
+            0xD503201F,  # nop on the other path
+            self._encode_ldr_x(9, 8),
+            self._encode_blr(9),
+            0xD65F03C0,  # ret
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code,
+            start,
+            {0x3080: (R_AARCH64_RELATIVE, 0x6010)},
+            {0x6010: ["SimpleSerializer::serializeInt"]},
+        )
+
+        blocks = summary["control_flow_basic_blocks"]
+        self.assertEqual(blocks[3]["successors"], [4])
+        self.assertEqual(
+            blocks[4]["callsite_observations"],
+            [{
+                "instruction_index": 6,
+                "kind": "indirect_call",
+                "resolution": "not_resolved_as_serializer_helper",
+            }],
+        )
+        self.assertEqual(
+            summary["control_flow_reachable_resolved_helper_callsite_count"], 0
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
