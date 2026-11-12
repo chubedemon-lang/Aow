@@ -88,6 +88,46 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(a.snapshot.phase, Phase.CLOSED)
         self.assertEqual(b.snapshot.phase, Phase.NEW)
 
+    def test_direct_session_transitions_keep_registry_uniqueness(self):
+        registry = SessionRegistry()
+        first = registry.open("a")
+        second = registry.open("b")
+
+        first.authenticate("shared-account")
+        with self.assertRaises(RegistryError):
+            second.authenticate("shared-account")
+        self.assertEqual(second.snapshot.phase, Phase.NEW)
+
+        first.select_character("shared-character")
+        second.authenticate("other-account")
+        with self.assertRaises(RegistryError):
+            second.select_character("shared-character")
+        self.assertEqual(second.snapshot.phase, Phase.AUTHENTICATED)
+
+        second.select_character("other-character")
+        first.join_map(7)
+        self.assertEqual(registry.get("a").snapshot.map_id, 7)
+        first.leave_map()
+        self.assertEqual(registry.get("a").snapshot.phase, Phase.CHARACTER_SELECTED)
+
+    def test_session_handle_follows_verified_connection_transfer(self):
+        registry = SessionRegistry()
+        session = registry.open("old")
+        session.authenticate("account")
+        registry.transfer_connection("old", "new", verified=True)
+
+        # A retained handle now routes transitions through the new registry key.
+        session.select_character("hero")
+        self.assertEqual(registry.get("new").snapshot.character_id, "hero")
+        with self.assertRaises(RegistryError):
+            registry.get("old")
+
+        session.close()
+        self.assertEqual(registry.active_count, 0)
+        self.assertEqual(session.snapshot.phase, Phase.CLOSED)
+        with self.assertRaises(SessionError):
+            session.authenticate("after-close")
+
     def test_concurrent_opens_respect_capacity(self):
         workers = 16
         registry = SessionRegistry(capacity=1)
