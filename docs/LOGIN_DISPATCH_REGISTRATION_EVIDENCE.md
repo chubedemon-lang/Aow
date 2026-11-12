@@ -51,3 +51,43 @@ A fresh bounded CFG analysis of the connection-start state-machine entrypoint re
 These observations reconfirm the two values as **client-side dispatcher registration keys**. They are still not wire message IDs: no authorized packet bytes or runtime trace links either key to a transmitted message. Callback target metadata references remain unresolved. Do not assign message names or build a wire dispatch table from these values alone.
 
 The receiver and sender entrypoint windows also retain two direct primitive integer helper callsites each (two `deserializeInt` calls in `Receiver.Cycle`, two `serializeInt` calls in `Sender.Cycle`). Their individual semantics and full control-flow relationship remain unresolved.
+
+
+## Dispatcher listener delegate metadata — 2026-11-13
+
+A fresh offline read of the authorized APK's IL2CPP v31 metadata was used to
+extend the allowlisted type inventory. The new inventory output is limited to
+type/field/method names, parameter names, metadata tokens and raw type indexes;
+it does not emit native addresses, instruction bytes or binary assets.
+
+The metadata associates these declarations:
+
+- `MessageDispatcher.SafeRegister` and `TypeRegister` each declare two
+  parameters named `type` and `listener`.
+- `OnMessageReceivedDelegate` declares a constructor with parameters
+  `object` and `method`, plus an `Invoke` method with one parameter named
+  `message`.
+- The global `OnMessageReceivedDelegateData` type declares a field named
+  `Delegate`.
+- `MessageDispatcher` declares listener-related fields
+  `m_listeners`, `m_listenersByType`, `m_globalMessageHandlers`,
+  `m_unhandledMessageHandlers`, and a field named
+  `m_lastProcessedServerSequenceNumber`.
+
+These are metadata declarations only. The raw type indexes have not been
+resolved to full managed type names in this pass, and the native delegate
+constructor callsites have not yet been connected to unique callback method
+targets. This does not identify which callback handles registration keys
+5004 or 5005, nor does it prove that either key is a wire message ID.
+
+The offline type inventory now includes `OnMessageReceivedDelegate` and
+`OnMessageReceivedDelegateData` in its allowlist. Synthetic tests verify
+that the method/field/parameter associations are retained without assigning
+callback or wire semantics.
+
+### Next analysis step
+
+Resolve the `object` and `method` arguments at each native delegate
+constructor callsite in `<StartConnectToServer>d__12.MoveNext`, then map
+each target against unique metadata-backed executable method entries. Keep
+unresolved and ambiguous targets explicitly unresolved.
