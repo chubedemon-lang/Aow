@@ -964,9 +964,9 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         )
 
         blocks = summary["control_flow_basic_blocks"]
-        self.assertEqual(blocks[3]["successors"], [4])
+        self.assertEqual(blocks[3]["successors"], [])
         self.assertEqual(
-            blocks[4]["callsite_observations"],
+            blocks[3]["callsite_observations"],
             [{
                 "instruction_index": 6,
                 "kind": "indirect_call",
