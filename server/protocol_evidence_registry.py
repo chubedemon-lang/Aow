@@ -174,12 +174,35 @@ class EvidenceRegistry:
             raise EvidenceError("duplicate evidence")
         self._records.append(record)
 
-    def summary(self):
+    def summary(self, artifact_sha256=None):
+        """Summarize one APK fingerprint; never silently combine builds.
+
+        A registry may retain evidence for multiple APK versions. In that case
+        callers must select one fingerprint explicitly, matching the readiness
+        gates in protocol_evidence_gates. The summary is bookkeeping only.
+        """
+        fingerprints = {record.artifact_sha256 for record in self._records}
+        if artifact_sha256 is None:
+            if len(fingerprints) > 1:
+                raise EvidenceError(
+                    "records span multiple artifacts; select artifact_sha256 explicitly"
+                )
+            selected_records = self._records
+        else:
+            if type(artifact_sha256) is not str or not _SHA.fullmatch(artifact_sha256):
+                raise EvidenceError("artifact_sha256 must be lowercase SHA-256")
+            if artifact_sha256 not in fingerprints:
+                raise EvidenceError("no evidence records match artifact_sha256")
+            selected_records = [
+                record for record in self._records
+                if record.artifact_sha256 == artifact_sha256
+            ]
+
         return {
             topic: {
-                "observations": sum(r.topic == topic for r in self._records),
+                "observations": sum(r.topic == topic for r in selected_records),
                 "verified": sum(
-                    r.topic == topic and r.verified for r in self._records
+                    r.topic == topic and r.verified for r in selected_records
                 ),
             }
             for topic in sorted(ALLOWED_TOPICS)
