@@ -28,3 +28,19 @@ members or follows archive paths.
 IL2CPP metadata member. It does not run a full ZIP CRC pass and must not be
 reported as ZIP CRC verification. Use a separate bounded, private integrity
 check when full archive integrity is required.
+
+
+## Fresh authorized APK verification — 2026-11-13
+
+A private offline pass successfully read the authorized original APK:
+
+- Size: 256,468,647 bytes.
+- SHA-256: `c00bd00d30f625b85dfcc0159b3b058ca459c10f9917844a5301163480c7624e`.
+- ZIP entries: 7,368.
+- Aggregate uncompressed member size: 673,423,443 bytes.
+- Duplicate member names: 0; encrypted entries: 0; Unix symlink entries: 0.
+- Full `ZipFile.testzip()` CRC verification: passed with no failing entry.
+- IL2CPP metadata: 26,021,348 bytes; valid magic; version 31.
+- ARM64 `libil2cpp.so`: 166,150,720 bytes; ELF64 little-endian AArch64.
+
+The full CRC result above came from a separate private integrity pass after archive bounds were checked. It is distinct from the public metadata-only inventory command, which still does not perform a full CRC pass. The APK and extracted members remain outside the repository.

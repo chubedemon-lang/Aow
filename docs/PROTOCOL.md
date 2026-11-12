@@ -169,3 +169,30 @@ These are direct callsite counts in bounded native entry windows, not a field sc
 
 
 See [connection-bootstrap dispatcher registration evidence](LOGIN_DISPATCH_REGISTRATION_EVIDENCE.md) for the newly mapped local registration keys and the explicit distinction from wire message IDs.
+
+
+## Fresh private offline revalidation — 2026-11-13
+
+The original authorized APK was readable in the isolated workspace again. The APK was not modified, no files were committed from it, and no endpoint was contacted.
+
+- APK size: 256,468,647 bytes.
+- SHA-256: `c00bd00d30f625b85dfcc0159b3b058ca459c10f9917844a5301163480c7624e` (matches the existing private-analysis ledger).
+- ZIP: 7,368 entries; aggregate uncompressed member size 673,423,443 bytes; no duplicate names, encrypted entries, or Unix symlink entries.
+- A bounded full `ZipFile.testzip()` pass completed with no CRC failure.
+- IL2CPP metadata: 26,021,348 bytes, valid magic, version 31; string heap 3,349,996 bytes.
+- The bounded printable-string inventory found 177,548 unique strings and 1,336 paired serializer/deserializer base identifiers.
+- ARM64 `libil2cpp.so`: 166,150,720 bytes; ELF64 little-endian AArch64.
+- Exact metadata/codegen matching again produced 165/165 image modules and 197,631/197,631 method-pointer slots. Of these, 164,023 slots have relative relocations to executable sections.
+
+A fresh method-entry mapping resolved the allowlisted `Receiver.Cycle`, `Sender.Cycle`, `NetworkSettings::.cctor`, `MessageDispatcher` registration methods, and LoginRequest serializer/deserializer entrypoints to executable sections. Direct helper-callsite counts in their bounded windows were:
+
+| Method window | Direct helper callsites |
+|---|---|
+| `Receiver.Cycle` | 2 × `deserializeInt` |
+| `Sender.Cycle` | 2 × `serializeInt` |
+| `LoginRequestSTSerializer.serialize` | 19 integer, 16 string, 2 long, 1 boolean |
+| `LoginRequestSTDeserializer.deserialize` | 14 integer, 16 string, 2 long, 1 boolean |
+
+A fresh bounded CFG constant analysis of `<StartConnectToServer>d__12.MoveNext` again resolved two direct calls to `MessageDispatcher.SafeRegister`, with the second integer argument in x1 equal to 5004 and 5005. These remain **client-side dispatcher registration keys**, not confirmed wire message IDs. Delegate callback targets remain unresolved.
+
+**Interpretation limits:** direct callsite counts are static occurrences in bounded method-entry windows, not a runtime execution trace or a LoginRequest field schema. The integer-call discrepancy between serializer and deserializer remains unexplained. The analysis still does not establish the active transport, complete Sender/Receiver frame contract, effective `NetworkSettings.HeaderLength` use, HTTP marker value, compression/encryption placement, wire message IDs, handshake order, or APK-to-server compatibility. No packet fixture was available, and the real APK adapter remains disabled. Raw native addresses, instruction bytes, APK contents, and extracted assets remain private.
