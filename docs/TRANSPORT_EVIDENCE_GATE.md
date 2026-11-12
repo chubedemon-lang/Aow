@@ -21,3 +21,6 @@ Primitive serializer findings from the authorized offline APK pass are not by th
 ## Public evidence ledger locator policy
 
 `server/evidence_ledger.py` stores public provenance metadata only. It accepts short local references such as `issue:2`, `docs/PROTOCOL.md#framing`, `metadata/type:123`, and test paths. It rejects URI schemes, hostnames, IP literals, localhost and host:port locators so private endpoints are not accidentally published. This is a conservative metadata filter, not a general-purpose data-loss-prevention system.
+
+
+**Registry summary fingerprint isolation:** the evidence registry refuses to aggregate observations when it contains multiple APK SHA-256 values unless the caller selects one explicitly. The returned topic counts then include only records for that selected artifact. This mirrors the ordered readiness gate and prevents evidence from different builds being combined in a summary. It is a bookkeeping safeguard, not a compatibility test.
