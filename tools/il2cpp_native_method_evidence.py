@@ -677,7 +677,10 @@ def _summarize_control_flow_serializer_helper_blocks(
             "control_flow_block_count": 0,
             "control_flow_basic_blocks": [],
             "control_flow_basic_blocks_truncated": False,
-            "control_flow_reachable_helper_callsite_count": 0,
+            "control_flow_reachable_callsite_observation_count": 0,
+            "control_flow_unreachable_callsite_observation_count": 0,
+            "control_flow_reachable_resolved_helper_callsite_count": 0,
+            "control_flow_unreachable_resolved_helper_callsite_count": 0,
             "control_flow_unreachable_helper_callsite_count": 0,
             "control_flow_conditional_branch_count": 0,
             "control_flow_external_branch_exit_count": 0,
@@ -875,8 +878,10 @@ def _summarize_control_flow_serializer_helper_blocks(
             if successor not in reachable
         )
 
-    reachable_calls = 0
-    unreachable_calls = 0
+    reachable_observations = 0
+    unreachable_observations = 0
+    reachable_helpers = 0
+    unreachable_helpers = 0
     for block in blocks:
         block_index = block["block_index"]
         block_calls = []
@@ -889,11 +894,14 @@ def _summarize_control_flow_serializer_helper_blocks(
                     **event,
                 })
         block["reachable"] = block_index in reachable
-        block["helper_calls"] = block_calls
+        block["callsite_observations"] = block_calls
+        resolved_helpers = sum("method" in event for event in block_calls)
         if block["reachable"]:
-            reachable_calls += len(block_calls)
+            reachable_observations += len(block_calls)
+            reachable_helpers += resolved_helpers
         else:
-            unreachable_calls += len(block_calls)
+            unreachable_observations += len(block_calls)
+            unreachable_helpers += resolved_helpers
 
     max_reported_blocks = 512
     return {
@@ -901,8 +909,10 @@ def _summarize_control_flow_serializer_helper_blocks(
         "control_flow_block_count": len(blocks),
         "control_flow_basic_blocks": blocks[:max_reported_blocks],
         "control_flow_basic_blocks_truncated": len(blocks) > max_reported_blocks,
-        "control_flow_reachable_helper_callsite_count": reachable_calls,
-        "control_flow_unreachable_helper_callsite_count": unreachable_calls,
+        "control_flow_reachable_callsite_observation_count": reachable_observations,
+        "control_flow_unreachable_callsite_observation_count": unreachable_observations,
+        "control_flow_reachable_resolved_helper_callsite_count": reachable_helpers,
+        "control_flow_unreachable_resolved_helper_callsite_count": unreachable_helpers,
         "control_flow_conditional_branch_count": conditional_count,
         "control_flow_external_branch_exit_count": external_exit_count,
     }
