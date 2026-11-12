@@ -2,28 +2,31 @@
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import FrozenInstanceError
 
 from server.synthetic_session_registry import RegistryError, SessionRegistry
-from server.synthetic_session_state import Phase, SessionError
+from server.synthetic_session_state import Phase, SessionError, Snapshot
 
 
 class RegistryTests(unittest.TestCase):
     def test_capacity_and_release(self):
         registry = SessionRegistry(1)
         first = registry.open("a")
+        self.assertEqual(first.phase, Phase.NEW)
         with self.assertRaises(RegistryError):
             registry.open("b")
         self.assertTrue(registry.close("a"))
-        self.assertEqual(first.snapshot.phase, Phase.CLOSED)
+        self.assertEqual(registry.active_count, 0)
         registry.open("b")
         self.assertEqual(registry.active_count, 1)
 
     def test_duplicate_connection_is_atomic(self):
         registry = SessionRegistry()
-        session = registry.open("a")
+        opened = registry.open("a")
         with self.assertRaises(RegistryError):
             registry.open("a")
-        self.assertIs(registry.get("a"), session)
+        self.assertIsInstance(opened, Snapshot)
+        self.assertEqual(registry.get("a"), opened)
 
     def test_account_uniqueness_and_release(self):
         registry = SessionRegistry()
@@ -32,9 +35,10 @@ class RegistryTests(unittest.TestCase):
         registry.authenticate("a", "account")
         with self.assertRaises(RegistryError):
             registry.authenticate("b", "account")
-        self.assertEqual(registry.get("b").snapshot.phase, Phase.NEW)
+        self.assertEqual(registry.get("b").phase, Phase.NEW)
         registry.close("a")
         registry.authenticate("b", "account")
+        self.assertEqual(registry.get("b").phase, Phase.AUTHENTICATED)
 
     def test_character_uniqueness(self):
         registry = SessionRegistry()
@@ -44,7 +48,7 @@ class RegistryTests(unittest.TestCase):
         registry.select_character("a", "hero")
         with self.assertRaises(RegistryError):
             registry.select_character("b", "hero")
-        self.assertEqual(registry.get("b").snapshot.phase, Phase.AUTHENTICATED)
+        self.assertEqual(registry.get("b").phase, Phase.AUTHENTICATED)
         registry.select_character("b", "other")
 
     def test_invalid_identifiers_and_capacity(self):
@@ -64,29 +68,55 @@ class RegistryTests(unittest.TestCase):
         with self.assertRaises(SessionError):
             registry.authenticate("a", "")
         registry.authenticate("b", "account")
-        self.assertEqual(registry.get("a").snapshot.phase, Phase.NEW)
+        self.assertEqual(registry.get("a").phase, Phase.NEW)
 
-    def test_close_all_erases_sessions(self):
+    def test_close_all_removes_sessions(self):
         registry = SessionRegistry()
-        first = registry.open("a")
+        registry.open("a")
         registry.authenticate("a", "secret")
         registry.open("b")
         registry.close_all()
         self.assertEqual(registry.active_count, 0)
-        self.assertIsNone(first.snapshot.account_id)
         self.assertFalse(registry.close("a"))
         with self.assertRaises(RegistryError):
             registry.get("b")
 
     def test_no_cross_session_state_mutation(self):
         registry = SessionRegistry()
-        a = registry.open("a")
-        b = registry.open("b")
+        a_initial = registry.open("a")
+        b_initial = registry.open("b")
         registry.authenticate("a", "user")
-        self.assertEqual(b.snapshot.phase, Phase.NEW)
+        self.assertEqual(a_initial.phase, Phase.NEW)
+        self.assertEqual(b_initial.phase, Phase.NEW)
+        self.assertEqual(registry.get("a").phase, Phase.AUTHENTICATED)
+        self.assertEqual(registry.get("b").phase, Phase.NEW)
         registry.close("a")
-        self.assertEqual(a.snapshot.phase, Phase.CLOSED)
-        self.assertEqual(b.snapshot.phase, Phase.NEW)
+        with self.assertRaises(RegistryError):
+            registry.get("a")
+        self.assertEqual(registry.get("b").phase, Phase.NEW)
+
+    def test_only_immutable_snapshots_leave_registry(self):
+        registry = SessionRegistry()
+        opened = registry.open("old")
+        self.assertIsInstance(opened, Snapshot)
+        with self.assertRaises(FrozenInstanceError):
+            opened.phase = Phase.CLOSED
+        with self.assertRaises(AttributeError):
+            opened.authenticate("account")
+
+        registry.authenticate("old", "account")
+        current = registry.get("old")
+        self.assertIsInstance(current, Snapshot)
+        self.assertEqual(current.phase, Phase.AUTHENTICATED)
+        with self.assertRaises(FrozenInstanceError):
+            current.account_id = "other"
+
+        transferred = registry.transfer_connection("old", "new", verified=True)
+        self.assertIsInstance(transferred, Snapshot)
+        self.assertEqual(transferred, current)
+        with self.assertRaises(RegistryError):
+            registry.get("old")
+        self.assertEqual(registry.get("new"), current)
 
     def test_concurrent_opens_respect_capacity(self):
         workers = 16
@@ -127,7 +157,7 @@ class RegistryTests(unittest.TestCase):
 
         self.assertEqual(sum(results), 1)
         phases = [
-            registry.get("connection-" + str(index)).snapshot.phase
+            registry.get("connection-" + str(index)).phase
             for index in range(workers)
         ]
         self.assertEqual(phases.count(Phase.AUTHENTICATED), 1)
@@ -155,7 +185,7 @@ class RegistryTests(unittest.TestCase):
 
         self.assertEqual(sum(results), 1)
         phases = [
-            registry.get("connection-" + str(index)).snapshot.phase
+            registry.get("connection-" + str(index)).phase
             for index in range(workers)
         ]
         self.assertEqual(phases.count(Phase.CHARACTER_SELECTED), 1)
