@@ -997,7 +997,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertEqual(summary["method"], "Cycle")
         self.assertEqual(
             summary["resolved_direct_method_call_counts"],
-            {"com.geargames.common.network.Receiver::DoStreamReadedBytes/p1": 1},
+            {"com.geargames.common.network.Receiver::DoStreamReadedBytes/p0": 1},
         )
         self.assertEqual(summary["unresolved_direct_method_call_count"], 0)
         rendered = json.dumps(report)
