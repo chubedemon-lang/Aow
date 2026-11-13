@@ -257,6 +257,41 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
                 targets[self.constructor] = associations
                 self.assertEqual(self.analyze(code, targets=targets), [])
 
+    def test_malformed_method_arity_suffixes_are_not_resolved(self):
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        malformed = (
+            "com.geargames.common.network.OnMessageReceivedDelegate::.ctor",
+            "com.geargames.common.network.OnMessageReceivedDelegate::.ctor/p",
+            "com.geargames.common.network.OnMessageReceivedDelegate::.ctor/p2junk",
+            "com.geargames.common.network.OnMessageReceivedDelegate::.ctor/p٢",
+            "com.geargames.common.network.OnMessageReceivedDelegate::.ctor/p02",
+            "com.geargames.common.network.OnMessageReceivedDelegate::.ctor/p65536",
+            "com.geargames.common.network.OnMessageReceivedDelegate::.ctor/p2/p3",
+        )
+        for label in malformed:
+            with self.subTest(label=label):
+                targets = dict(self.targets)
+                targets[self.constructor] = [label]
+                self.assertEqual(self.analyze(code, targets=targets), [])
+
+    def test_malformed_callback_arity_is_not_reported_as_unique(self):
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        targets = dict(self.targets)
+        targets[self.callback] = [
+            "com.geargames.unity.network.ConnectionReceiver::OnMessage/p1extra"
+        ]
+        result = self.analyze(code, targets=targets)
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unresolved_metadata_method"},
+        )
+
     def test_constructor_allowlist_requires_a_type_name_boundary(self):
         targets = dict(self.targets)
         targets[self.constructor] = [
