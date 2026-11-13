@@ -110,7 +110,7 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
             result[0]["candidate_method_pointer_arguments"]["x2"],
             {
                 "resolution": "unique_metadata_method",
-                "method": self.callback_label.split("/p", 1)[0],
+                "method": self.callback_label,
             },
         )
 
@@ -131,7 +131,7 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             result[0]["candidate_method_pointer_arguments"]["x2"]["method"],
-            self.callback_label.split("/p", 1)[0],
+            self.callback_label,
         )
 
     def test_non_relative_or_missing_relocation_is_not_promoted(self):
@@ -202,6 +202,19 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
             self.callback_label,
             "com.geargames.common.network.OtherReceiver::OnMessage/p1",
         ]
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        result = self.analyze(code, targets=targets)
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "ambiguous_metadata_method"},
+        )
+
+    def test_duplicate_identical_metadata_labels_remain_ambiguous(self):
+        targets = dict(self.targets)
+        targets[self.callback] = [self.callback_label, self.callback_label]
         code = words(
             adr(2, self.start, self.callback),
             bl(self.start + 4, self.constructor),
