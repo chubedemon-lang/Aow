@@ -8,7 +8,7 @@ import re
 
 from server.offline_packet_fixture import FixtureValidationError, validate_packet_fixture
 
-_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\\Z")
 
 
 def validate_fixture_batch(
@@ -50,14 +50,21 @@ def validate_fixture_batch(
                 or source_digest not in expected_sources):
             raise FixtureValidationError("fixture source digest is not in expected source set")
 
-        # Limit each decoded fixture before allocating it.
+        # Preflight the encoded length before decoding. An empty fixture is
+        # still valid when earlier fixtures have consumed the entire byte
+        # budget, but any non-empty payload must be rejected at that point.
         remaining = max_total_bytes - total
-        if remaining < 1:
+        payload_hex = record.get("payload_hex")
+        if isinstance(payload_hex, str) and len(payload_hex) > 2 * remaining:
             raise FixtureValidationError("batch byte limit exceeded")
+
+        # The single-fixture validator requires a positive max_bytes value.
+        # Use one only for the zero-remaining/empty-payload case above.
+        fixture_limit = max(1, min(remaining, 1048576))
         payload = validate_packet_fixture(
             record,
             expected_source_sha256=source_digest,
-            max_bytes=min(remaining, 1048576),
+            max_bytes=fixture_limit,
         )
         digest = hashlib.sha256(payload).hexdigest()
         identity = (source_digest, digest)
