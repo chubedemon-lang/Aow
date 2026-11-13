@@ -137,6 +137,35 @@ class OfflineFrameProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(FrameDecodeError, "failed"):
             decoder.feed(b"c")
 
+    def test_frame_flood_exceeds_per_feed_limit_and_poison_decoder(self):
+        decoder = LengthFrameDecoder(
+            FrameSpec(1, "big", max_frames_per_feed=2)
+        )
+        with self.assertRaisesRegex(FrameDecodeError, "frame count"):
+            decoder.feed(b"\x00\x00\x00")
+        self.assertEqual(decoder.pending_bytes, 0)
+        with self.assertRaisesRegex(FrameDecodeError, "failed"):
+            decoder.feed(b"\x00")
+
+    def test_exact_frame_count_limit_is_allowed_per_feed(self):
+        decoder = LengthFrameDecoder(
+            FrameSpec(1, "big", max_frames_per_feed=2)
+        )
+        self.assertEqual(decoder.feed(b"\x00\x00\x01"), [b"", b""])
+        self.assertEqual(decoder.pending_bytes, 1)
+        self.assertEqual(decoder.feed(b"x"), [b"x"])
+        decoder.finish()
+
+    def test_invalid_frame_count_limits(self):
+        for value in (True, 0, -1, 65537, "2"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                FrameSpec(1, "big", max_frames_per_feed=value)
+        self.assertEqual(FrameSpec(1, "big", max_frames_per_feed=1).max_frames_per_feed, 1)
+        self.assertEqual(
+            FrameSpec(1, "big", max_frames_per_feed=65536).max_frames_per_feed,
+            65536,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
