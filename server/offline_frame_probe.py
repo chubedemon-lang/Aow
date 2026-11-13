@@ -13,6 +13,7 @@ class FrameSpec:
     includes_header: bool = False
     max_payload: int | None = None
     max_chunk_bytes: int = 4 * 1024 * 1024
+    max_frames_per_feed: int = 4096
 
     def __post_init__(self):
         if type(self.length_bytes) is not int or self.length_bytes not in (1, 2, 4):
@@ -37,6 +38,10 @@ class FrameSpec:
             raise ValueError("invalid or unrepresentable max_payload")
         if type(self.max_chunk_bytes) is not int or not (1 <= self.max_chunk_bytes <= 16 * 1024 * 1024):
             raise ValueError("invalid max_chunk_bytes")
+        if type(self.max_frames_per_feed) is not int or not (
+            1 <= self.max_frames_per_feed <= 65536
+        ):
+            raise ValueError("invalid max_frames_per_feed")
 
 
 class FrameDecodeError(ValueError):
@@ -85,6 +90,10 @@ class LengthFrameDecoder:
             total = header + payload_size
             if len(self._pending) < total:
                 break
+            if len(frames) >= self.spec.max_frames_per_feed:
+                self._pending.clear()
+                self._failed = True
+                raise FrameDecodeError("frame count exceeds per-feed maximum")
             frames.append(bytes(self._pending[header:total]))
             del self._pending[:total]
         # A partial frame cannot exceed its validated maximum, plus header.
