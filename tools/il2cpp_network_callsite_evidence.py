@@ -28,6 +28,9 @@ from tools.il2cpp_codegen_inventory import (
 from tools.aarch64_call_argument_evidence import (
     summarize_small_argument_constants,
 )
+from tools.aarch64_delegate_target_evidence import (
+    summarize_delegate_method_pointer_arguments,
+)
 from tools.il2cpp_native_method_evidence import (
     TARGET_METHODS,
     _all_method_targets,
@@ -148,6 +151,18 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         executable,
         direct_targets | indirect_targets,
     )
+    # A delegate's method argument can point at an entrypoint that is not
+    # itself called from the selected windows. Build a private lookup for all
+    # validated metadata-backed entrypoints; only labels are emitted.
+    all_entrypoint_targets = {target for _section_name, target in windows}
+    delegate_method_targets = _all_method_targets(
+        metadata,
+        info,
+        tables,
+        relocations,
+        executable,
+        all_entrypoint_targets,
+    )
 
     callsite_summary = []
     for method, target, _section_name, window_bytes, truncated, code in resolved:
@@ -172,6 +187,16 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
                     target,
                     method_targets,
                     target_prefixes=CALLSITE_ARGUMENT_TARGET_PREFIXES,
+                )
+            ),
+            "delegate_method_pointer_argument_observations": (
+                summarize_delegate_method_pointer_arguments(
+                    code,
+                    target,
+                    delegate_method_targets,
+                    relocations,
+                    target_prefixes=("OnMessageReceivedDelegate::.ctor",),
+                    argument_registers=(2,),
                 )
             ),
         })
