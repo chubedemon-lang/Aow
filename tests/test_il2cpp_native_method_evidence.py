@@ -56,7 +56,7 @@ def make_metadata(method_names, wrong_owner=False, *, image="ScriptsAssembly.dll
 
 
 def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
-             image="ScriptsAssembly.dll"):
+             image="ScriptsAssembly.dll", text_words=()):
     names = b"\0.shstrtab\0.rodata\0.data.rel.ro\0.text\0.rela.dyn\0"
     offsets = {
         name: names.index(name.encode())
@@ -74,6 +74,10 @@ def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
     elf[ro_off:ro_off + len(image_name)] = image_name
     elf[relro_off:relro_off + len(relro)] = relro
     elf[text_off:text_off + 0x40] = b"\x1f\x20\x03\xd5" * 16
+    if len(text_words) > 16:
+        raise ValueError("synthetic text window exceeds .text fixture")
+    for index, word in enumerate(text_words):
+        struct.pack_into("<I", elf, text_off + index * 4, word)
     elf[names_off:names_end] = names
     relocations = [(0x3000, (1 << 32) | 1027, 0x2000)]
     if not omit_table:
@@ -976,6 +980,29 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertEqual(
             summary["control_flow_reachable_resolved_helper_callsite_count"], 0
         )
+
+
+    def test_network_callsite_summary_resolves_only_metadata_backed_direct_calls(self):
+        start = 0x5000
+        report = inspect_bytes(
+            make_metadata(["Cycle", "DoStreamReadedBytes"]),
+            make_elf(
+                2,
+                text_words=(self._encode_bl(start, start + 4),),
+            ),
+        )
+        self.assertEqual(len(report["network_callsite_summary"]), 1)
+        summary = report["network_callsite_summary"][0]
+        self.assertEqual(summary["type"], "Receiver")
+        self.assertEqual(summary["method"], "Cycle")
+        self.assertEqual(
+            summary["resolved_direct_method_call_counts"],
+            {"com.geargames.common.network.Receiver::DoStreamReadedBytes/p0": 1},
+        )
+        self.assertEqual(summary["unresolved_direct_method_call_count"], 0)
+        rendered = json.dumps(report)
+        self.assertNotIn("0x5000", rendered)
+        self.assertNotIn("0x5004", rendered)
 
 
 if __name__ == "__main__":

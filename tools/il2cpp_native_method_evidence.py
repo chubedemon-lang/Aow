@@ -72,6 +72,18 @@ SERIALIZER_HELPER_METHODS = {
         "deserializeShort", "deserializeChars",
     },
 }
+
+# Keep this list narrow: these entry windows are the network-path evidence
+# used to summarize direct helper/method calls without emitting native addresses.
+NETWORK_CALLSITE_METHODS = {
+    ("com.geargames.common.network", "Receiver", "Cycle"),
+    ("com.geargames.common.network", "Sender", "Cycle"),
+    ("com.geargames.common.network", "MessageDispatcher", "Dispatch"),
+    ("com.geargames.common.network", "MessageDispatcher", "TypeRegister"),
+    ("com.geargames.common.network", "MessageHelper", "InternalGetMessageType"),
+    ("com.geargames.common.network", "MessageHelper", "GetMessageType"),
+}
+
 MAX_ENTRYPOINT_WINDOW_BYTES = 64 * 1024
 
 
@@ -1241,8 +1253,32 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         sections, relocations, tables, info["images"], executable
     )
     serializer_windows = []
+    network_windows = []
     direct_targets = set()
     indirect_targets = set()
+
+    for method in methods:
+        method_key = (method["namespace"], method["type"], method["method"])
+        if method["category"] != "network" or method_key not in NETWORK_CALLSITE_METHODS:
+            continue
+        status, section_name, target = resolve(method)
+        if status != "executable_relocation":
+            continue
+        window = windows.get((section_name, target))
+        if window is None:
+            continue
+        window_bytes, truncated = window
+        section = sections[section_name]
+        file_offset = section["offset"] + target - section["address"]
+        code = _slice(elf, file_offset, window_bytes, "native network method entry window")
+        network_windows.append(
+            (method, section_name, target, window_bytes, truncated, code)
+        )
+        direct_targets.update(_direct_branch_targets(code, target))
+        indirect_targets.update(
+            _relocated_indirect_call_targets(code, target, relocations)
+        )
+
     for method in methods:
         if method["category"] != "login_session_serializer":
             continue
@@ -1296,6 +1332,30 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         })
     callsite_summary.sort(key=lambda x: (x["type"], x["method"]))
 
+    network_callsite_summary = []
+    for method, section_name, target, window_bytes, truncated, code in network_windows:
+        helper_summary = _summarize_aarch64_calls(code, target, helper_targets)
+        named_summary = _summarize_named_method_calls(code, target, method_targets)
+        indirect_summary = _summarize_relocated_indirect_calls(
+            code, target, relocations, method_targets
+        )
+        network_callsite_summary.append({
+            "namespace": method["namespace"],
+            "type": method["type"],
+            "method": method["method"],
+            "parameter_count": method["parameter_count"],
+            "image": method["image"],
+            "entry_window_kind": "next_distinct_executable_entry_in_section",
+            "entry_window_bytes": window_bytes,
+            "entry_window_truncated": truncated,
+            **helper_summary,
+            **named_summary,
+            **indirect_summary,
+        })
+    network_callsite_summary.sort(
+        key=lambda x: (x["namespace"], x["type"], x["method"], x["parameter_count"])
+    )
+
     primitive_helper_summary = []
     for method in helper_methods:
         status, section_name, target = resolve(method)
@@ -1338,6 +1398,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         ),
         "methods": evidence,
         "serializer_callsite_summary": callsite_summary,
+        "network_callsite_summary": network_callsite_summary,
         "primitive_helper_callsite_summary": primitive_helper_summary,
         "native_addresses_emitted": False,
         "raw_instructions_emitted": False,
@@ -1346,9 +1407,12 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "entries. Serializer and primitive-helper callsite summaries count direct AArch64 BL calls "
             "to allowlisted SimpleSerializer/SimpleDeserializer helpers inside a "
             "bounded entry window ending at the next distinct executable entry "
-            "in the same section. Direct tail branches and indirect tail branches are reported separately. Direct B/BL targets are resolved against metadata-backed method entries where unique; unresolved and ambiguous targets remain counts only. Indirect calls and other direct calls are counted "
-            "but not assigned field semantics. This is static evidence only, not "
-            "a wire protocol, field order, handshake, login, or compatibility proof."
+            "in the same section. Selected Receiver/Sender/dispatcher/helper entry windows also emit "
+            "redacted network callsite summaries. Direct tail branches and indirect tail branches are "
+            "reported separately. Direct B/BL targets are resolved against metadata-backed method "
+            "entries where unique; unresolved and ambiguous targets remain counts only. Indirect calls "
+            "and other direct calls are counted but not assigned field semantics. This is static "
+            "evidence only, not a wire protocol, field order, handshake, login, or compatibility proof."
         ),
     }
 
