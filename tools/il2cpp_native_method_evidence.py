@@ -185,7 +185,7 @@ def _network_fields(metadata, allowlist_map=None):
     def read_string(index):
         if type(index) is not int or not 0 <= index < len(heap):
             raise CodegenInventoryError("invalid metadata string index")
-        end = heap.find(b"\\0", index)
+        end = heap.find(b"\0", index)
         if end < 0:
             raise CodegenInventoryError("unterminated metadata string")
         try:
