@@ -9,10 +9,42 @@ from tools.il2cpp_network_callsite_evidence import (
     CALLSITE_ARGUMENT_TARGET_PREFIXES,
     inspect_bytes,
     NETWORK_SUPPORT_METHODS,
+    _metadata_method_definitions,
+    _static_data_reader,
 )
 
 
 class NetworkCallsiteEvidenceTests(unittest.TestCase):
+    def test_metadata_method_definition_labels_keep_owner_and_arity(self):
+        metadata = make_metadata(
+            ["MoveNext"],
+            type_name="<StartConnectToServer>d__12",
+            namespace="",
+        )
+        labels = _metadata_method_definitions(metadata)
+        self.assertEqual(
+            labels[0],
+            ["<StartConnectToServer>d__12::MoveNext/p0"],
+        )
+
+    def test_static_data_reader_is_bounded_to_unique_allocated_non_executable_sections(self):
+        token = 0x6000000B
+        data = struct.pack("<Q", token)
+        sections = {
+            ".data": {
+                "type": 1, "flags": 3, "address": 0x9000,
+                "offset": 0, "size": len(data),
+            },
+            ".text": {
+                "type": 1, "flags": 6, "address": 0xA000,
+                "offset": 0, "size": len(data),
+            },
+        }
+        read_u64 = _static_data_reader(data, sections)
+        self.assertEqual(read_u64(0x9000), token)
+        self.assertIsNone(read_u64(0x9001))
+        self.assertIsNone(read_u64(0xA000))
+
     def test_known_network_method_gets_a_redacted_callsite_record(self):
         report = inspect_bytes(
             make_metadata(["Cycle"], type_name="Receiver"),

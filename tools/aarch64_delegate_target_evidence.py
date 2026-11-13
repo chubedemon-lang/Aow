@@ -122,6 +122,35 @@ def _matches_target_prefix(method_label, prefixes):
     )
 
 
+def _resolve_metadata_method_usage(value, method_definitions, metadata_version):
+    """Resolve only an unresolved v27+ MethodDef usage token to a metadata label."""
+    if (
+        type(value) is not int
+        or not 0 <= value <= 0xFFFFFFFF
+        or type(metadata_version) is not int
+        or metadata_version < 27
+    ):
+        return {"resolution": "unresolved_metadata_usage"}
+
+    usage_type = (value & 0xE0000000) >> 29
+    encoded_index = value & 0x1FFFFFFF
+    # IL2CPP v27+ sets bit 0 while a metadata-usage token has not yet been
+    # replaced with its runtime pointer. The remaining bits encode index * 2.
+    if usage_type != 3 or not (encoded_index & 1):
+        return {"resolution": "unresolved_metadata_usage"}
+
+    method_index = encoded_index >> 1
+    labels = _method_labels(method_definitions.get(method_index, ()))
+    if len(labels) == 1:
+        return {
+            "resolution": "unique_metadata_method_definition",
+            "method": labels[0],
+        }
+    if len(labels) > 1:
+        return {"resolution": "ambiguous_metadata_method_definition"}
+    return {"resolution": "unresolved_metadata_method_definition"}
+
+
 def summarize_delegate_method_pointer_arguments(
     code,
     start_va,
@@ -130,6 +159,9 @@ def summarize_delegate_method_pointer_arguments(
     *,
     target_prefixes=("OnMessageReceivedDelegate::.ctor",),
     argument_registers=(2,),
+    static_data_reader=None,
+    metadata_method_definitions=None,
+    metadata_version=None,
 ):
     """Summarize candidate method-pointer arguments at delegate constructors.
 
@@ -151,6 +183,15 @@ def summarize_delegate_method_pointer_arguments(
         raise ValueError("AArch64 code window start must be an aligned address")
     if not isinstance(method_targets, dict) or not isinstance(relocations, dict):
         raise ValueError("method_targets and relocations must be mappings")
+    if static_data_reader is not None and not callable(static_data_reader):
+        raise ValueError("static_data_reader must be callable")
+    if metadata_method_definitions is not None:
+        if not isinstance(metadata_method_definitions, dict):
+            raise ValueError("metadata_method_definitions must be a mapping")
+        if type(metadata_version) is not int:
+            raise ValueError("metadata_version is required for metadata method definitions")
+    elif metadata_version is not None and type(metadata_version) is not int:
+        raise ValueError("metadata_version must be an integer")
     if (
         not isinstance(target_prefixes, (tuple, list, set, frozenset))
         or not target_prefixes
@@ -195,6 +236,7 @@ def summarize_delegate_method_pointer_arguments(
             ordinal += 1
 
     outgoing_states = {}
+    outgoing_metadata_tokens = {}
     observations = []
     for block_index, (block_start, block_end) in enumerate(blocks):
         if block_index not in reachable:
@@ -203,6 +245,7 @@ def summarize_delegate_method_pointer_arguments(
         incoming = predecessors[block_index]
         if block_index == 0 or len(incoming) != 1:
             registers = {}
+            metadata_tokens = {}
         else:
             predecessor = next(iter(incoming))
             if (
@@ -211,9 +254,11 @@ def summarize_delegate_method_pointer_arguments(
                 and predecessor in outgoing_states
             ):
                 registers = dict(outgoing_states[predecessor])
+                metadata_tokens = dict(outgoing_metadata_tokens[predecessor])
             else:
                 # Do not merge joins or iterate backedges.
                 registers = {}
+                metadata_tokens = {}
 
         for instruction_index in range(block_start, block_end):
             word = words[instruction_index]
@@ -223,17 +268,20 @@ def summarize_delegate_method_pointer_arguments(
             if adr is not None:
                 destination, address = adr
                 registers[destination] = address & _MASK64
+                metadata_tokens.pop(destination, None)
                 continue
 
             adrp = _decode_adrp(word, pc)
             if adrp is not None:
                 destination, address = adrp
                 registers[destination] = address & _MASK64
+                metadata_tokens.pop(destination, None)
                 continue
 
             add = _decode_add_x_immediate(word)
             if add is not None:
                 destination, source, immediate = add
+                metadata_tokens.pop(destination, None)
                 if source in registers:
                     registers[destination] = (registers[source] + immediate) & _MASK64
                 else:
@@ -255,8 +303,18 @@ def summarize_delegate_method_pointer_arguments(
                     and 0 <= relocation[1] <= _MASK64
                 ):
                     registers[destination] = relocation[1]
+                    metadata_tokens.pop(destination, None)
+                elif relocation is None and static_data_reader is not None and base is not None:
+                    static_value = static_data_reader(base + offset)
+                    if type(static_value) is int and 0 <= static_value <= 0xFFFFFFFF:
+                        metadata_tokens[destination] = static_value
+                        registers.pop(destination, None)
+                    else:
+                        registers.pop(destination, None)
+                        metadata_tokens.pop(destination, None)
                 else:
                     registers.pop(destination, None)
+                    metadata_tokens.pop(destination, None)
                 continue
 
             move = _decode_move_register(word)
@@ -265,14 +323,21 @@ def summarize_delegate_method_pointer_arguments(
                 if width_mask == _MASK64 and destination != 31:
                     if source == 31:
                         registers[destination] = 0
+                        metadata_tokens.pop(destination, None)
+                    elif source in metadata_tokens:
+                        metadata_tokens[destination] = metadata_tokens[source]
+                        registers.pop(destination, None)
                     elif source in registers:
                         registers[destination] = registers[source]
+                        metadata_tokens.pop(destination, None)
                     else:
                         registers.pop(destination, None)
+                        metadata_tokens.pop(destination, None)
                 else:
                     # W-register copies and writes to XZR are not pointer evidence.
                     if destination != 31:
                         registers.pop(destination, None)
+                        metadata_tokens.pop(destination, None)
                 continue
 
             target = _decode_bl_target(word, pc)
@@ -284,6 +349,18 @@ def summarize_delegate_method_pointer_arguments(
                     pointer_arguments = {}
                     for register in argument_registers:
                         name = f"x{register}"
+                        if register in metadata_tokens:
+                            if metadata_method_definitions is None:
+                                pointer_arguments[name] = {
+                                    "resolution": "unresolved_metadata_usage"
+                                }
+                            else:
+                                pointer_arguments[name] = _resolve_metadata_method_usage(
+                                    metadata_tokens[register],
+                                    metadata_method_definitions,
+                                    metadata_version,
+                                )
+                            continue
                         if register not in registers:
                             pointer_arguments[name] = {"resolution": "unknown"}
                             continue
@@ -312,11 +389,13 @@ def summarize_delegate_method_pointer_arguments(
                     })
                 for register in _CALLER_SAVED_REGISTERS:
                     registers.pop(register, None)
+                    metadata_tokens.pop(register, None)
                 continue
 
             if _is_indirect_call(word):
                 for register in _CALLER_SAVED_REGISTERS:
                     registers.pop(register, None)
+                    metadata_tokens.pop(register, None)
                 continue
 
             if (
@@ -328,8 +407,10 @@ def summarize_delegate_method_pointer_arguments(
 
             if word != _NOP:
                 registers.clear()
+                metadata_tokens.clear()
 
         outgoing_states[block_index] = registers
+        outgoing_metadata_tokens[block_index] = metadata_tokens
 
     return sorted(
         observations,

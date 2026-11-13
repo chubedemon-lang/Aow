@@ -100,3 +100,19 @@ A new bounded CFG pass in `tools/aarch64_delegate_target_evidence.py` is integra
 The report emits a unique metadata-backed method label only when the tracked pointer exactly matches one executable method entry. Missing, ambiguous, unsupported, or thunk-like values remain unresolved. Raw pointer values, native addresses and instruction bytes are never emitted. The pass drops state at joins/backedges, clobbers caller-saved registers at calls, and clears state on unknown instructions.
 
 Synthetic tests use fabricated instruction words and relocations. **This PR does not run the analyzer against the APK and adds no callback target result.** It does not identify message IDs, map keys 5004/5005 to wire traffic, or prove handshake/login compatibility. See [AArch64 delegate method-pointer evidence](AARCH64_DELEGATE_TARGET_EVIDENCE.md).
+
+
+## Delegate callback resolution — 2026-11-13
+
+A fresh read-only native pass on the same authorized APK fingerprint traced both delegate constructor arguments through the metadata-initialization path. The two static-data values are unresolved IL2CPP v31 MethodDef usage tokens; decoding the v27+ unresolved-token form maps them to unique zero-based method-definition entries in the same metadata file.
+
+The connection-start state machine now yields this client-side registration mapping:
+
+- **5004 →** `com.geargames.aow.gui.loadingwindow.GUILoadingPvpStartPresenter::OnProgressAnswer/p1`. The method metadata marks this method static, matching the null delegate target at the constructor callsite.
+- **5005 →** `com.geargames.aow.gui.loadingwindow.GUILoadingPvpStartPresenter::OnProgressNotification/p1`. The method metadata marks this method as an instance method, matching the non-null state-machine instance target at the constructor callsite.
+
+Both methods declare a single parameter named `message`. The parameter type index is not yet resolved to a full managed type name. The mapping identifies listener callback methods only; it does not identify message classes or prove that 5004/5005 are wire message IDs.
+
+The analyzer now reads only bounded 64-bit words from unique allocated non-executable ELF sections when needed, accepts only unresolved MethodDef usage tokens for metadata version 27+, and leaves MethodRef/generic-method usage unresolved. Raw tokens, addresses, instruction bytes, APK/native binaries, packet bytes, endpoints and assets remain private.
+
+The next proof gate is to resolve the `message` parameter type and trace the receiver's exact dictionary owner and dispatch callback. An authorized redacted client-side wire fixture is still required before assigning wire IDs or enabling the transport adapter.

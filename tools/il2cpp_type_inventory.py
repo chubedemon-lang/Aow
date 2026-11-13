@@ -66,6 +66,10 @@ TARGET_TYPES.update({
 })
 TARGET_TYPES.add(("", "NetworkSocketStream"))
 TARGET_TYPES.add(("", "OnMessageReceivedDelegateData"))
+TARGET_TYPES.add(("", "<StartConnectToServer>d__12"))
+TARGET_TYPES.add((
+    "com.geargames.aow.gui.loadingwindow", "GUILoadingPvpStartPresenter",
+))
 TARGET_TYPES.update({
     ("com.geargames.common.serialization", "IClientMessageSerializer"),
     ("com.geargames.common.serialization", "IClientMessageDeserializer"),

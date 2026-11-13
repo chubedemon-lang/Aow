@@ -314,6 +314,59 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
             )
             self.assertTrue(all(item["method_owner_matches"] for item in by_key.values()))
 
+    def test_maps_connection_start_state_machine_and_progress_callbacks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "synthetic.apk"
+            types = [
+                {
+                    "namespace": "",
+                    "name": "<StartConnectToServer>d__12",
+                    "fields": ["network", "<>4__this"],
+                    "methods": ["MoveNext"],
+                },
+                {
+                    "namespace": "com.geargames.aow.gui.loadingwindow",
+                    "name": "GUILoadingPvpStartPresenter",
+                    "methods": ["OnProgressAnswer", "OnProgressNotification"],
+                    "method_signatures": {
+                        "OnProgressAnswer": {
+                            "parameters": [{"name": "message", "type_index": 78}],
+                            "flags": 0x91,
+                        },
+                        "OnProgressNotification": {
+                            "parameters": [{"name": "message", "type_index": 78}],
+                            "flags": 0x81,
+                        },
+                    },
+                },
+            ]
+            write_apk(apk, make_metadata(types))
+            result = inspect_type_tables(apk)
+            by_key = {
+                (item["namespace"], item["name"]): item
+                for item in result["observed_type_definitions"]
+            }
+            state_machine = by_key[("", "<StartConnectToServer>d__12")]
+            self.assertEqual(
+                state_machine["field_names"], ["network", "<>4__this"]
+            )
+            self.assertEqual(state_machine["method_names"], ["MoveNext"])
+
+            presenter = by_key[
+                ("com.geargames.aow.gui.loadingwindow", "GUILoadingPvpStartPresenter")
+            ]
+            methods = {item["name"]: item for item in presenter["method_records"]}
+            self.assertEqual(
+                methods["OnProgressAnswer"]["parameters"],
+                [{"name": "message", "type_index": 78, "metadata_token": 0}],
+            )
+            self.assertEqual(
+                methods["OnProgressNotification"]["parameters"],
+                [{"name": "message", "type_index": 78, "metadata_token": 0}],
+            )
+            self.assertEqual(methods["OnProgressAnswer"]["flags"], 0x91)
+            self.assertEqual(methods["OnProgressNotification"]["flags"], 0x81)
+
     def test_limits_message_type_registry_fields_to_allowlist(self):
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / "synthetic.apk"

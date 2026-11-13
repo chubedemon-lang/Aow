@@ -1,12 +1,12 @@
 # AArch64 delegate method-pointer evidence
 
-**Status: analyzer capability only; no callback target or wire message is identified by this change.**
+**Status: two connection-start delegate targets now resolve to unique IL2CPP MethodDef metadata entries. They remain client-side callback associations, not wire message IDs.**
 
 ## Purpose
 
-The connection-start metadata inventory identifies two client-side dispatcher registration keys (5004 and 5005) and the OnMessageReceivedDelegate constructor parameters (object, method). The native constructor callsites have not yet been connected to unique callback method targets.
+The authorized original APK's connection-start state machine contains two direct `OnMessageReceivedDelegate::.ctor` callsites followed by `MessageDispatcher.SafeRegister` calls using client-side registration keys 5004 and 5005. Earlier analysis could follow only relocation-backed native pointers and left both delegate targets unresolved.
 
-tools/aarch64_delegate_target_evidence.py adds a deliberately narrow, redacted static pass for the next offline investigation. It examines the candidate second managed constructor argument in x2 and reports a method label only when the tracked value exactly matches one unique metadata-backed executable method entry.
+The analyzer now also recognizes a bounded static-data form used by IL2CPP v27+: a 64-bit load from a non-executable ELF section may contain a zero-extended encoded metadata-usage token. It decodes only an unresolved **MethodDef** token, then resolves its zero-based method index against the same APK's metadata table. It does not interpret MethodRef/generic-method tokens.
 
 ## Supported evidence chain
 
@@ -14,40 +14,50 @@ Within a bounded method window, the pass follows only:
 
 - ADR and ADRP address materialization;
 - 64-bit ADD-immediate based on a tracked address;
-- 64-bit unsigned-offset LDR X when the exact slot has an R_AARCH64_RELATIVE relocation;
+- 64-bit unsigned-offset LDR X from an exact R_AARCH64_RELATIVE relocation;
+- 64-bit unsigned-offset LDR X from a unique allocated, non-executable ELF section when the loaded word is a bounded 32-bit metadata-usage token;
 - unshifted 64-bit MOV X register copies;
 - direct BL calls to a uniquely labeled allowlisted delegate constructor.
 
-The pass uses the existing bounded intraprocedural CFG. Register state crosses a block boundary only through one reachable forward predecessor. Joins and backedges discard state. Direct/indirect calls clobber caller-saved registers; unrecognized instructions clear the modeled state. Unsupported forms remain unresolved rather than being guessed.
+For metadata version 27 and later, the analyzer accepts only usage kind 3 (MethodDef) with the unresolved-token bit set, then shifts the encoded index right by one. MethodRef (usage kind 6), other usage kinds, pre-v27 encodings, already-resolved values, missing labels, ambiguous labels, and non-token values remain unresolved or unknown. The version-dependent token behavior is cross-checked against the public [Il2CppInspector MetadataUsage implementation](https://github.com/djkaty/Il2CppInspector/blob/master/Il2CppInspector.Common/IL2CPP/MetadataUsage.cs) and the IL2CPP runtime's [encoded method-index resolution](https://github.com/Rigyuki/il2cpp/blob/main/vm/GlobalMetadata.cpp).
+
+The bounded intraprocedural CFG carries state only through one reachable forward predecessor. Joins and backedges discard state. Direct/indirect calls clobber caller-saved registers; unrecognized instructions clear modeled state. Unsupported forms remain unresolved rather than being guessed.
+
+## Fresh authorized APK result — 2026-11-13
+
+The exact authorized APK fingerprint in the private workspace matched the existing ledger. The analyzer was run read-only against its IL2CPP v31 metadata and ARM64 library. No binary, raw address, encoded token, instruction word, packet byte, endpoint or asset was written to the repository.
+
+The two constructor callsites now resolve as follows:
+
+| Client registration key | Delegate target method | Metadata method kind |
+|---|---|---|
+| 5004 | `com.geargames.aow.gui.loadingwindow.GUILoadingPvpStartPresenter::OnProgressAnswer/p1` | static |
+| 5005 | `com.geargames.aow.gui.loadingwindow.GUILoadingPvpStartPresenter::OnProgressNotification/p1` | instance |
+
+Both method definitions declare one parameter named `message`; their raw parameter type index is retained only in the private analysis. The first constructor call passes a null target, consistent with the static method metadata flag. The second passes a state-machine instance target, consistent with the instance method metadata flag.
+
+This resolves the **client-side listener callback association** for the two registration keys. It does not establish that 5004 or 5005 appears on the wire, identify the message class, or map either key to a packet. The second integer in `Receiver.Cycle` still has an unresolved dictionary owner and semantic role.
 
 ## Redacted output
 
-Each matching constructor callsite reports relative instruction/block indexes and one of these states for the configured candidate register:
+A matching constructor callsite may report:
 
-- unique_metadata_method with a method label;
-- ambiguous_metadata_method;
-- unresolved_metadata_method;
-- unknown when no supported pointer value reaches the callsite.
+- `unique_metadata_method` for a unique relocation-backed executable entry;
+- `unique_metadata_method_definition` for a unique decoded MethodDef usage token;
+- ambiguous or unresolved metadata-method states;
+- `unknown` when no supported value reaches the callsite.
 
-The output never includes candidate pointer values, native addresses, instruction words, APK bytes, packet bytes, or endpoint values.
+The output never includes candidate pointer values, static-data addresses, encoded usage tokens, native addresses, instruction words, APK bytes, packet bytes or endpoint values.
 
 ## Interpretation limits
 
-- x2 is a candidate register for the second declared constructor parameter on the observed AArch64 call shape; this pass is not an ABI proof.
-- A matching metadata method entry is a static pointer association, not proof that the callback executes at runtime.
-- A pointer to a thunk, shared generic wrapper, runtime-generated method, or non-relocation-backed target may remain unresolved.
+- x2 is a candidate register for the second declared constructor parameter on the observed AArch64 call shape; this remains a static call-shape observation, not a general ABI proof.
+- A metadata MethodDef association is not proof that the callback executes at runtime.
+- MethodRef/generic-method tokens, runtime-generated methods, thunks, and unsupported pointer materialization remain unresolved.
 - Bounded method windows can include cold paths or code after early returns. CFG reachability does not evaluate branch conditions.
-- Constructor allowlist suffixes must begin at a namespace/type boundary; a similarly named type is not accepted.
-- If any metadata association for a candidate is malformed, the analyzer does not filter it away to manufacture a unique match. The result stays unresolved or the constructor call is omitted.
-- This does not map registration keys 5004/5005 to wire message IDs, recover message payloads, establish handshake/login semantics, or prove APK/server compatibility.
+- The registration keys remain client-side dispatcher keys. No packet capture or runtime trace links them to transmitted bytes.
+- This does not recover framing, message payload fields, handshake/login semantics, or APK/server compatibility.
 
-## Validation and next step
+## Validation
 
-tests/test_aarch64_delegate_target_evidence.py uses fabricated instruction words and relocation maps only. It covers ADR, ADRP/LDR relocation, register copies, call clobbering, unknown instructions, ambiguous targets, branch joins, unreachable blocks, input validation, and output redaction.
-
-The new analyzer has not been run against the APK in this change. The next offline pass must use the exact authorized APK fingerprint and keep all raw bytes, relocation addresses, native addresses, and disassembly private. If either constructor target remains unresolved, preserve that status and inspect the relevant generic-method/thunk registration path rather than assigning a callback name.
-
-Duplicate method-label associations are not deduplicated before resolution. Even identical rendered labels remain ambiguous when multiple metadata entries point to the same address, because the current redacted label does not include a unique metadata token or image identity. This intentionally favors false negatives over a false unique callback assignment.
-- Metadata associations must be supplied as an ordered list or tuple. Set and frozenset inputs are rejected because they can erase duplicate associations before the analyzer can detect ambiguity.
-
-- Metadata method labels must retain the canonical `/pN` suffix emitted from the IL2CPP unsigned 16-bit parameter-count field. Missing, non-ASCII, non-decimal, non-canonical leading-zero, over-range, or repeated suffixes are unresolved; malformed labels must never be promoted to a unique constructor or callback target.
+Synthetic tests cover direct relocation-backed pointers, static-data MethodDef tokens, rejected MethodRef/other usage kinds, version and unresolved-token boundaries, ambiguous/malformed metadata, call clobbering, CFG joins, unreachable blocks, invalid inputs, and output redaction. They use fabricated instruction words, metadata labels, and static values only; no APK fixture is included.

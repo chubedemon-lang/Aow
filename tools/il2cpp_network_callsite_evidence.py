@@ -11,6 +11,7 @@ inferred from a callsite alone.
 import argparse
 import hashlib
 import json
+import struct
 import zipfile
 from pathlib import Path
 
@@ -24,6 +25,8 @@ from tools.il2cpp_codegen_inventory import (
     CodegenInventoryError,
     _metadata_images,
     _slice,
+    _table,
+    _contains,
 )
 from tools.aarch64_call_argument_evidence import (
     summarize_small_argument_constants,
@@ -79,6 +82,85 @@ CALLSITE_ARGUMENT_TARGET_PREFIXES = (
 )
 
 
+def _metadata_method_definitions(metadata):
+    """Map zero-based metadata method indexes to canonical labels only."""
+    string_off, string_size, _ = _table(metadata, 0x18, 1, "string heap")
+    method_off, _, method_total = _table(metadata, 0x30, 0x24, "method definitions")
+    type_off, _, type_total = _table(metadata, 0xA0, 0x58, "type definitions")
+    heap = _slice(metadata, string_off, string_size, "string heap")
+
+    def read_string(index):
+        if type(index) is not int or not 0 <= index < len(heap):
+            raise CodegenInventoryError("invalid metadata string index")
+        end = heap.find(b"\\0", index)
+        if end < 0:
+            raise CodegenInventoryError("unterminated metadata string")
+        try:
+            return heap[index:end].decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise CodegenInventoryError("invalid metadata UTF-8") from exc
+
+    labels = {}
+    for type_index in range(type_total):
+        type_pos = type_off + type_index * 0x58
+        name_index, namespace_index = struct.unpack_from("<II", metadata, type_pos)
+        type_name = read_string(name_index)
+        namespace = read_string(namespace_index)
+        method_start = struct.unpack_from("<i", metadata, type_pos + 0x24)[0]
+        method_count = struct.unpack_from("<H", metadata, type_pos + 0x40)[0]
+        if method_count == 0:
+            continue
+        if (
+            method_start < 0
+            or method_start > method_total
+            or method_count > method_total - method_start
+        ):
+            raise CodegenInventoryError("type method range is invalid")
+
+        for method_index in range(method_start, method_start + method_count):
+            method_pos = method_off + method_index * 0x24
+            method_name_index = struct.unpack_from("<I", metadata, method_pos)[0]
+            owner = struct.unpack_from("<i", metadata, method_pos + 4)[0]
+            if owner != type_index:
+                raise CodegenInventoryError("method owner mismatch")
+            parameter_count = struct.unpack_from("<H", metadata, method_pos + 34)[0]
+            method_name = read_string(method_name_index)
+            qualified_type = (
+                f"{namespace}.{type_name}" if namespace else type_name
+            )
+            labels.setdefault(method_index, []).append(
+                f"{qualified_type}::{method_name}/p{parameter_count}"
+            )
+    return labels
+
+
+def _static_data_reader(elf, sections):
+    """Read one bounded u64 only from a unique allocated non-executable section."""
+    static_sections = [
+        section for section in sections.values()
+        if section["type"] == 1
+        and (section["flags"] & 0x2)
+        and not (section["flags"] & 0x4)
+    ]
+
+    def read_u64(address):
+        if type(address) is not int or address < 0:
+            return None
+        matches = [
+            section for section in static_sections
+            if _contains(section, address, 8)
+        ]
+        if len(matches) != 1:
+            return None
+        section = matches[0]
+        file_offset = section["offset"] + address - section["address"]
+        if file_offset < 0 or file_offset + 8 > len(elf):
+            return None
+        return struct.unpack_from("<Q", elf, file_offset)[0]
+
+    return read_u64
+
+
 def inspect_bytes(metadata, elf, apk_sha256=None):
     """Inspect metadata and arm64 IL2CPP bytes without publishing addresses."""
     info = _metadata_images(metadata)
@@ -99,6 +181,8 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
     ]
 
     sections, relocations, tables = _module_tables(elf, info["images"])
+    metadata_method_definitions = _metadata_method_definitions(metadata)
+    static_data_reader = _static_data_reader(elf, sections)
     executable = [
         (name, section) for name, section in sections.items()
         if section["type"] == 1 and (section["flags"] & 0x4)
@@ -197,6 +281,9 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
                     relocations,
                     target_prefixes=("OnMessageReceivedDelegate::.ctor",),
                     argument_registers=(2,),
+                    static_data_reader=static_data_reader,
+                    metadata_method_definitions=metadata_method_definitions,
+                    metadata_version=info["version"],
                 )
             ),
         })

@@ -359,6 +359,95 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
         self.assertNotIn(str(self.constructor), rendered)
         self.assertNotIn("0x", rendered)
 
+    def test_resolves_v27_plus_method_definition_usage_from_static_data(self):
+        encoded_index = (5 << 1) | 1
+        token = (3 << 29) | encoded_index
+        code = words(
+            adrp(8, self.start, 0x9000),
+            ldr_x(2, 8),
+            bl(self.start + 8, self.constructor),
+        )
+        result = self.analyze(
+            code,
+            static_data_reader=lambda address: {0x9000: token}.get(address),
+            metadata_method_definitions={5: [self.callback_label]},
+            metadata_version=31,
+        )
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {
+                "resolution": "unique_metadata_method_definition",
+                "method": self.callback_label,
+            },
+        )
+        rendered = repr(result)
+        self.assertNotIn(hex(token), rendered)
+        self.assertNotIn(str(token), rendered)
+
+    def test_method_ref_wrong_usage_and_resolved_token_forms_are_not_promoted(self):
+        code = words(
+            adrp(8, self.start, 0x9000),
+            ldr_x(2, 8),
+            bl(self.start + 8, self.constructor),
+        )
+        tokens = (
+            ((6 << 29) | (5 << 1) | 1, 31),  # MethodRef requires method-spec resolution.
+            ((2 << 29) | (5 << 1) | 1, 31),  # Not a MethodDef usage.
+            ((3 << 29) | (5 << 1), 31),      # No unresolved-token bit.
+            ((3 << 29) | (5 << 1) | 1, 26),  # Pre-v27 encoding is unsupported.
+        )
+        for token, version in tokens:
+            with self.subTest(token=token, version=version):
+                result = self.analyze(
+                    code,
+                    static_data_reader=lambda address, value=token: (
+                        value if address == 0x9000 else None
+                    ),
+                    metadata_method_definitions={5: [self.callback_label]},
+                    metadata_version=version,
+                )
+                self.assertEqual(
+                    result[0]["candidate_method_pointer_arguments"]["x2"],
+                    {"resolution": "unresolved_metadata_usage"},
+                )
+
+    def test_ambiguous_metadata_method_definition_is_not_promoted(self):
+        token = (3 << 29) | (5 << 1) | 1
+        code = words(
+            adrp(8, self.start, 0x9000),
+            ldr_x(2, 8),
+            bl(self.start + 8, self.constructor),
+        )
+        result = self.analyze(
+            code,
+            static_data_reader=lambda address: {0x9000: token}.get(address),
+            metadata_method_definitions={
+                5: [self.callback_label, "com.geargames.common.network.Other::OnMessage/p1"]
+            },
+            metadata_version=31,
+        )
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "ambiguous_metadata_method_definition"},
+        )
+
+    def test_non_token_static_data_values_remain_unknown(self):
+        code = words(
+            adrp(8, self.start, 0x9000),
+            ldr_x(2, 8),
+            bl(self.start + 8, self.constructor),
+        )
+        result = self.analyze(
+            code,
+            static_data_reader=lambda address: {0x9000: 0x100000000}.get(address),
+            metadata_method_definitions={5: [self.callback_label]},
+            metadata_version=31,
+        )
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unknown"},
+        )
+
     def test_rejects_invalid_windows_mappings_and_registers(self):
         valid = words(0xD503201F)
         for code, start in ((b"abc", self.start), (b"\x00" * 4, self.start + 2)):
