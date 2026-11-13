@@ -199,7 +199,8 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             type_name="NetworkSettings",
             fields=(
                 ("HeaderLength", 123, 0x04000001),
-                ("UnrelatedField", 456, 0x04000002),
+                # Unallowlisted fields are not interpreted by this report.
+                ("UnrelatedField", -1, 0x04000002),
             ),
             default_fields=(0,),
         )
@@ -219,6 +220,15 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertIn("\"field_type_index\": 123", rendered)
         self.assertNotIn("default_value_bytes", rendered)
         self.assertNotIn("data_index", rendered)
+
+    def test_network_field_summary_rejects_negative_allowlisted_type_index(self):
+        metadata = make_metadata(
+            ["Cycle"],
+            type_name="NetworkSettings",
+            fields=(("HeaderLength", -1, 0x04000001),),
+        )
+        with self.assertRaisesRegex(ValueError, "network field type index is negative"):
+            inspect_bytes(metadata, make_elf(1))
 
     def test_message_helper_field_summary_names_both_dictionary_directions(self):
         metadata = make_metadata(
