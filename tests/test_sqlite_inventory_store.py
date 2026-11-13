@@ -251,6 +251,7 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(InventoryStoreError, "history has a gap"):
             self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
 
     def test_verify_integrity_rejects_tampered_intermediate_receipt(self):
         self.store.create("hero")
