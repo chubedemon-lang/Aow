@@ -4,7 +4,7 @@ import unittest
 from server.offline_protocol_evidence import (
     ALLOWED_KINDS, EvidenceError, validate_record, validate_manifest,
 )
-from server.protocol_evidence_registry import ALLOWED_TOPICS, VERIFIED_METHODS
+from server.protocol_evidence_registry import ALLOWED_TOPICS, VERIFIED_METHODS, VERIFIED_METHODS
 
 
 def sample(**changes):
