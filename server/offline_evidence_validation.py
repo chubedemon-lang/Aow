@@ -38,6 +38,17 @@ _LOCAL_FILE_SUFFIXES = frozenset({
     "h", "html", "ini", "java", "js", "json", "log", "md", "py", "ps1",
     "rst", "sh", "so", "sql", "toml", "ts", "txt", "xml", "yaml", "yml",
 })
+# Absolute paths can disclose usernames, private workspace layout, or the
+# location of captures even when no network host or credential is present.
+# Repository-relative references remain usable and are intentionally not
+# matched by these patterns.
+_ABSOLUTE_PATH = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"/(?:[^/\s]+/)*[^/\s]+"
+    r"|[A-Za-z]:[\\/][^\s]+"
+    r"|\\\\[^\\/\s]+[\\/][^\s]+"
+    r")"
+)
 _CREDENTIAL_ASSIGNMENT = re.compile(
     r"\b(?:authorization|bearer|token|password|passwd|secret|"
     r"api[_-]?key|access[_-]?key|refresh[_-]?token)\s*[:=]\s*\S+",
@@ -84,6 +95,7 @@ def _contains_network_locator(value):
 def _contains_sensitive_material(value):
     return (
         _contains_network_locator(value)
+        or _ABSOLUTE_PATH.search(value) is not None
         or _CREDENTIAL_ASSIGNMENT.search(value) is not None
         or _BEARER_VALUE.search(value) is not None
         or _PACKET_BYTES.search(value) is not None
@@ -95,7 +107,8 @@ def validate_record(record):
     """Validate one non-sensitive, locally sourced evidence record.
 
     Unknown, incomplete, or unverified claims cannot be marked as verified.
-    No bytes, endpoints, tokens, or proprietary material are accepted here.
+    No bytes, endpoints, tokens, absolute file paths, or proprietary material
+    are accepted here.
     """
     if not isinstance(record, dict) or set(record) != {
         "kind", "sha256", "source", "observation", "verified"
