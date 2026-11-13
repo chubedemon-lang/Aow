@@ -225,6 +225,38 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
             {"resolution": "ambiguous_metadata_method"},
         )
 
+    def test_unordered_callback_associations_are_not_promoted_to_unique(self):
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        for associations in (
+            {self.callback_label},
+            frozenset((self.callback_label,)),
+        ):
+            with self.subTest(associations=associations):
+                targets = dict(self.targets)
+                targets[self.callback] = associations
+                result = self.analyze(code, targets=targets)
+                self.assertEqual(
+                    result[0]["candidate_method_pointer_arguments"]["x2"],
+                    {"resolution": "unresolved_metadata_method"},
+                )
+
+    def test_unordered_constructor_associations_are_not_accepted(self):
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        for associations in (
+            {self.constructor_label},
+            frozenset((self.constructor_label,)),
+        ):
+            with self.subTest(associations=associations):
+                targets = dict(self.targets)
+                targets[self.constructor] = associations
+                self.assertEqual(self.analyze(code, targets=targets), [])
+
     def test_constructor_allowlist_requires_a_type_name_boundary(self):
         targets = dict(self.targets)
         targets[self.constructor] = [
