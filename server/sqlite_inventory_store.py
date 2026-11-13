@@ -258,17 +258,22 @@ class SqliteInventoryStore:
         )
 
     def verify_integrity(self) -> dict:
-        """Audit inventory snapshots and replay every durable mutation receipt.
+        """Audit inventory state under one consistent, read-only snapshot.
 
-        The initial create() state has no creation receipt. For a character
-        with mutations, the first receipt is therefore used to derive a
-        candidate revision-zero baseline; every later receipt is replayed
-        against it. This is a consistency audit, not cryptographic tamper
-        evidence. It requires an idle connection and never writes.
+        The connection must be idle. This method owns a deferred read
+        transaction and always rolls it back, including on validation failure.
         """
         if self.db.in_transaction:
             raise ValueError("connection must not have an active transaction")
+        self.db.execute("BEGIN")
+        try:
+            return self._verify_integrity_snapshot()
+        finally:
+            if self.db.in_transaction:
+                self.db.rollback()
 
+    def _verify_integrity_snapshot(self) -> dict:
+        """Run the audit while verify_integrity owns the read snapshot."""
         if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
             raise InventoryStoreError("SQLite quick_check failed")
         if self.db.execute("PRAGMA foreign_key_check").fetchall():

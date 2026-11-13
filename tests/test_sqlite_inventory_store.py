@@ -238,6 +238,7 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(InventoryStoreError, "history has a gap"):
             self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
 
     def test_verify_integrity_rejects_tampered_intermediate_receipt(self):
         self.store.create("hero")
@@ -305,11 +306,75 @@ class SqliteInventoryStoreTests(unittest.TestCase):
             {"snapshots": 1, "items": 2, "mutations": 2},
         )
 
+    def test_verify_integrity_uses_one_snapshot_during_concurrent_mutation(self):
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.store.create("hero", capacity=3, max_stack=10)
+        self.store.apply("hero", "before-audit", 0, [("potion", 1)])
+
+        writer = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        self.addCleanup(writer.close)
+        writer_store = SqliteInventoryStore(writer)
+
+        reader = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, check_same_thread=False
+        )
+        self.addCleanup(reader.close)
+        reader_store = SqliteInventoryStore(reader)
+
+        entered = threading.Event()
+        release = threading.Event()
+        trace_state = {"paused": False}
+
+        def pause_before_snapshot_query(statement):
+            if (not trace_state["paused"]
+                    and "SELECT character_id, capacity, max_stack, revision" in statement):
+                trace_state["paused"] = True
+                entered.set()
+                release.wait(5)
+
+        # SQLite invokes this trace callback after inventory_items was read and
+        # immediately before inventory_snapshots is queried.
+        reader.set_trace_callback(pause_before_snapshot_query)
+        outcome = {}
+
+        def audit():
+            try:
+                outcome["result"] = reader_store.verify_integrity()
+            except BaseException as exc:
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=audit)
+        thread.start()
+        reached_query = entered.wait(5)
+        try:
+            if reached_query:
+                writer_store.apply(
+                    "hero", "during-audit", 1, [("potion", 1)]
+                )
+        finally:
+            release.set()
+            thread.join(5)
+            reader.set_trace_callback(None)
+
+        self.assertTrue(
+            reached_query,
+            f"audit did not reach the paused snapshot query; outcome={outcome!r}",
+        )
+        self.assertFalse(thread.is_alive())
+        self.assertNotIn("error", outcome)
+        self.assertEqual(
+            outcome["result"],
+            {"snapshots": 1, "items": 1, "mutations": 1},
+        )
+        self.assertFalse(reader.in_transaction)
+        self.assertEqual(self.store.get("hero").revision, 2)
+
     def test_verify_integrity_is_read_only_and_requires_idle_connection(self):
         self.store.create("hero")
         with open(self.path, "rb") as source:
             before = source.read()
         self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
         with open(self.path, "rb") as source:
             after = source.read()
         self.assertEqual(after, before)

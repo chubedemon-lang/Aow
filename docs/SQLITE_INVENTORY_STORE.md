@@ -25,7 +25,7 @@ The values used here are synthetic. Do not substitute them for original AOW item
 
 ## Read-only integrity audit
 
-`SqliteInventoryStore.verify_integrity()` requires an idle SQLite connection and performs no writes. It checks SQLite and foreign-key integrity, stored capacity/stack bounds, item rows, canonical mutation payloads, contiguous revisions, and replays each durable receipt against the next inventory snapshot. It also recognizes the inventory mutation receipts written by the synthetic shop and quest-award stores.
+`SqliteInventoryStore.verify_integrity()` requires an idle SQLite connection, opens one deferred read transaction, and always rolls it back on success or failure. All SQLite checks, item rows, snapshots and mutation receipts are read from the same consistent snapshot, so a concurrent WAL writer cannot make the audit combine different revisions. It performs no writes. It checks SQLite and foreign-key integrity, stored capacity/stack bounds, item rows, canonical mutation payloads, contiguous revisions, and replays each durable receipt against the next inventory snapshot. It also recognizes the inventory mutation receipts written by the synthetic shop and quest-award stores.
 
 The audit can derive a candidate revision-zero baseline from the first mutation receipt, but the schema has no separate inventory-creation receipt. It is therefore a consistency check, not cryptographic tamper evidence. A successful audit says nothing about AOW item IDs, inventory layout, wire fields, or APK compatibility.
 
