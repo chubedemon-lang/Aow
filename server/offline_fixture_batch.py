@@ -8,7 +8,7 @@ import re
 
 from server.offline_packet_fixture import FixtureValidationError, validate_packet_fixture
 
-_SHA256 = re.compile(r"[0-9a-f]{64}\\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def validate_fixture_batch(
