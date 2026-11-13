@@ -8,10 +8,15 @@ Run `python -m unittest discover -s tests -p 'test_offline_frame_probe.py'` from
 
 Before claiming APK compatibility: trace the IL2CPP transport and serialization call path from the authorized APK, confirm framing and login on an isolated local test server, and record end-to-end evidence for the same APK SHA-256.
 
-
 ## Resource bounds
 
-`FrameSpec.max_chunk_bytes` caps each individual `feed()` call (default 4 MiB, hard maximum 16 MiB). A frame may be fragmented across multiple calls, so `max_payload` can exceed the per-call limit. When omitted, `max_payload` defaults to the smaller of 1 MiB and the selected length field's representable payload maximum (subtracting the header width when the length includes the header). An explicit cap above that maximum is rejected during construction. An oversized feed poisons the decoder and clears pending bytes before copying the chunk into its internal buffer. These are synthetic parser safety limits, not AOW protocol limits.
+`FrameSpec.max_chunk_bytes` caps each individual `feed()` call (default 4 MiB, hard maximum 16 MiB). A frame may be fragmented across multiple calls, so `max_payload` can exceed the per-call limit. When omitted, `max_payload` defaults to the smaller of 1 MiB and the selected length field's representable payload maximum (subtracting the header width when the length includes the header). An explicit cap above that maximum is rejected during construction.
+
+`FrameSpec.max_frames_per_feed` also caps the number of complete frames materialized by one `feed()` call (default 4,096, hard maximum 65,536). This prevents a small-header stream containing many zero-length frames from amplifying one bounded input chunk into an unbounded list of Python objects. If the cap is exceeded, the decoder discards its pending bytes, enters a failed terminal state, and raises `FrameDecodeError`; it never returns a partial frame list. The cap is per call, not a protocol limit or a connection-wide quota.
+
+These are synthetic parser safety limits, not AOW protocol limits.
+
+An oversized feed is rejected and poisons the decoder before the chunk is copied into its internal buffer. Fragmented frames may span multiple feed calls.
 
 ## End-of-stream semantics
 
