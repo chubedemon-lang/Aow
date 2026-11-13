@@ -21,8 +21,10 @@ The validators also require:
 
 - an explicit boolean verified: true;
 - a lowercase SHA-256 digest for each payload;
-- strict even-length hexadecimal payload text;
-- a payload digest matching the decoded bytes;
+- strict even-length hexadecimal payload text (the empty string is valid for
+  a zero-byte payload);
+- a payload digest matching the decoded bytes, including the standard SHA-256
+  digest of an empty byte string;
 - caller-selected per-fixture and aggregate size limits.
 
 The single-fixture function returns immutable bytes only after its checks.
@@ -34,8 +36,9 @@ it never returns or logs the payloads.
 A matching source digest binds a fixture record to the caller-selected artifact
 identity; it does not prove that the artifact was authorized, that the bytes
 were observed from the client, or that the bytes have a particular protocol
-meaning. The caller must establish authorization and provenance independently.
-A payload hash proves integrity of the supplied hex, not packet semantics.
+meaning. A payload hash proves integrity of the supplied hex, not packet
+semantics. Accepting a zero-byte payload is a generic byte-fixture property;
+it does not claim that any AOW message has an empty body.
 
 Keep actual fixture records and bytes in a private local workspace. Do not add
 APK files, native libraries, packet captures, endpoints, credentials or player

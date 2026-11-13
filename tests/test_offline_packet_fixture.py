@@ -29,6 +29,21 @@ class OfflinePacketFixtureTests(unittest.TestCase):
     def test_valid_fixture_returns_bytes_when_source_digest_matches(self):
         self.assertEqual(validate(fixture()), b"\x01\x02")
 
+    def test_accepts_empty_payload_with_the_empty_sha256(self):
+        record = fixture(b"")
+        self.assertEqual(record["payload_hex"], "")
+        self.assertEqual(
+            record["payload_sha256"],
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        )
+        self.assertEqual(validate(record, max_bytes=1), b"")
+
+    def test_rejects_empty_payload_with_a_nonempty_payload_digest(self):
+        record = fixture(b"")
+        record["payload_sha256"] = hashlib.sha256(b"x").hexdigest()
+        with self.assertRaisesRegex(FixtureValidationError, "digest mismatch"):
+            validate(record)
+
     def test_expected_source_digest_is_required(self):
         with self.assertRaises(TypeError):
             validate_packet_fixture(fixture())
@@ -61,7 +76,7 @@ class OfflinePacketFixtureTests(unittest.TestCase):
             validate(record)
 
     def test_rejects_invalid_hex(self):
-        for value in ("", "0", "zz", "00 11", "00\n"):
+        for value in ("0", "zz", "00 11", "00\n"):
             with self.subTest(value=value), self.assertRaises(FixtureValidationError):
                 validate({**fixture(), "payload_hex": value})
 
