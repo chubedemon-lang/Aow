@@ -44,3 +44,5 @@ The output never includes candidate pointer values, native addresses, instructio
 tests/test_aarch64_delegate_target_evidence.py uses fabricated instruction words and relocation maps only. It covers ADR, ADRP/LDR relocation, register copies, call clobbering, unknown instructions, ambiguous targets, branch joins, unreachable blocks, input validation, and output redaction.
 
 The new analyzer has not been run against the APK in this change. The next offline pass must use the exact authorized APK fingerprint and keep all raw bytes, relocation addresses, native addresses, and disassembly private. If either constructor target remains unresolved, preserve that status and inspect the relevant generic-method/thunk registration path rather than assigning a callback name.
+
+Duplicate method-label associations are not deduplicated before resolution. Even identical rendered labels remain ambiguous when multiple metadata entries point to the same address, because the current redacted label does not include a unique metadata token or image identity. This intentionally favors false negatives over a false unique callback assignment.
