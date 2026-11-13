@@ -179,6 +179,8 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
         )
         if field_index < 0 or field_index >= field_count:
             raise MetadataInventoryError("field default references unknown field")
+        if default_type_index < 0:
+            raise MetadataInventoryError("field default type index is negative")
         if data_index < 0 or data_index >= default_data_size:
             raise MetadataInventoryError("field default data index out of bounds")
         if field_index in field_defaults:
@@ -211,6 +213,8 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
             field_pos = fields_offset + field_index * FIELD_DEFINITION_STRIDE
             field_name_index = struct.unpack_from("<I", metadata, field_pos)[0]
             field_type_index = struct.unpack_from("<i", metadata, field_pos + 4)[0]
+            if field_type_index < 0:
+                raise MetadataInventoryError("target field type index is negative")
             field_token = struct.unpack_from("<I", metadata, field_pos + 8)[0]
             default_value = field_defaults.get(field_index)
             field_records.append({
@@ -235,6 +239,8 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
             if declaring_type != type_index:
                 raise MetadataInventoryError("target method declaring-type mismatch")
             return_type_index = struct.unpack_from("<i", metadata, method_pos + 8)[0]
+            if return_type_index < 0:
+                raise MetadataInventoryError("target method return type index is negative")
             return_parameter_token = struct.unpack_from("<I", metadata, method_pos + 12)[0]
             parameter_start = struct.unpack_from("<i", metadata, method_pos + 16)[0]
             generic_container_index = struct.unpack_from("<i", metadata, method_pos + 20)[0]
@@ -264,6 +270,10 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
                     parameter_type_index = struct.unpack_from(
                         "<i", metadata, parameter_pos + 8
                     )[0]
+                    if parameter_type_index < 0:
+                        raise MetadataInventoryError(
+                            "target method parameter type index is negative"
+                        )
                     parameters.append({
                         "name": _read_heap_string(heap, parameter_name_index),
                         "type_index": parameter_type_index,
