@@ -77,14 +77,11 @@ def _decode_ldr_x_unsigned(word):
     return destination, base, offset
 
 
-def _unique_method_names(labels):
+def _method_labels(labels):
+    """Preserve duplicate metadata associations so they remain ambiguous."""
     if not isinstance(labels, (tuple, list, set, frozenset)):
         return []
-    return sorted({
-        label.split("/p", 1)[0]
-        for label in labels
-        if isinstance(label, str) and label
-    })
+    return sorted(label for label in labels if isinstance(label, str) and label)
 
 
 def summarize_delegate_method_pointer_arguments(
@@ -242,9 +239,10 @@ def summarize_delegate_method_pointer_arguments(
 
             target = _decode_bl_target(word, pc)
             if target is not None:
-                labels = _unique_method_names(method_targets.get(target, ()))
+                labels = _method_labels(method_targets.get(target, ()))
+                target_name = labels[0].split("/p", 1)[0] if len(labels) == 1 else ""
                 if len(labels) == 1 and any(
-                    labels[0].endswith(prefix) for prefix in target_prefixes
+                    target_name.endswith(prefix) for prefix in target_prefixes
                 ):
                     pointer_arguments = {}
                     for register in argument_registers:
@@ -252,7 +250,7 @@ def summarize_delegate_method_pointer_arguments(
                         if register not in registers:
                             pointer_arguments[name] = {"resolution": "unknown"}
                             continue
-                        candidate_labels = _unique_method_names(
+                        candidate_labels = _method_labels(
                             method_targets.get(registers[register], ())
                         )
                         if len(candidate_labels) == 1:
