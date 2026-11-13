@@ -263,6 +263,62 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(InventoryStoreError, "mutation payload"):
             self.store.verify_integrity()
 
+    def test_verify_integrity_rejects_oversized_receipt_json(self):
+        self.store.create("hero")
+        self.store.apply("hero", "audit-large-receipt", 0, [("potion", 1)])
+        oversized = " " * (512 * 1024 + 1)
+        self.db.execute(
+            "UPDATE inventory_mutations SET result_json=? WHERE request_id=?",
+            (oversized, "audit-large-receipt"),
+        )
+        with self.assertRaisesRegex(
+            InventoryStoreError, "invalid inventory receipt snapshot JSON"
+        ):
+            self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_rejects_oversized_mutation_payload_json(self):
+        self.store.create("hero")
+        self.store.apply("hero", "audit-large-payload", 0, [("potion", 1)])
+        oversized = " " * (512 * 1024 + 1)
+        self.db.execute(
+            "UPDATE inventory_mutations SET payload_json=? WHERE request_id=?",
+            (oversized, "audit-large-payload"),
+        )
+        with self.assertRaisesRegex(
+            InventoryStoreError, "invalid inventory mutation payload"
+        ):
+            self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_normalizes_deeply_nested_receipt_json_failure(self):
+        self.store.create("hero")
+        self.store.apply("hero", "audit-deep-receipt", 0, [("potion", 1)])
+        deeply_nested = "[" * 2000 + "]" * 2000
+        self.db.execute(
+            "UPDATE inventory_mutations SET result_json=? WHERE request_id=?",
+            (deeply_nested, "audit-deep-receipt"),
+        )
+        with self.assertRaisesRegex(
+            InventoryStoreError, "invalid inventory receipt snapshot JSON"
+        ):
+            self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_normalizes_deeply_nested_payload_json_failure(self):
+        self.store.create("hero")
+        self.store.apply("hero", "audit-deep-payload", 0, [("potion", 1)])
+        deeply_nested = "[" * 2000 + "]" * 2000
+        self.db.execute(
+            "UPDATE inventory_mutations SET payload_json=? WHERE request_id=?",
+            (deeply_nested, "audit-deep-payload"),
+        )
+        with self.assertRaisesRegex(
+            InventoryStoreError, "invalid inventory mutation payload"
+        ):
+            self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
     def test_verify_integrity_rejects_capacity_overflow_in_stored_items(self):
         self.store.create("hero", capacity=1, max_stack=10)
         self.db.executemany(
