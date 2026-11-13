@@ -206,14 +206,23 @@ class SqliteMapPositionStore:
             raise MapPositionStoreError("invalid receipt position") from exc
 
     def verify_integrity(self) -> dict:
-        """Audit SQLite integrity and replay every durable map transition.
+        """Audit all map rows in one consistent, read-only SQLite snapshot.
 
+        The connection must be idle. The method owns a deferred read
+        transaction and always rolls it back, including when validation fails.
         This is a local persistence check, not evidence of AOW map semantics.
-        It requires an idle connection and never repairs or mutates data.
         """
         if self.db.in_transaction:
             raise ValueError("connection must not have an active transaction")
+        self.db.execute("BEGIN")
+        try:
+            return self._verify_integrity_snapshot()
+        finally:
+            if self.db.in_transaction:
+                self.db.rollback()
 
+    def _verify_integrity_snapshot(self) -> dict:
+        """Run the audit while verify_integrity owns the read snapshot."""
         quick_check = self.db.execute("PRAGMA quick_check").fetchall()
         if quick_check != [("ok",)]:
             raise MapPositionStoreError("SQLite quick_check failed")
