@@ -15,6 +15,21 @@
 - Concurrent revocation against separate SQLite connections has one winner.
 - Rejects an already-active caller transaction instead of committing work owned by the caller.
 
+## Persisted-row validation
+
+Every token resolution validates the stored account ID and both timestamps
+before authorizing a session. Account IDs must remain positive SQLite integers;
+creation and expiry values must be finite, non-negative numeric values; expiry
+must be later than creation and no later than the store's maximum supported TTL.
+The resolver does not coerce fractional account IDs or malformed timestamp
+values into apparently valid sessions.
+
+A corrupt row fails closed as an invalid session and is left untouched for
+operator diagnosis. `resolve_in_transaction()` preserves the caller's
+transaction ownership when it rejects a corrupt row. This protects the synthetic
+session store from corrupted or manually altered SQLite values; it is not an
+APK authentication rule.
+
 ## Authorized state transactions
 
 Use `authorized_transaction(token)` when a protected read/write must be atomic
