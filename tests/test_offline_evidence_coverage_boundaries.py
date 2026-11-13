@@ -31,7 +31,7 @@ class EvidenceCoverageBoundaryTests(unittest.TestCase):
 
     def test_verified_and_rejected_are_counted_separately(self):
         result = evidence_coverage([
-            sample(id="one", status="verified"),
+            sample(id="one", status="verified", method="authorized_local_test"),
             sample(id="two", kind="login", status="rejected"),
         ])
         self.assertEqual(result["verified_domains"], ["framing"])

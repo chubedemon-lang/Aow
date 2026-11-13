@@ -15,10 +15,12 @@ ALLOWED_TOPICS = frozenset({
     "session", "player", "map", "movement", "inventory", "shop",
     "combat", "quest",
 })
-_VERIFIED_METHODS = frozenset({
+VERIFIED_METHODS = frozenset({
     "apk_zip_inventory", "jadx_offline", "il2cpp_offline",
     "authorized_local_test",
 })
+# Retain the private alias for internal/backward compatibility.
+_VERIFIED_METHODS = VERIFIED_METHODS
 _LOCAL_REFERENCE = re.compile(
     r"^(?:issue:[1-9][0-9]*|(?:docs|tests|server|tools)/[A-Za-z0-9_./#-]{1,150})$"
 )
@@ -126,7 +128,7 @@ def _validate_reproduction(value):
         raise EvidenceError("reproduction must be a sanitized local command")
     return value
 
- 
+
 def validate_public_evidence_text(value, field="observation", maximum=2000):
     """Validate public evidence prose without exposing endpoints or secrets."""
     if type(maximum) is not int or not 1 <= maximum <= 2000:
@@ -169,7 +171,7 @@ class Evidence:
             _validate_test_reference(self.test_reference)
             _validate_reproduction(self.reproduction)
         if self.verified:
-            if self.method not in _VERIFIED_METHODS:
+            if self.method not in VERIFIED_METHODS:
                 raise EvidenceError("verified evidence requires an offline or authorized method")
             if self.test_reference is None:
                 raise EvidenceError(

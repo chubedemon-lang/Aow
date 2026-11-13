@@ -1,12 +1,13 @@
 """Offline protocol evidence metadata validation (no APK or packet bytes stored).
 
 This module does not discover, decode, or assert any AOW wire protocol.
-Evidence is only 'verified' when an authorized local reproducible test is
-recorded. Never commit private capture contents, endpoints or credentials.
+Evidence is only 'verified' when its method is explicitly allowlisted for
+authorized offline work and a sanitized local reproduction is recorded.
+Never commit private capture contents, endpoints or credentials.
 """
 import re
 
-from server.protocol_evidence_registry import ALLOWED_TOPICS
+from server.protocol_evidence_registry import ALLOWED_TOPICS, VERIFIED_METHODS
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 ALLOWED_KINDS = ALLOWED_TOPICS
@@ -119,6 +120,10 @@ def validate_record(record):
         raise EvidenceError("invalid artifact SHA256")
     result["artifact_sha256"] = digest
     if result["status"] == "verified":
+        if result["method"] not in VERIFIED_METHODS:
+            raise EvidenceError(
+                "verified evidence requires an approved offline or authorized method"
+            )
         if result["test_reference"].lower() in {"none", "n/a", "unknown", "pending"}:
             raise EvidenceError("verified evidence requires reproducible test reference")
         if result["reproduction"].lower() in {"none", "n/a", "unknown", "pending"}:
