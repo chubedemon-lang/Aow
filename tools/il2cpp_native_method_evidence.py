@@ -76,6 +76,11 @@ SERIALIZER_HELPER_METHODS = {
 # Keep this list narrow: these entry windows are the network-path evidence
 # used to summarize direct helper/method calls without emitting native addresses.
 NETWORK_CALLSITE_METHODS = {
+    # Include initialization roots so future offline runs can inspect the
+    # bounded callsite windows that may populate NetworkSettings fields.
+    # This does not resolve static-field loads/stores or runtime field values.
+    ("com.geargames.common.network", "NetworkSettings", ".cctor"),
+    ("com.geargames.common.network", "NetworkSettings", ".ctor"),
     ("com.geargames.common.network", "Receiver", "Cycle"),
     ("com.geargames.common.network", "Sender", "Cycle"),
     ("com.geargames.common.network", "MessageDispatcher", "Dispatch"),

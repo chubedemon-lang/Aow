@@ -982,6 +982,32 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         )
 
 
+    def test_network_settings_initializers_are_callsite_roots(self):
+        report = inspect_bytes(
+            make_metadata(
+                [".cctor", ".ctor"],
+                type_name="NetworkSettings",
+            ),
+            make_elf(2),
+        )
+        summaries = {
+            (item["type"], item["method"]): item
+            for item in report["network_callsite_summary"]
+        }
+        self.assertEqual(
+            set(summaries),
+            {("NetworkSettings", ".cctor"), ("NetworkSettings", ".ctor")},
+        )
+        self.assertTrue(all(
+            item["entry_window_kind"] == "next_distinct_executable_entry_in_section"
+            for item in summaries.values()
+        ))
+        rendered = json.dumps(report)
+        self.assertNotIn("0x5000", rendered)
+        self.assertNotIn("0x5004", rendered)
+        self.assertFalse(report["native_addresses_emitted"])
+        self.assertFalse(report["raw_instructions_emitted"])
+
     def test_network_callsite_summary_resolves_only_metadata_backed_direct_calls(self):
         start = 0x5000
         report = inspect_bytes(
