@@ -29,7 +29,11 @@ The validators also require:
 
 The single-fixture function returns immutable bytes only after its checks.
 The batch function returns only count, aggregate byte size and payload digests;
-it never returns or logs the payloads.
+it never returns or logs the payloads. A zero-byte fixture remains admissible
+when earlier records have consumed the full aggregate byte budget; the batch
+validator still checks its source binding, explicit verification flag and
+payload digest. Any non-empty fixture is rejected once no aggregate budget
+remains.
 
 ## Limits
 

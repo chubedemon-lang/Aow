@@ -46,6 +46,28 @@ class BatchTests(unittest.TestCase):
     def test_same_payload_different_source(self):
         self.assertEqual(validate([fixture(b"x", "a"), fixture(b"x", "b")])["count"], 2)
 
+    def test_zero_byte_fixture_allowed_after_exact_budget_is_consumed(self):
+        result = validate(
+            [fixture(b"x", "a"), fixture(b"", "b")],
+            max_total_bytes=1,
+        )
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["total_bytes"], 1)
+        self.assertEqual(result["payload_sha256"][1], hashlib.sha256(b"").hexdigest())
+
+    def test_zero_byte_fixture_digest_is_still_checked_at_exact_budget(self):
+        empty = fixture(b"", "b")
+        empty["payload_sha256"] = "0" * 64
+        with self.assertRaisesRegex(FixtureValidationError, "digest mismatch"):
+            validate([fixture(b"x", "a"), empty], max_total_bytes=1)
+
+    def test_nonempty_fixture_rejected_after_exact_budget_is_consumed(self):
+        with self.assertRaisesRegex(FixtureValidationError, "batch byte limit exceeded"):
+            validate(
+                [fixture(b"x", "a"), fixture(b"y", "b")],
+                max_total_bytes=1,
+            )
+
     def test_rejects_source_not_in_independent_expected_set(self):
         with self.assertRaisesRegex(FixtureValidationError, "expected source set"):
             validate_fixture_batch(
