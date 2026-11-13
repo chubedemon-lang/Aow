@@ -123,6 +123,60 @@ class SqliteSessionStoreTests(unittest.TestCase):
         finally:
             self.db.rollback()
 
+    def test_resolve_rejects_fractional_stored_account_id(self):
+        token = self.store.issue(42)
+        digest = hashlib.sha256(token.encode("ascii")).digest()
+        self.db.execute(
+            "UPDATE durable_sessions SET account_id=? WHERE token_hash=?",
+            (42.5, digest),
+        )
+
+        with self.assertRaisesRegex(SessionError, "invalid session"):
+            self.store.resolve(token)
+
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT account_id FROM durable_sessions WHERE token_hash=?",
+                (digest,),
+            ).fetchone()[0],
+            42.5,
+        )
+
+    def test_resolve_rejects_expiry_beyond_maximum_ttl(self):
+        token = self.store.issue(43)
+        digest = hashlib.sha256(token.encode("ascii")).digest()
+        self.db.execute(
+            "UPDATE durable_sessions SET expires_at=? WHERE token_hash=?",
+            (1e300, digest),
+        )
+
+        with self.assertRaisesRegex(SessionError, "invalid session"):
+            self.store.resolve(token)
+
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT expires_at FROM durable_sessions WHERE token_hash=?",
+                (digest,),
+            ).fetchone()[0],
+            1e300,
+        )
+
+    def test_in_transaction_resolve_rejects_corrupt_row_without_taking_over_transaction(self):
+        token = self.store.issue(44)
+        digest = hashlib.sha256(token.encode("ascii")).digest()
+        self.db.execute(
+            "UPDATE durable_sessions SET account_id=? WHERE token_hash=?",
+            (44.5, digest),
+        )
+        self.db.execute("BEGIN IMMEDIATE")
+        with self.assertRaisesRegex(SessionError, "invalid session"):
+            self.store.resolve_in_transaction(token)
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertFalse(self.db.in_transaction)
+
     def test_revoke_is_idempotent(self):
         token = self.store.issue(9)
         self.assertTrue(self.store.revoke(token))
