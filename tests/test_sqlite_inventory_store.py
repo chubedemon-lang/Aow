@@ -16,6 +16,19 @@ from server.sqlite_inventory_store import (
 )
 
 
+class PausingInventoryAuditConnection(sqlite3.Connection):
+    """Test connection that pauses before one selected audit query."""
+
+    def execute(self, sql, parameters=()):
+        pause_sql = getattr(self, "pause_sql", None)
+        if pause_sql is not None and pause_sql in sql:
+            self.pause_sql = None
+            self.pause_entered.set()
+            if not self.pause_release.wait(5):
+                raise TimeoutError("test did not release inventory audit query")
+        return super().execute(sql, parameters)
+
+
 class SqliteInventoryStoreTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -305,11 +318,62 @@ class SqliteInventoryStoreTests(unittest.TestCase):
             {"snapshots": 1, "items": 2, "mutations": 2},
         )
 
+    def test_verify_integrity_uses_one_snapshot_during_concurrent_mutation(self):
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.store.create("hero", capacity=3, max_stack=10)
+        self.store.apply("hero", "before-audit", 0, [("potion", 1)])
+
+        writer = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        self.addCleanup(writer.close)
+        writer_store = SqliteInventoryStore(writer)
+
+        reader = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None,
+            factory=PausingInventoryAuditConnection,
+        )
+        self.addCleanup(reader.close)
+        reader_store = SqliteInventoryStore(reader)
+
+        entered = threading.Event()
+        release = threading.Event()
+        reader.pause_sql = "SELECT character_id, capacity, max_stack, revision"
+        reader.pause_entered = entered
+        reader.pause_release = release
+        outcome = {}
+
+        def audit():
+            try:
+                outcome["result"] = reader_store.verify_integrity()
+            except BaseException as exc:
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=audit)
+        thread.start()
+        reached_query = entered.wait(5)
+        try:
+            self.assertTrue(reached_query, "audit did not reach the paused snapshot query")
+            writer_store.apply(
+                "hero", "during-audit", 1, [("potion", 1)]
+            )
+        finally:
+            release.set()
+
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertNotIn("error", outcome)
+        self.assertEqual(
+            outcome["result"],
+            {"snapshots": 1, "items": 1, "mutations": 1},
+        )
+        self.assertFalse(reader.in_transaction)
+        self.assertEqual(self.store.get("hero").revision, 2)
+
     def test_verify_integrity_is_read_only_and_requires_idle_connection(self):
         self.store.create("hero")
         with open(self.path, "rb") as source:
             before = source.read()
         self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
         with open(self.path, "rb") as source:
             after = source.read()
         self.assertEqual(after, before)
