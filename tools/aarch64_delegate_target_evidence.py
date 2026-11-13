@@ -77,6 +77,25 @@ def _decode_ldr_x_unsigned(word):
     return destination, base, offset
 
 
+def _method_name_from_label(label):
+    """Return a method name only for the canonical metadata /pN suffix."""
+    if not isinstance(label, str):
+        return None
+    method_name, separator, arity = label.rpartition("/p")
+    if not separator or not method_name or "/p" in method_name:
+        return None
+    if not arity.isascii() or not arity.isdigit():
+        return None
+    # IL2CPP method parameter_count is an unsigned 16-bit metadata field.
+    # Reject non-canonical leading zeroes and out-of-range values without
+    # converting an attacker-controlled, arbitrarily long decimal string.
+    if len(arity) > 5 or (len(arity) > 1 and arity.startswith("0")):
+        return None
+    if len(arity) == 5 and arity > "65535":
+        return None
+    return method_name
+
+
 def _method_labels(labels):
     """Return labels only when every metadata association is representable."""
     # Only ordered containers preserve the number of metadata associations.
@@ -84,16 +103,19 @@ def _method_labels(labels):
     # a false unique target, so unordered collections are deliberately rejected.
     if not isinstance(labels, (tuple, list)):
         return []
-    # Filtering malformed entries could turn [valid, invalid] into a false
-    # unique match. Fail closed instead of silently dropping an association.
-    if any(not isinstance(label, str) or not label for label in labels):
+    # Filtering malformed associations could turn [valid, invalid] into a
+    # false unique match. Also require the exact label format emitted from
+    # IL2CPP method metadata before using a label as identity evidence.
+    if any(_method_name_from_label(label) is None for label in labels):
         return []
     return sorted(labels)
 
 
 def _matches_target_prefix(method_label, prefixes):
-    """Match an allowlisted method suffix only at a type-name boundary."""
-    method_name = method_label.split("/p", 1)[0]
+    """Match a canonical method label at an exact namespace/type boundary."""
+    method_name = _method_name_from_label(method_label)
+    if method_name is None:
+        return False
     return any(
         method_name == prefix or method_name.endswith("." + prefix)
         for prefix in prefixes

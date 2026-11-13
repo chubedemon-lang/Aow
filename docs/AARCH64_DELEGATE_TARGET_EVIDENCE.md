@@ -49,3 +49,5 @@ The new analyzer has not been run against the APK in this change. The next offli
 
 Duplicate method-label associations are not deduplicated before resolution. Even identical rendered labels remain ambiguous when multiple metadata entries point to the same address, because the current redacted label does not include a unique metadata token or image identity. This intentionally favors false negatives over a false unique callback assignment.
 - Metadata associations must be supplied as an ordered list or tuple. Set and frozenset inputs are rejected because they can erase duplicate associations before the analyzer can detect ambiguity.
+
+- Metadata method labels must retain the canonical `/pN` suffix emitted from the IL2CPP unsigned 16-bit parameter-count field. Missing, non-ASCII, non-decimal, non-canonical leading-zero, over-range, or repeated suffixes are unresolved; malformed labels must never be promoted to a unique constructor or callback target.
