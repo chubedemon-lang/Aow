@@ -228,5 +228,15 @@ class DurableRewardTests(unittest.TestCase):
         self.db.rollback()
 
 
+    def test_integrity_rolls_back_read_snapshot_after_audit_failure(self):
+        self.ledger.grant_once("one", "p1", 3, "gem", 2)
+        self.db.execute(
+            "UPDATE reward_balances SET quantity=3 WHERE player_id='p1' AND item_id='gem'"
+        )
+        with self.assertRaisesRegex(RewardConflict, "receipt totals"):
+            self.ledger.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
+
 if __name__ == "__main__":
     unittest.main()
