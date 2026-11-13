@@ -13,6 +13,9 @@ from server.sqlite_authorized_quest_award_service import (
 from server.sqlite_session_store import SqliteSessionStore
 
 
+_MAX_SQLITE_INTEGER = 2**63 - 1
+
+
 class SqliteAuthorizedQuestAwardServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -106,6 +109,31 @@ class SqliteAuthorizedQuestAwardServiceTests(unittest.TestCase):
                 self.other_token, 101, "stable-award", 7, "gem", 3
             )
         self.assertEqual(self.service.balance(self.owner_token, 101, "gem"), 3)
+
+    def test_balance_overflow_rolls_back_authorized_quest_key_and_receipt(self):
+        self.assertTrue(self.service.grant_quest_once(
+            self.owner_token, 101, "max-authorized-award",
+            7, "gem", _MAX_SQLITE_INTEGER,
+        ))
+        with self.assertRaisesRegex(RewardConflict, "integer range"):
+            self.service.grant_quest_once(
+                self.owner_token, 101, "overflow-authorized-award",
+                8, "gem", 1,
+            )
+
+        self.assertEqual(
+            self.service.balance(self.owner_token, 101, "gem"),
+            _MAX_SQLITE_INTEGER,
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM quest_award_keys").fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM reward_receipts").fetchone()[0],
+            1,
+        )
+        self.assertFalse(self.db.in_transaction)
 
     def test_invalid_character_ids_fail_closed(self):
         for value in (True, 0, -1, "101", None):
