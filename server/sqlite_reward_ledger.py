@@ -127,19 +127,26 @@ class SqliteRewardLedger:
         return quantity
 
     def verify_integrity(self) -> dict:
-        """Read-only audit of reward balances, receipts and optional quest keys.
+        """Audit a stable read snapshot; never repair or migrate stored data."""
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+        self.db.execute("BEGIN")
+        try:
+            return self._verify_integrity_snapshot()
+        finally:
+            if self.db.in_transaction:
+                self.db.rollback()
 
-        Every receipt contributes one positive credit, so the aggregate receipt
+    def _verify_integrity_snapshot(self) -> dict:
+        """Validate balances, receipts and optional quest keys in one snapshot.
+
+        Every receipt contributes one positive credit, so aggregate receipt
         quantities must exactly equal each stored player/item balance. If the
         quest-award table exists, every quest key must point to a matching
         receipt. Generic reward receipts are allowed without a quest key.
 
-        This is a consistency audit, not cryptographic tamper evidence. It
-        requires an idle connection and never repairs or migrates stored data.
+        This is a consistency audit, not cryptographic tamper evidence.
         """
-        if self.db.in_transaction:
-            raise ValueError("connection must not have an active transaction")
-
         try:
             if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
                 raise RewardConflict("SQLite quick_check failed")
@@ -162,8 +169,7 @@ class SqliteRewardLedger:
                     raise RewardConflict("invalid stored reward receipt quantity")
                 if request_id in receipts_by_id:
                     raise RewardConflict("duplicate stored reward request id")
-                receipt = (player_id, quest_id, item_id, quantity)
-                receipts_by_id[request_id] = receipt
+                receipts_by_id[request_id] = (player_id, quest_id, item_id, quantity)
                 key = (player_id, item_id)
                 total = receipt_totals.get(key, 0) + quantity
                 if total > _MAX_SQLITE_INTEGER:
@@ -216,7 +222,9 @@ class SqliteRewardLedger:
                     seen_requests.add(request_id)
                     expected = (player_id, quest_id, item_id, quantity)
                     if receipts_by_id.get(request_id) != expected:
-                        raise RewardConflict("quest-award key does not match its reward receipt")
+                        raise RewardConflict(
+                            "quest-award key does not match its reward receipt"
+                        )
                     quest_key_count += 1
 
             return {
@@ -225,4 +233,6 @@ class SqliteRewardLedger:
                 "quest_award_keys": quest_key_count,
             }
         except sqlite3.DatabaseError as exc:
-            raise RewardConflict("reward ledger integrity check could not complete") from exc
+            raise RewardConflict(
+                "reward ledger integrity check could not complete"
+            ) from exc
