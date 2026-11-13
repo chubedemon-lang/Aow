@@ -54,7 +54,7 @@ The type inventory validates and reads the version-31 type, field, and method de
 | Method definitions | 197,631 |
 | Field definitions | 119,710 |
 
-The record strides used are version-specific: `Il2CppTypeDefinition` 88 bytes, `Il2CppMethodDefinition` 36 bytes in metadata v31, and `Il2CppFieldDefinition` 12 bytes. The implementation checks each section's bounds, record alignment, target type field/method ranges, and each target method's declaring-type index before reporting names.
+The record strides used are version-specific: `Il2CppTypeDefinition` 88 bytes, `Il2CppMethodDefinition` 36 bytes in metadata v31, and `Il2CppFieldDefinition` 12 bytes. The implementation checks each section's bounds, record alignment, target type field/method ranges, and each target method's declaring-type index before reporting names. It also rejects negative raw type indexes for allowlisted fields, method return types, method parameters, and field-default records rather than presenting malformed indexes as valid associations.
 
 ### Login and session types
 
@@ -141,7 +141,7 @@ The read-only v31 inventory now records, for allowlisted message and network typ
 - each method's raw return-type index, return-parameter token, generic-container index, metadata token, flags, interface flags, slot and parameter list;
 - each parameter's metadata name, raw type index and metadata token.
 
-These values are copied from the v31 metadata records after table-bound and owner/range checks. **They are not resolved managed types.** The type indexes refer to the native IL2CPP type-registration layer and cannot be converted into names from the metadata tables alone. The metadata tokens are managed metadata identifiers, not AOW wire message IDs. The raw indexes do not reveal serializer field order or prove the runtime path is active.
+These values are copied from the v31 metadata records after table-bound, owner/range, and non-negative-index checks. **They are not resolved managed types.** The type indexes refer to the native IL2CPP type-registration layer and cannot be converted into names from the metadata tables alone. The metadata tokens are managed metadata identifiers, not AOW wire message IDs. The raw indexes do not reveal serializer field order or prove the runtime path is active.
 
 The public tool emits only the targeted message/network type records and the existing allowlisted `MessageTypes` field names. Original APK bytes, native library bytes, extracted assets, and full local analysis output remain private.
 
