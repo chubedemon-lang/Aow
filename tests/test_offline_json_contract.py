@@ -15,7 +15,10 @@ def sample_record(status="unverified"):
         "kind": "login",
         "status": status,
         "artifact_sha256": "a" * 64,
-        "method": "isolated synthetic fixture",
+        "method": (
+            "authorized_local_test" if status == "verified"
+            else "isolated synthetic fixture"
+        ),
         "reproduction": "python -m unittest",
         "test_reference": "tests/test_offline_json_contract.py",
         "notes": "Synthetic metadata only",
