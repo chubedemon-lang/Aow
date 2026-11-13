@@ -110,7 +110,7 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
             result[0]["candidate_method_pointer_arguments"]["x2"],
             {
                 "resolution": "unique_metadata_method",
-                "method": self.callback_label.split("/p", 1)[0],
+                "method": self.callback_label,
             },
         )
 
@@ -131,7 +131,7 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             result[0]["candidate_method_pointer_arguments"]["x2"]["method"],
-            self.callback_label.split("/p", 1)[0],
+            self.callback_label,
         )
 
     def test_non_relative_or_missing_relocation_is_not_promoted(self):
