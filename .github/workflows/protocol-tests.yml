@@ -48,6 +48,9 @@ on:
       - 'tests/test_sqlite_reward_ledger.py'
       - 'tests/test_quest_award_ledger.py'
       - 'docs/SQLITE_REWARD_LEDGER.md'
+      - 'server/sqlite_session_store.py'
+      - 'tests/test_sqlite_session_store.py'
+      - 'docs/SQLITE_SESSION_STORE.md'
       - 'docs/IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md'
       - '.github/workflows/protocol-tests.yml'
 jobs:
@@ -112,6 +115,20 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_offline_packet_fixture.py' -v
       - name: Offline evidence validation tests (metadata only)
         run: python -m unittest discover -s tests -p 'test_offline_evidence_validation.py' -v
+  session-store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile durable session store
+        run: python -m py_compile server/sqlite_session_store.py
+      - name: Durable session store regression tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_sqlite_session_store.py' -v
   reward-ledger:
     runs-on: ubuntu-latest
     timeout-minutes: 10
