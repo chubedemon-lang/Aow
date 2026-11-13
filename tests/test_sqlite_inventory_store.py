@@ -315,7 +315,9 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         self.addCleanup(writer.close)
         writer_store = SqliteInventoryStore(writer)
 
-        reader = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        reader = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, check_same_thread=False
+        )
         self.addCleanup(reader.close)
         reader_store = SqliteInventoryStore(reader)
 
