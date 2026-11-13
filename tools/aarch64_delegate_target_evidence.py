@@ -79,7 +79,10 @@ def _decode_ldr_x_unsigned(word):
 
 def _method_labels(labels):
     """Return labels only when every metadata association is representable."""
-    if not isinstance(labels, (tuple, list, set, frozenset)):
+    # Only ordered containers preserve the number of metadata associations.
+    # A set may already have collapsed duplicate entries and could manufacture
+    # a false unique target, so unordered collections are deliberately rejected.
+    if not isinstance(labels, (tuple, list)):
         return []
     # Filtering malformed entries could turn [valid, invalid] into a false
     # unique match. Fail closed instead of silently dropping an association.
