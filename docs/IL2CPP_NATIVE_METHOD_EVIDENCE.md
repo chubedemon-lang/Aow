@@ -146,3 +146,38 @@ A second private offline pass over the unchanged APK reproduced these direct-cal
 The target-resolution pass also identifies direct method names outside the primitive helper allowlist. Indirect BLR calls remain unresolved by this static pass; they are not assigned guessed property names.
 
 These results improve call-target attribution but **do not establish field order**. The windows are bounded by the next distinct relocation-backed executable entry, not formal function boundaries. Some instructions may be shared or belong to adjacent compiler-generated paths. The 79 indirect calls in the LoginRequest serializer and 74 in its deserializer remain unresolved. No packet framing, message ID, handshake order or APK/server compatibility is inferred.
+
+
+## Receiver/Sender network callsite inventory — 2026-11-13
+
+The offline analyzer now emits a redacted `network_callsite_summary` for selected
+`Receiver.Cycle`, `Sender.Cycle`, `MessageDispatcher.Dispatch/TypeRegister`, and
+`MessageHelper.InternalGetMessageType/GetMessageType` entry windows. It reports
+metadata-backed direct method targets, allowlisted primitive-helper callsites,
+and relocation-backed indirect-call resolutions where unique. Native addresses,
+raw instructions, relocation addends, packet bytes and endpoints are not emitted.
+
+A fresh read-only disassembly of the unchanged authorized APK confirms these
+callsite observations:
+
+- `Receiver.Cycle` has two direct `SimpleDeserializer.deserializeInt` callsites.
+  The first result is compared with the static `0x48545450` HTTP marker; the
+  non-marker path reuses it as the subsequent stream read count. The later
+  integer is passed as a key argument to an internal hash-bucket lookup. Its
+  dictionary owner and semantic label remain unresolved; do not call it a wire
+  message ID or sequence number without further evidence.
+- `Sender.Cycle` has two direct `SimpleSerializer.serializeInt` callsites, a
+  `ClientArrayUtils.ZipCompression` callsite, and two
+  `ClientStreamBuffer.Write` callsites. This is not enough to establish that
+  Sender emits the same framing candidate used by the Receiver branch.
+- `MessageDispatcher.Dispatch` contains a direct path to global/unhandled
+  message-handler methods and uses a type-keyed listener lookup. This describes
+  client-side dispatch structure, not a recovered wire ID mapping.
+
+The bounded entry windows end at the next distinct relocation-backed executable
+entry in the same section; they are not formal function boundaries. These
+summaries are static callsite evidence only. They do not establish active
+runtime paths, exact field order, frame boundaries, compression/encryption
+placement, handshake/login semantics, or APK/server compatibility. The APK,
+native binaries, raw disassembly and proprietary assets remain outside this
+public repository.
