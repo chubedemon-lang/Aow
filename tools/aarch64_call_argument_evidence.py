@@ -75,8 +75,9 @@ def _decode_move_wide(word):
     if not is_64 and shift > 16:
         return None
     destination = word & 0x1F
-    if destination == 31:
-        return None
+    # For MOVZ/MOVN/MOVK, register 31 is WZR/XZR, not SP. The
+    # instruction is valid and discards its result; the transfer loop
+    # handles it as a no-op rather than treating it as an unknown opcode.
     immediate = (word >> 5) & 0xFFFF
     width_mask = (1 << (64 if is_64 else 32)) - 1
     if opcode == 0x52800000:  # MOVZ
@@ -289,7 +290,8 @@ def summarize_small_argument_constants(
     clear the abstract state. BL/BLR calls clobber caller-saved registers.
 
     Only MOVZ/MOVN/MOVK, the unshifted MOV-register alias and ADD-immediate
-    are modeled. Exact values above 0xffff are omitted. When
+    are modeled. Writes to WZR/XZR are treated as discarded no-ops. Exact
+    values above 0xffff are omitted. When
     include_argument_classes=True, x0-x7 values also receive a coarse size
     class (zero, small 16-bit, nonzero 32-bit, or nonzero 64-bit); no wide
     numeric value is emitted. Output contains relative instruction/block
@@ -364,6 +366,8 @@ def summarize_small_argument_constants(
             move = _decode_move_wide(word)
             if move is not None:
                 operation, destination, immediate, shift, width_mask = move
+                if destination == 31:  # WZR/XZR discards MOV-wide results.
+                    continue
                 if operation == "movz":
                     registers[destination] = (immediate << shift) & width_mask
                 elif operation == "movn":
