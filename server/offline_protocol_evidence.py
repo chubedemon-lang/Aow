@@ -7,7 +7,7 @@ Never commit private capture contents, endpoints or credentials.
 """
 import re
 
-from server.protocol_evidence_registry import ALLOWED_TOPICS, VERIFIED_METHODS
+from server.protocol_evidence_registry import ALLOWED_TOPICS, VERIFIED_METHODS, VERIFIED_METHODS
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 ALLOWED_KINDS = ALLOWED_TOPICS
