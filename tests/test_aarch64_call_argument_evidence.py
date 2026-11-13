@@ -350,7 +350,7 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         self.assertIsNotNone(decoded)
         self.assertEqual(decoded[1], 31)
         invalid_w_shift = movz_w(1, 4, 32)
-        self.assertIsNone(_decode_move_wide(invalid_w_shift)
+        self.assertIsNone(_decode_move_wide(invalid_w_shift))
 
 
     def test_conditional_branch_decoder_handles_b_cond_cbz_and_tbz(self):
