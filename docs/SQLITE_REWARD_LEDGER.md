@@ -12,7 +12,7 @@ Existing databases created before these CHECK constraints are not rewritten. The
 
 ## Read-only integrity audit
 
-`SqliteRewardLedger.verify_integrity()` requires an idle connection and performs no writes. It runs SQLite quick/foreign-key checks, validates stored receipt and balance types, and verifies that the sum of durable receipts exactly matches each player/item balance. When `quest_award_keys` exists, every quest key must also match its receipt. Generic reward receipts are valid without a quest key.
+`SqliteRewardLedger.verify_integrity()` requires an idle connection, opens one read transaction for a consistent snapshot, and rolls it back on both success and failure. It performs no writes. It runs SQLite quick/foreign-key checks, validates stored receipt and balance types, and verifies that the sum of durable receipts exactly matches each player/item balance. When `quest_award_keys` exists, every quest key must also match its receipt. Generic reward receipts are valid without a quest key.
 
 The audit returns counts for balances, receipts and quest-award keys. It is a consistency check, not cryptographic tamper evidence, a backup, a migration or a production readiness check. It deliberately fails closed on legacy REAL values, missing receipts, mismatched totals or quest-key corruption; it never repairs data.
 
