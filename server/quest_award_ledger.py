@@ -13,7 +13,9 @@ class QuestAwardLedger(SqliteRewardLedger):
             quest_id INTEGER NOT NULL,
             item_id TEXT NOT NULL,
             request_id TEXT NOT NULL UNIQUE,
-            quantity INTEGER NOT NULL CHECK(quantity > 0),
+            quantity INTEGER NOT NULL CHECK(
+                typeof(quantity) = 'integer'
+                AND quantity BETWEEN 1 AND 9223372036854775807),
             PRIMARY KEY(player_id, quest_id, item_id))""")
         self.db.commit()
 
@@ -27,8 +29,7 @@ class QuestAwardLedger(SqliteRewardLedger):
             raise ValueError("invalid identifier")
         if type(quest_id) is not int or quest_id < 0:
             raise ValueError("invalid quest")
-        if type(quantity) is not int or quantity <= 0:
-            raise ValueError("invalid quantity")
+        self._validate_quantity(quantity)
         owns_transaction = not self.db.in_transaction
         if owns_transaction:
             self.db.execute("BEGIN IMMEDIATE")
@@ -56,10 +57,7 @@ class QuestAwardLedger(SqliteRewardLedger):
                             (player_id, quest_id, item_id, request_id, quantity))
             self.db.execute("INSERT INTO reward_receipts VALUES (?,?,?,?,?)",
                             (request_id, player_id, quest_id, item_id, quantity))
-            self.db.execute("""INSERT INTO reward_balances VALUES (?,?,?)
-                ON CONFLICT(player_id,item_id)
-                DO UPDATE SET quantity=quantity+excluded.quantity""",
-                            (player_id, item_id, quantity))
+            self._credit_balance_in_transaction(player_id, item_id, quantity)
             if owns_transaction:
                 self.db.commit()
             return True
