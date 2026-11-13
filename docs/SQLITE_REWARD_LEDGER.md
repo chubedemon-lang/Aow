@@ -10,8 +10,14 @@ Reward quantities and balances are bounded to SQLite's signed 64-bit INTEGER ran
 
 Existing databases created before these CHECK constraints are not rewritten. The runtime validation still rejects a non-integer legacy balance before applying a new grant; inspect and repair such a row through an operator-controlled migration rather than coercing it silently.
 
+## Read-only integrity audit
+
+`SqliteRewardLedger.verify_integrity()` requires an idle connection and performs no writes. It runs SQLite quick/foreign-key checks, validates stored receipt and balance types, and verifies that the sum of durable receipts exactly matches each player/item balance. When `quest_award_keys` exists, every quest key must also match its receipt. Generic reward receipts are valid without a quest key.
+
+The audit returns counts for balances, receipts and quest-award keys. It is a consistency check, not cryptographic tamper evidence, a backup, a migration or a production readiness check. It deliberately fails closed on legacy REAL values, missing receipts, mismatched totals or quest-key corruption; it never repairs data.
+
 The ledger constructor requires an idle SQLite connection before creating its tables. `grant_once` also rejects an active caller transaction before issuing `BEGIN IMMEDIATE`; it does not commit or roll back caller-owned work. This avoids accidental schema commits and preserves transaction ownership.
 
 Limitations: callers must generate stable, authenticated idempotency keys, authorize the quest reward and player ownership, and enforce a single award per quest with a unique (player, quest, reward) constraint before production use. There are no item capacity limits, reward catalog checks, migration tooling, concurrency stress tests, or server network endpoints. Do not accept untrusted client-supplied reward quantities.
 
-Run `python -m unittest tests.test_sqlite_reward_ledger -v`, `python -m unittest tests.test_quest_award_ledger -v`, or `python -m unittest discover -s tests`. No APK changes or client compatibility claims.
+Run `python -m unittest tests.test_sqlite_reward_ledger -v` or `python -m unittest discover -s tests`. No APK changes or client compatibility claims.
