@@ -8,7 +8,7 @@ from server.offline_packet_fixture import FixtureValidationError, validate_packe
 SOURCE_SHA256 = "a" * 64
 
 
-def fixture(payload=b"\\x01\\x02"):
+def fixture(payload=b"\x01\x02"):
     return {
         "source_sha256": SOURCE_SHA256,
         "payload_hex": payload.hex(),
@@ -27,7 +27,7 @@ def validate(record, *, expected_source_sha256=SOURCE_SHA256, max_bytes=65536):
 
 class OfflinePacketFixtureTests(unittest.TestCase):
     def test_valid_fixture_returns_bytes_when_source_digest_matches(self):
-        self.assertEqual(validate(fixture()), b"\\x01\\x02")
+        self.assertEqual(validate(fixture()), b"\x01\x02")
 
     def test_accepts_empty_payload_with_the_empty_sha256(self):
         record = fixture(b"")
@@ -76,7 +76,7 @@ class OfflinePacketFixtureTests(unittest.TestCase):
             validate(record)
 
     def test_rejects_invalid_hex(self):
-        for value in ("0", "zz", "00 11", "00\\n"):
+        for value in ("0", "zz", "00 11", "00\n"):
             with self.subTest(value=value), self.assertRaises(FixtureValidationError):
                 validate({**fixture(), "payload_hex": value})
 
