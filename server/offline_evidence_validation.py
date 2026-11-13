@@ -5,16 +5,16 @@ This is a provenance gate, not a parser for the original AOW protocol.
 import re
 from dataclasses import dataclass
 
-_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\\Z")
 _ALLOWED = frozenset({"apk", "local_capture", "decompiled_symbol", "test_observation"})
 
 # Public provenance text must not leak network locations or sensitive material.
 # Keep local repository/file references usable (for example docs/PROTOCOL.md).
-_URI_SCHEME = re.compile(r"\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+_URI_SCHEME = re.compile(r"\\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _IPV4 = re.compile(
     r"(?<![A-Za-z0-9_.])"
     r"(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])"
-    r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
+    r"(?:\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
     r"(?![A-Za-z0-9_.])"
 )
 _IPV6 = re.compile(
@@ -24,7 +24,7 @@ _IPV6 = re.compile(
 )
 _HOSTNAME = re.compile(
     r"(?<![A-Za-z0-9_-])"
-    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+"
     r"[A-Za-z]{2,}(?::[0-9]{1,5})?"
     r"(?![A-Za-z0-9_-])",
     re.IGNORECASE,
@@ -38,14 +38,25 @@ _LOCAL_FILE_SUFFIXES = frozenset({
     "h", "html", "ini", "java", "js", "json", "log", "md", "py", "ps1",
     "rst", "sh", "so", "sql", "toml", "ts", "txt", "xml", "yaml", "yml",
 })
+# Absolute paths can disclose usernames, private workspace layout, or the
+# location of captures even when no network host or credential is present.
+# Repository-relative references remain usable and are intentionally not
+# matched by these patterns.
+_ABSOLUTE_PATH = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"/(?:[^/\\s]+/)*[^/\\s]+"
+    r"|[A-Za-z]:[\\\\/][^\\s]+"
+    r"|\\\\\\\\[^\\\\/\\s]+[\\\\/][^\\s]+"
+    r")"
+)
 _CREDENTIAL_ASSIGNMENT = re.compile(
-    r"\b(?:authorization|bearer|token|password|passwd|secret|"
-    r"api[_-]?key|access[_-]?key|refresh[_-]?token)\s*[:=]\s*\S+",
+    r"\\b(?:authorization|bearer|token|password|passwd|secret|"
+    r"api[_-]?key|access[_-]?key|refresh[_-]?token)\\s*[:=]\\s*\\S+",
     re.IGNORECASE,
 )
-_BEARER_VALUE = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
+_BEARER_VALUE = re.compile(r"\\bBearer\\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
 _PACKET_BYTES = re.compile(
-    r"\b(?:packet|capture|payload)_bytes\s*[:=]", re.IGNORECASE
+    r"\\b(?:packet|capture|payload)_bytes\\s*[:=]", re.IGNORECASE
 )
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.IGNORECASE
@@ -84,6 +95,7 @@ def _contains_network_locator(value):
 def _contains_sensitive_material(value):
     return (
         _contains_network_locator(value)
+        or _ABSOLUTE_PATH.search(value) is not None
         or _CREDENTIAL_ASSIGNMENT.search(value) is not None
         or _BEARER_VALUE.search(value) is not None
         or _PACKET_BYTES.search(value) is not None
@@ -95,7 +107,8 @@ def validate_record(record):
     """Validate one non-sensitive, locally sourced evidence record.
 
     Unknown, incomplete, or unverified claims cannot be marked as verified.
-    No bytes, endpoints, tokens, or proprietary material are accepted here.
+    No bytes, endpoints, tokens, absolute file paths, or proprietary material
+    are accepted here.
     """
     if not isinstance(record, dict) or set(record) != {
         "kind", "sha256", "source", "observation", "verified"
