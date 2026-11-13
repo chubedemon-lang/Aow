@@ -16,7 +16,8 @@ from tools.il2cpp_native_method_evidence import (
 
 
 def make_metadata(method_names, wrong_owner=False, *, image="ScriptsAssembly.dll",
-                  type_name="Receiver", namespace="com.geargames.common.network"):
+                  type_name="Receiver", namespace="com.geargames.common.network",
+                  fields=(), default_fields=()):
     header = bytearray(0x100)
     strings = bytearray()
 
@@ -29,6 +30,7 @@ def make_metadata(method_names, wrong_owner=False, *, image="ScriptsAssembly.dll
     type_name_index = add(type_name)
     namespace_index = add(namespace)
     method_names = [add(name) for name in method_names]
+    field_name_indexes = [add(name) for name, _type_index, _token in fields]
     string_offset = len(header)
     method_offset = string_offset + len(strings)
     method_data = bytearray(len(method_names) * 0x24)
@@ -42,7 +44,23 @@ def make_metadata(method_names, wrong_owner=False, *, image="ScriptsAssembly.dll
     struct.pack_into("<II", type_data, 0, type_name_index, namespace_index)
     struct.pack_into("<i", type_data, 0x24, 0)
     struct.pack_into("<H", type_data, 0x40, len(method_names))
-    image_offset = type_offset + len(type_data)
+    field_offset = type_offset + len(type_data)
+    field_data = bytearray(len(fields) * 0x0C)
+    for index, ((_name, type_index, token), name_index) in enumerate(
+        zip(fields, field_name_indexes)
+    ):
+        struct.pack_into(
+            "<IiI", field_data, index * 0x0C, name_index, type_index, token
+        )
+    default_offset = field_offset + len(field_data)
+    default_data = bytearray(len(default_fields) * 0x0C)
+    for index, field_index in enumerate(default_fields):
+        struct.pack_into(
+            "<iii", default_data, index * 0x0C, field_index, 0, 0
+        )
+    struct.pack_into("<i", type_data, 0x20, 0)
+    struct.pack_into("<H", type_data, 0x44, len(fields))
+    image_offset = default_offset + len(default_data)
     image_data = bytearray(0x28)
     struct.pack_into(
         "<10i", image_data, 0, image_name, 0, 0, 1, 0, 0, -1, 0, 0, 0
@@ -50,9 +68,12 @@ def make_metadata(method_names, wrong_owner=False, *, image="ScriptsAssembly.dll
     struct.pack_into("<II", header, 0, 0xFAB11BAF, 31)
     struct.pack_into("<II", header, 0x18, string_offset, len(strings))
     struct.pack_into("<II", header, 0x30, method_offset, len(method_data))
+    struct.pack_into("<II", header, 0x40, default_offset, len(default_data))
+    struct.pack_into("<II", header, 0x60, field_offset, len(field_data))
     struct.pack_into("<II", header, 0xA0, type_offset, len(type_data))
     struct.pack_into("<II", header, 0xA8, image_offset, len(image_data))
-    return bytes(header) + bytes(strings) + bytes(method_data) + bytes(type_data) + bytes(image_data)
+    return (bytes(header) + bytes(strings) + bytes(method_data) + bytes(type_data)
+            + bytes(field_data) + bytes(default_data) + bytes(image_data))
 
 
 def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
@@ -171,6 +192,64 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertEqual(report["observed_network_methods"], 1)
         self.assertEqual(report["methods"][0]["method"], "Cycle")
 
+
+    def test_network_field_summary_reports_allowlisted_names_and_default_presence(self):
+        metadata = make_metadata(
+            ["Cycle"],
+            type_name="NetworkSettings",
+            fields=(
+                ("HeaderLength", 123, 0x04000001),
+                ("UnrelatedField", 456, 0x04000002),
+            ),
+            default_fields=(0,),
+        )
+        report = inspect_bytes(metadata, make_elf(1))
+        self.assertEqual(
+            report["network_field_summary"],
+            [{
+                "namespace": "com.geargames.common.network",
+                "type": "NetworkSettings",
+                "field": "HeaderLength",
+                "token": "0x4000001",
+                "has_default_value": True,
+            }],
+        )
+        rendered = json.dumps(report["network_field_summary"])
+        self.assertNotIn("123", rendered)
+        self.assertNotIn("data_index", rendered)
+        self.assertNotIn("type_index", rendered)
+
+    def test_message_helper_field_summary_names_both_dictionary_directions(self):
+        metadata = make_metadata(
+            ["InternalGetMessageType"],
+            type_name="MessageHelper",
+            fields=(
+                ("m_messageTypeByMessageClass", 1, 0x04000001),
+                ("m_messageClassByMessageType", 2, 0x04000002),
+            ),
+        )
+        report = inspect_bytes(metadata, make_elf(1))
+        self.assertEqual(
+            [item["field"] for item in report["network_field_summary"]],
+            [
+                "m_messageClassByMessageType",
+                "m_messageTypeByMessageClass",
+            ],
+        )
+        self.assertTrue(all(
+            item["has_default_value"] is False
+            for item in report["network_field_summary"]
+        ))
+
+    def test_network_field_summary_rejects_out_of_range_default_record(self):
+        metadata = make_metadata(
+            ["Cycle"],
+            type_name="NetworkSettings",
+            fields=(("HeaderLength", 123, 0x04000001),),
+            default_fields=(4,),
+        )
+        with self.assertRaisesRegex(ValueError, "field default index"):
+            inspect_bytes(metadata, make_elf(1))
 
     def test_maps_login_and_session_serializer_families(self):
         cases = (

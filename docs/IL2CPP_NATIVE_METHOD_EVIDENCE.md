@@ -181,3 +181,24 @@ runtime paths, exact field order, frame boundaries, compression/encryption
 placement, handshake/login semantics, or APK/server compatibility. The APK,
 native binaries, raw disassembly and proprietary assets remain outside this
 public repository.
+
+
+## Network field metadata summary — 2026-11-13
+
+The allowlisted analyzer now emits a redacted `network_field_summary` for
+selected transport fields. It records only namespace, type, field name,
+metadata token and whether a field-default record exists. It never emits field
+type indices, default-value bytes, offsets, native addresses or instructions.
+
+The fresh offline pass found:
+
+- `NetworkSettings.HeaderLength` has a metadata field-default record. The
+  value itself is not decoded by this summary.
+- `MessageHelper` declares both
+  `m_messageTypeByMessageClass` and
+  `m_messageClassByMessageType`, documenting the two dictionary directions
+  without publishing runtime contents.
+
+This metadata summary complements the native callsite trace. It does not by
+itself prove the effective `HeaderLength`, identify the exact static field
+load/store, recover numeric message IDs, or establish a packet schema.
