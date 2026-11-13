@@ -7,8 +7,8 @@ Fixture payload bytes must remain outside the public repository.
 import hashlib
 import re
 
-_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
-_HEX = re.compile(r"(?:[0-9a-fA-F]{2})+\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\\Z")
+_HEX = re.compile(r"(?:[0-9a-fA-F]{2})*\\Z")
 
 
 class FixtureValidationError(ValueError):
@@ -28,7 +28,9 @@ def validate_packet_fixture(
     record fields: source_sha256, payload_hex, payload_sha256, verified.
     No fixture bytes are logged or persisted by this function. Matching a
     source digest and a payload digest validates provenance/integrity metadata;
-    it does not prove packet semantics or APK/server compatibility.
+    it does not prove packet semantics or APK/server compatibility. Empty
+    payloads are valid byte sequences and are checked against SHA-256 of the
+    empty byte string just like non-empty payloads.
     """
     if (type(expected_source_sha256) is not str
             or not _SHA256.fullmatch(expected_source_sha256)):
@@ -50,7 +52,7 @@ def validate_packet_fixture(
         raise FixtureValidationError("fixture source digest does not match expected artifact")
 
     value = record["payload_hex"]
-    if not isinstance(value, str) or not value or len(value) > 2 * max_bytes:
+    if not isinstance(value, str) or len(value) > 2 * max_bytes:
         raise FixtureValidationError("invalid fixture size")
     if not _HEX.fullmatch(value):
         raise FixtureValidationError("invalid payload hex")
