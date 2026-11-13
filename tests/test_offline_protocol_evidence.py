@@ -59,7 +59,12 @@ class EvidenceManifestTests(unittest.TestCase):
             validate_record(sample(kind="invented_opcode"))
 
     def test_rejects_unapproved_method_for_verified_record(self):
-        for method in ("web_search", "synthetic_test", "guess", "Authorized local offline inspection"):
+        for method in (
+            "web_search",
+            "synthetic_test",
+            "guess",
+            "Authorized local offline inspection",
+        ):
             with self.subTest(method=method), self.assertRaisesRegex(
                 EvidenceError, "approved offline or authorized method"
             ):
