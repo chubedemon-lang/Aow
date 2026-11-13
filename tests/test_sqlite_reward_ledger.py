@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 
+from server.quest_award_ledger import QuestAwardLedger
 from server.sqlite_reward_ledger import RewardConflict, SqliteRewardLedger
 
 
@@ -154,6 +155,91 @@ class DurableRewardTests(unittest.TestCase):
         self.assertEqual(
             self.db.execute("SELECT count(*) FROM reward_receipts").fetchone()[0], 0
         )
+
+    def test_integrity_accepts_generic_and_quest_receipts(self):
+        quest = QuestAwardLedger(self.db)
+        quest.grant_once("generic", "p1", 3, "gem", 2)
+        quest.grant_quest_once("quest", "p1", 4, "gem", 3)
+        self.assertEqual(
+            quest.verify_integrity(),
+            {"balances": 1, "receipts": 2, "quest_award_keys": 1},
+        )
+
+    def test_integrity_accepts_generic_ledger_without_quest_table(self):
+        self.ledger.grant_once("generic", "p1", 3, "gem", 2)
+        self.assertEqual(
+            self.ledger.verify_integrity(),
+            {"balances": 1, "receipts": 1, "quest_award_keys": 0},
+        )
+
+    def test_integrity_detects_balance_receipt_mismatch(self):
+        self.ledger.grant_once("one", "p1", 3, "gem", 2)
+        self.db.execute(
+            "UPDATE reward_balances SET quantity=3 WHERE player_id='p1' AND item_id='gem'"
+        )
+        self.db.commit()
+        with self.assertRaisesRegex(RewardConflict, "receipt totals"):
+            self.ledger.verify_integrity()
+
+    def test_integrity_detects_missing_receipt(self):
+        self.ledger.grant_once("one", "p1", 3, "gem", 2)
+        self.db.execute("DELETE FROM reward_receipts WHERE request_id='one'")
+        self.db.commit()
+        with self.assertRaisesRegex(RewardConflict, "receipt totals"):
+            self.ledger.verify_integrity()
+
+    def test_integrity_detects_quest_key_receipt_mismatch(self):
+        quest = QuestAwardLedger(self.db)
+        quest.grant_quest_once("quest", "p1", 4, "gem", 3)
+        self.db.execute(
+            "UPDATE quest_award_keys SET quantity=4 WHERE request_id='quest'"
+        )
+        self.db.commit()
+        with self.assertRaisesRegex(RewardConflict, "does not match"):
+            quest.verify_integrity()
+
+    def test_integrity_rejects_legacy_real_balance(self):
+        legacy = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(legacy.close)
+        legacy.executescript(
+            """CREATE TABLE reward_balances (
+                   player_id TEXT NOT NULL, item_id TEXT NOT NULL,
+                   quantity INTEGER NOT NULL CHECK(quantity >= 0),
+                   PRIMARY KEY(player_id, item_id));
+               CREATE TABLE reward_receipts (
+                   request_id TEXT PRIMARY KEY, player_id TEXT NOT NULL,
+                   quest_id INTEGER NOT NULL, item_id TEXT NOT NULL,
+                   quantity INTEGER NOT NULL CHECK(quantity > 0));
+               INSERT INTO reward_balances VALUES ('p1', 'gem', 1.5);"""
+        )
+        ledger = SqliteRewardLedger(legacy)
+        with self.assertRaisesRegex(RewardConflict, "valid SQLite integer"):
+            ledger.verify_integrity()
+
+    def test_integrity_is_read_only_and_requires_idle_connection(self):
+        self.ledger.grant_once("one", "p1", 3, "gem", 2)
+        with open(self.path, "rb") as source:
+            before = source.read()
+        self.ledger.verify_integrity()
+        with open(self.path, "rb") as source:
+            after = source.read()
+        self.assertEqual(after, before)
+
+        self.db.execute("BEGIN")
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            self.ledger.verify_integrity()
+        self.db.rollback()
+
+
+    def test_integrity_rolls_back_read_snapshot_after_audit_failure(self):
+        self.ledger.grant_once("one", "p1", 3, "gem", 2)
+        self.db.execute(
+            "UPDATE reward_balances SET quantity=3 WHERE player_id='p1' AND item_id='gem'"
+        )
+        self.db.commit()
+        with self.assertRaisesRegex(RewardConflict, "receipt totals"):
+            self.ledger.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
 
 
 if __name__ == "__main__":

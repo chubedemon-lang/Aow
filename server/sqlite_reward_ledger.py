@@ -40,6 +40,11 @@ class SqliteRewardLedger:
                 or not 1 <= quantity <= _MAX_SQLITE_INTEGER):
             raise ValueError("invalid quantity")
 
+    @staticmethod
+    def _validate_identifier(value, field):
+        if type(value) is not str or not value or value != value.strip():
+            raise RewardConflict("invalid stored " + field)
+
     def _credit_balance_in_transaction(
         self, player_id: str, item_id: str, quantity: int
     ) -> int:
@@ -120,3 +125,114 @@ class SqliteRewardLedger:
         if type(quantity) is not int or not 0 <= quantity <= _MAX_SQLITE_INTEGER:
             raise RewardConflict("stored reward balance is not a valid SQLite integer")
         return quantity
+
+    def verify_integrity(self) -> dict:
+        """Audit a stable read snapshot; never repair or migrate stored data."""
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+        self.db.execute("BEGIN")
+        try:
+            return self._verify_integrity_snapshot()
+        finally:
+            if self.db.in_transaction:
+                self.db.rollback()
+
+    def _verify_integrity_snapshot(self) -> dict:
+        """Validate balances, receipts and optional quest keys in one snapshot.
+
+        Every receipt contributes one positive credit, so aggregate receipt
+        quantities must exactly equal each stored player/item balance. If the
+        quest-award table exists, every quest key must point to a matching
+        receipt. Generic reward receipts are allowed without a quest key.
+
+        This is a consistency audit, not cryptographic tamper evidence.
+        """
+        try:
+            if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                raise RewardConflict("SQLite quick_check failed")
+            if self.db.execute("PRAGMA foreign_key_check").fetchall():
+                raise RewardConflict("reward ledger foreign key check failed")
+
+            receipt_totals = {}
+            receipts_by_id = {}
+            receipt_rows = self.db.execute(
+                """SELECT request_id, player_id, quest_id, item_id, quantity
+                   FROM reward_receipts ORDER BY request_id"""
+            ).fetchall()
+            for request_id, player_id, quest_id, item_id, quantity in receipt_rows:
+                self._validate_identifier(request_id, "reward request id")
+                self._validate_identifier(player_id, "reward player id")
+                self._validate_identifier(item_id, "reward item id")
+                if type(quest_id) is not int or not 0 <= quest_id <= _MAX_SQLITE_INTEGER:
+                    raise RewardConflict("invalid stored reward quest id")
+                if type(quantity) is not int or not 1 <= quantity <= _MAX_SQLITE_INTEGER:
+                    raise RewardConflict("invalid stored reward receipt quantity")
+                if request_id in receipts_by_id:
+                    raise RewardConflict("duplicate stored reward request id")
+                receipts_by_id[request_id] = (player_id, quest_id, item_id, quantity)
+                key = (player_id, item_id)
+                total = receipt_totals.get(key, 0) + quantity
+                if total > _MAX_SQLITE_INTEGER:
+                    raise RewardConflict("stored reward receipts exceed SQLite integer range")
+                receipt_totals[key] = total
+
+            balances = {}
+            balance_rows = self.db.execute(
+                """SELECT player_id, item_id, quantity
+                   FROM reward_balances ORDER BY player_id, item_id"""
+            ).fetchall()
+            for player_id, item_id, quantity in balance_rows:
+                self._validate_identifier(player_id, "balance player id")
+                self._validate_identifier(item_id, "balance item id")
+                if type(quantity) is not int or not 0 <= quantity <= _MAX_SQLITE_INTEGER:
+                    raise RewardConflict("stored reward balance is not a valid SQLite integer")
+                key = (player_id, item_id)
+                if key in balances:
+                    raise RewardConflict("duplicate stored reward balance")
+                balances[key] = quantity
+
+            if balances != receipt_totals:
+                raise RewardConflict("reward balances do not match durable receipt totals")
+
+            quest_key_count = 0
+            quest_table = self.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='quest_award_keys'"
+            ).fetchone()
+            if quest_table is not None:
+                quest_rows = self.db.execute(
+                    """SELECT player_id, quest_id, item_id, request_id, quantity
+                       FROM quest_award_keys
+                       ORDER BY player_id, quest_id, item_id"""
+                ).fetchall()
+                seen_keys = set()
+                seen_requests = set()
+                for player_id, quest_id, item_id, request_id, quantity in quest_rows:
+                    self._validate_identifier(player_id, "quest-award player id")
+                    self._validate_identifier(item_id, "quest-award item id")
+                    self._validate_identifier(request_id, "quest-award request id")
+                    if (type(quest_id) is not int
+                            or not 0 <= quest_id <= _MAX_SQLITE_INTEGER):
+                        raise RewardConflict("invalid stored quest-award quest id")
+                    if type(quantity) is not int or not 1 <= quantity <= _MAX_SQLITE_INTEGER:
+                        raise RewardConflict("invalid stored quest-award quantity")
+                    key = (player_id, quest_id, item_id)
+                    if key in seen_keys or request_id in seen_requests:
+                        raise RewardConflict("duplicate stored quest-award key")
+                    seen_keys.add(key)
+                    seen_requests.add(request_id)
+                    expected = (player_id, quest_id, item_id, quantity)
+                    if receipts_by_id.get(request_id) != expected:
+                        raise RewardConflict(
+                            "quest-award key does not match its reward receipt"
+                        )
+                    quest_key_count += 1
+
+            return {
+                "balances": len(balances),
+                "receipts": len(receipts_by_id),
+                "quest_award_keys": quest_key_count,
+            }
+        except sqlite3.DatabaseError as exc:
+            raise RewardConflict(
+                "reward ledger integrity check could not complete"
+            ) from exc

@@ -43,6 +43,11 @@ on:
       - 'tests/test_offline_evidence_validation.py'
       - 'docs/TRANSPORT_EVIDENCE_GATE.md'
       - 'docs/PROTOCOL.md'
+      - 'server/sqlite_reward_ledger.py'
+      - 'server/quest_award_ledger.py'
+      - 'tests/test_sqlite_reward_ledger.py'
+      - 'tests/test_quest_award_ledger.py'
+      - 'docs/SQLITE_REWARD_LEDGER.md'
       - 'docs/IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md'
       - '.github/workflows/protocol-tests.yml'
 jobs:
@@ -107,3 +112,19 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_offline_packet_fixture.py' -v
       - name: Offline evidence validation tests (metadata only)
         run: python -m unittest discover -s tests -p 'test_offline_evidence_validation.py' -v
+  reward-ledger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile durable reward ledgers
+        run: python -m py_compile server/sqlite_reward_ledger.py server/quest_award_ledger.py
+      - name: Durable reward ledger integrity tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_sqlite_reward_ledger.py' -v
+      - name: Quest award ledger regression tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_quest_award_ledger.py' -v
