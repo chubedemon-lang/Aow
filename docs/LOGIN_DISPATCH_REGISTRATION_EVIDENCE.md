@@ -91,3 +91,12 @@ Resolve the `object` and `method` arguments at each native delegate
 constructor callsite in `<StartConnectToServer>d__12.MoveNext`, then map
 each target against unique metadata-backed executable method entries. Keep
 unresolved and ambiguous targets explicitly unresolved.
+
+
+## Delegate method-pointer analyzer tooling — 2026-11-13
+
+A new bounded CFG pass in `tools/aarch64_delegate_target_evidence.py` is integrated into the redacted native callsite inventory. It follows only ADR/ADRP, 64-bit ADD-immediate, relocation-backed LDR X, and unshifted MOV X copies before the allowlisted `OnMessageReceivedDelegate::.ctor` callsites. The configured x2 value is treated only as a candidate for the second declared constructor parameter.
+
+The report emits a unique metadata-backed method label only when the tracked pointer exactly matches one executable method entry. Missing, ambiguous, unsupported, or thunk-like values remain unresolved. Raw pointer values, native addresses and instruction bytes are never emitted. The pass drops state at joins/backedges, clobbers caller-saved registers at calls, and clears state on unknown instructions.
+
+Synthetic tests use fabricated instruction words and relocations. **This PR does not run the analyzer against the APK and adds no callback target result.** It does not identify message IDs, map keys 5004/5005 to wire traffic, or prove handshake/login compatibility. See [AArch64 delegate method-pointer evidence](AARCH64_DELEGATE_TARGET_EVIDENCE.md).
