@@ -27,6 +27,11 @@ on:
       - 'server/offline_frame_probe.py'
       - 'tests/test_offline_frame_probe.py'
       - 'docs/OFFLINE_FRAME_PROBE.md'
+      - 'server/frame_reader.py'
+      - 'tests/test_frame_reader.py'
+      - 'server/stream_reader.py'
+      - 'tests/test_stream_reader.py'
+      - 'docs/STREAM_READER.md'
       - 'server/transport.py'
       - 'tests/test_transport.py'
       - 'server/protocol_evidence_registry.py'
@@ -83,6 +88,8 @@ jobs:
             tools/aarch64_call_argument_evidence.py \
             tools/aarch64_delegate_target_evidence.py \
             server/aow_primitive_codec.py \
+            server/frame_reader.py \
+            server/stream_reader.py \
             server/offline_frame_probe.py \
             server/offline_protocol_evidence.py \
             server/offline_packet_fixture.py \
@@ -106,6 +113,10 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_aow_primitive_codec.py' -v
       - name: Synthetic frame decoder tests (fabricated streams only)
         run: python -m unittest discover -s tests -p 'test_offline_frame_probe.py' -v
+      - name: Generic frame and blocking stream reader tests (synthetic format only)
+        run: |
+          python -m unittest discover -s tests -p 'test_frame_reader.py' -v
+          python -m unittest discover -s tests -p 'test_stream_reader.py' -v
       - name: Transport evidence boundary tests (synthetic codec only)
         run: python -m unittest discover -s tests -p 'test_transport.py' -v
       - name: Protocol evidence registry tests (metadata only)
