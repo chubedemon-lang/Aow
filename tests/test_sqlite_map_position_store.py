@@ -240,6 +240,44 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
         )
         self.assertFalse(self.db.in_transaction)
 
+    def test_integrity_audit_uses_one_read_snapshot_during_concurrent_commit(self):
+        self.db.execute("PRAGMA journal_mode=WAL").fetchone()
+        self.store.create("hero")
+        writer = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        self.addCleanup(writer.close)
+        writer_store = SqliteMapPositionStore(writer)
+        committed = []
+
+        def commit_after_snapshot(statement):
+            if not committed and "FROM map_position_mutations" in statement:
+                committed.append(True)
+                writer_store.enter("hero", "concurrent", 0, 1, 2, 3)
+
+        self.db.set_trace_callback(commit_after_snapshot)
+        try:
+            result = self.store.verify_integrity()
+        finally:
+            self.db.set_trace_callback(None)
+
+        self.assertEqual(committed, [True])
+        self.assertEqual(result, {"snapshots": 1, "mutations": 0})
+        self.assertEqual(
+            self.store.get("hero"), MapPosition(1, Position(2, 3), 1)
+        )
+        self.assertEqual(
+            self.store.verify_integrity(), {"snapshots": 1, "mutations": 1}
+        )
+
+    def test_integrity_audit_releases_read_transaction_after_failure(self):
+        self.store.create("hero")
+        self.store.enter("hero", "enter", 0, 1, 0, 0)
+        self.db.execute(
+            "DELETE FROM map_position_mutations WHERE request_id='enter'"
+        )
+        with self.assertRaises(MapPositionStoreError):
+            self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
     def test_integrity_audit_detects_missing_receipt(self):
         self.store.create("hero")
         self.store.enter("hero", "enter", 0, 1, 0, 0)

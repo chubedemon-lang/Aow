@@ -15,7 +15,7 @@ SqliteMapPositionStore supports:
 - move(character_id, request_id, expected_revision, map_id, x, y): update a position only when the current map matches the supplied map ID.
 - leave(character_id, request_id, expected_revision, map_id): leave only the currently occupied map.
 - get(character_id): read the durable immutable snapshot.
-- verify_integrity(): run SQLite quick/foreign-key checks and replay every transition receipt against the current snapshot without repairing or mutating data. The audit requires an idle connection.
+- verify_integrity(): run SQLite quick/foreign-key checks and replay every transition receipt against the current snapshot without repairing or mutating data. The audit requires an idle connection, opens one deferred read transaction for a consistent snapshot, and always rolls it back on success or failure.
 
 Every successful transition increments the revision exactly once.
 
