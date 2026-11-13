@@ -22,11 +22,11 @@ FIELDS = frozenset({
 # Reject arbitrary URI schemes (not just HTTP), IPv4/IPv6 literals, localhost,
 # and DNS-like hostnames before a caller writes metadata to a public manifest.
 # This is a conservative guardrail, not a general-purpose DLP scanner.
-_URI_SCHEME = re.compile(r"\\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+_URI_SCHEME = re.compile(r"\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _IPV4 = re.compile(
     r"(?<![A-Za-z0-9_.])"
     r"(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])"
-    r"(?:\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
+    r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
     r"(?![A-Za-z0-9_.])"
 )
 _IPV6 = re.compile(
@@ -36,7 +36,7 @@ _IPV6 = re.compile(
 )
 _HOSTNAME = re.compile(
     r"(?<![A-Za-z0-9_-])"
-    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
     r"[A-Za-z]{2,}(?::[0-9]{1,5})?"
     r"(?![A-Za-z0-9_-])",
     re.IGNORECASE,
@@ -53,13 +53,13 @@ _LOCAL_FILE_SUFFIXES = frozenset({
     "rst", "sh", "so", "sql", "toml", "ts", "txt", "xml", "yaml", "yml",
 })
 _CREDENTIAL_ASSIGNMENT = re.compile(
-    r"\\b(?:authorization|bearer|token|password|passwd|secret|"
-    r"api[_-]?key|access[_-]?key|refresh[_-]?token)\\s*[:=]\\s*\\S+",
+    r"\b(?:authorization|bearer|token|password|passwd|secret|"
+    r"api[_-]?key|access[_-]?key|refresh[_-]?token)\s*[:=]\s*\S+",
     re.IGNORECASE,
 )
-_BEARER_VALUE = re.compile(r"\\bBearer\\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
+_BEARER_VALUE = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
 _PACKET_BYTES = re.compile(
-    r"\\b(?:packet|capture|payload)_bytes\\s*[:=]", re.IGNORECASE
+    r"\b(?:packet|capture|payload)_bytes\s*[:=]", re.IGNORECASE
 )
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.IGNORECASE
