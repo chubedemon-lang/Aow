@@ -256,3 +256,24 @@ that resolve to different helper labels and a multi-predecessor join where the
 target must remain unresolved. This is analyzer capability only: no new APK
 bytes were read, no native pass was run, and no framing, message ID, handshake,
 LoginRequest field order or APK compatibility claim is added.
+
+
+## NetworkSettings initialization callsite roots — 2026-11-13 (tooling only)
+
+The redacted native-method callsite inventory now includes the exact
+`NetworkSettings::.cctor` and `NetworkSettings::.ctor` entry windows alongside
+the existing Receiver, Sender, dispatcher and MessageHelper roots. This keeps
+the initializer call paths visible in future authorized offline runs rather
+than mapping the methods only as executable entrypoints.
+
+A synthetic regression test verifies that both initialization methods appear
+as separate callsite records and that the report still omits native addresses
+and raw instructions.
+
+**This change does not resolve static-field loads/stores, decode the
+`HeaderLength` field-default record, determine its effective runtime value, or
+prove that the field supplies the four-byte receive read.** The current
+callsite summary is bounded and redacted; it is not a control-flow proof.
+Continue to treat `HeaderLength` use and the sender/receiver framing
+relationship as unresolved until a private APK pass or authorized local
+fixture establishes them.
