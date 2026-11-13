@@ -7,6 +7,9 @@ import unittest
 from server.sqlite_reward_ledger import RewardConflict, SqliteRewardLedger
 
 
+_MAX_SQLITE_INTEGER = 2**63 - 1
+
+
 class DurableRewardTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -46,13 +49,57 @@ class DurableRewardTests(unittest.TestCase):
         self.assertEqual(self.ledger.balance("p1", "coin"), 5)
 
     def test_invalid_inputs(self):
-        cases = [("", "p", 1, "gem", 1), ("a", "", 1, "gem", 1),
-                 ("a", "p", True, "gem", 1), ("a", "p", 1, "gem", True),
-                 ("a", "p", 1, "gem", 0)]
+        cases = [
+            ("", "p", 1, "gem", 1),
+            ("a", "", 1, "gem", 1),
+            ("a", "p", True, "gem", 1),
+            ("a", "p", 1, "gem", True),
+            ("a", "p", 1, "gem", 0),
+            ("a", "p", 1, "gem", _MAX_SQLITE_INTEGER + 1),
+        ]
         for args in cases:
             with self.subTest(args=args), self.assertRaises(ValueError):
                 self.ledger.grant_once(*args)
-        self.assertEqual(self.db.execute("SELECT count(*) FROM reward_receipts").fetchone()[0], 0)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM reward_receipts").fetchone()[0], 0
+        )
+
+    def test_balance_accepts_maximum_sqlite_integer_but_rejects_overflow(self):
+        self.assertTrue(
+            self.ledger.grant_once("max", "p1", 3, "gem", _MAX_SQLITE_INTEGER)
+        )
+        self.assertEqual(self.ledger.balance("p1", "gem"), _MAX_SQLITE_INTEGER)
+        with self.assertRaisesRegex(RewardConflict, "integer range"):
+            self.ledger.grant_once("overflow", "p1", 4, "gem", 1)
+        self.assertEqual(self.ledger.balance("p1", "gem"), _MAX_SQLITE_INTEGER)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM reward_receipts").fetchone()[0], 1
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_legacy_real_balance_fails_closed_without_partial_receipt(self):
+        legacy = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(legacy.close)
+        legacy.executescript(
+            """CREATE TABLE reward_balances (
+                   player_id TEXT NOT NULL, item_id TEXT NOT NULL,
+                   quantity INTEGER NOT NULL CHECK(quantity >= 0),
+                   PRIMARY KEY(player_id, item_id));
+               CREATE TABLE reward_receipts (
+                   request_id TEXT PRIMARY KEY, player_id TEXT NOT NULL,
+                   quest_id INTEGER NOT NULL, item_id TEXT NOT NULL,
+                   quantity INTEGER NOT NULL CHECK(quantity > 0));
+               INSERT INTO reward_balances VALUES ('p1', 'gem', 1.5);"""
+        )
+        ledger = SqliteRewardLedger(legacy)
+        with self.assertRaisesRegex(RewardConflict, "valid SQLite integer"):
+            ledger.grant_once("new", "p1", 5, "gem", 1)
+        with self.assertRaisesRegex(RewardConflict, "valid SQLite integer"):
+            ledger.balance("p1", "gem")
+        self.assertEqual(
+            legacy.execute("SELECT count(*) FROM reward_receipts").fetchone()[0], 0
+        )
+        self.assertFalse(legacy.in_transaction)
 
     def test_second_connection_replay(self):
         self.ledger.grant_once("a", "p", 1, "gem", 3)
@@ -102,12 +149,10 @@ class DurableRewardTests(unittest.TestCase):
         self.assertTrue(self.db.in_transaction)
         self.db.rollback()
         self.assertEqual(
-            self.db.execute("SELECT count(*) FROM caller_work").fetchone()[0],
-            0,
+            self.db.execute("SELECT count(*) FROM caller_work").fetchone()[0], 0
         )
         self.assertEqual(
-            self.db.execute("SELECT count(*) FROM reward_receipts").fetchone()[0],
-            0,
+            self.db.execute("SELECT count(*) FROM reward_receipts").fetchone()[0], 0
         )
 
 
