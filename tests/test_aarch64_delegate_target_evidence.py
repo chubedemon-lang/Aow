@@ -89,10 +89,10 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
             self.callback: [self.callback_label],
         }
 
-    def analyze(self, code, *, targets=None, relocations=None, **kwargs):
+    def analyze(self, code, *, targets=None, relocations=None, start_va=None, **kwargs):
         return summarize_delegate_method_pointer_arguments(
             code,
-            self.start,
+            self.start if start_va is None else start_va,
             self.targets if targets is None else targets,
             {} if relocations is None else relocations,
             **kwargs,
