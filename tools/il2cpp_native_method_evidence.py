@@ -223,6 +223,7 @@ def _network_fields(metadata, allowlist_map=None):
         for field_index in range(field_start, field_start + field_count):
             field_pos = field_off + field_index * 0x0C
             field_name_index = struct.unpack_from("<I", metadata, field_pos)[0]
+            field_type_index = struct.unpack_from("<I", metadata, field_pos + 4)[0]
             field_token = struct.unpack_from("<I", metadata, field_pos + 8)[0]
             field_name = read_string(field_name_index)
             if field_name not in allowlist:
@@ -231,6 +232,7 @@ def _network_fields(metadata, allowlist_map=None):
                 "namespace": namespace,
                 "type": name,
                 "field": field_name,
+                "field_type_index": field_type_index,
                 "token": hex(field_token),
                 "has_default_value": field_index in default_fields,
             })

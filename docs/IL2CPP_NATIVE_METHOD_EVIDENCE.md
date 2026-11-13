@@ -185,20 +185,26 @@ public repository.
 
 ## Network field metadata summary — 2026-11-13
 
-The allowlisted analyzer now emits a redacted `network_field_summary` for
-selected transport fields. It records only namespace, type, field name,
-metadata token and whether a field-default record exists. It never emits field
-type indices, default-value bytes, offsets, native addresses or instructions.
+The allowlisted analyzer emits a redacted `network_field_summary` for
+selected transport fields. In addition to namespace, type, field name,
+metadata token and default-record presence, it now reports the opaque 32-bit
+`field_type_index` stored in the allowlisted metadata field definition. This
+index is not resolved to a managed type name and is not a runtime field value.
+The report still excludes default-value bytes, field offsets, native
+addresses and instructions.
 
 The fresh offline pass found:
 
 - `NetworkSettings.HeaderLength` has a metadata field-default record. The
-  value itself is not decoded by this summary.
+  default value itself is not decoded by this summary; the type index is
+  retained only as a follow-up metadata-resolution key.
 - `MessageHelper` declares both
   `m_messageTypeByMessageClass` and
   `m_messageClassByMessageType`, documenting the two dictionary directions
-  without publishing runtime contents.
+  without publishing runtime contents. Their type indices are retained as
+  opaque metadata references, not interpreted as dictionary contents.
 
 This metadata summary complements the native callsite trace. It does not by
-itself prove the effective `HeaderLength`, identify the exact static field
-load/store, recover numeric message IDs, or establish a packet schema.
+itself resolve the field's managed type, prove the effective `HeaderLength`,
+identify the exact static field load/store, recover numeric message IDs, or
+establish a packet schema.
