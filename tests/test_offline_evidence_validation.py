@@ -78,6 +78,20 @@ class EvidenceValidationTests(unittest.TestCase):
                     with self.assertRaises(EvidenceError):
                         validate_record({**self.valid, field: value})
 
+    def test_rejects_absolute_private_file_paths(self):
+        examples = (
+            "/home/operator/captures/session.pcap",
+            "/mnt/data/private/aow.apk",
+            r"C:\Users\Operator\AppData\Local\capture.pcap",
+            r"C:/Users/Operator/AppData/Local/capture.pcap",
+            r"\\fileserver\private\capture.pcap",
+        )
+        for field in ("source", "observation"):
+            for value in examples:
+                with self.subTest(field=field, value=value):
+                    with self.assertRaises(EvidenceError):
+                        validate_record({**self.valid, field: value})
+
     def test_accepts_sanitized_repository_local_references(self):
         for value in (
             "issue:2",
