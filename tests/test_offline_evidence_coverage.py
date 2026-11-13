@@ -1,4 +1,4 @@
-"""Metadata coverage tests; all inputs are synthetic and unverified."""
+"""Metadata coverage tests; status fixtures do not assert AOW wire compatibility."""
 import unittest
 
 from server.offline_evidence_coverage import evidence_coverage
