@@ -14,6 +14,22 @@ topics (transport, framing, handshake, login) must have independent records.
 The status gate is bookkeeping, **not** proof by itself; reviewers must inspect
 the underlying authorized evidence before approving a compatibility claim.
 
+## Verified metadata methods
+
+The metadata-only manifest validator and the in-memory evidence registry use
+one shared allowlist for records marked `verified`:
+
+- `apk_zip_inventory`
+- `jadx_offline`
+- `il2cpp_offline`
+- `authorized_local_test`
+
+Descriptive method text remains acceptable for `unverified` observations,
+but it cannot promote a record to `verified`. Synthetic-only tests, guesses,
+web searches, and unapproved method labels must not unlock protocol evidence
+gates. A passing metadata validator is bookkeeping only; it does not establish
+wire compatibility or replace review of the underlying local evidence.
+
 References are short, sanitized locators, not extracted strings. Keep APK
 bytes, decompiled code, IP addresses, secrets, packet captures, proprietary
 assets, and unredacted logs outside this public repository.
