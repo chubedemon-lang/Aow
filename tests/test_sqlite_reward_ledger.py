@@ -177,12 +177,14 @@ class DurableRewardTests(unittest.TestCase):
         self.db.execute(
             "UPDATE reward_balances SET quantity=3 WHERE player_id='p1' AND item_id='gem'"
         )
+        self.db.commit()
         with self.assertRaisesRegex(RewardConflict, "receipt totals"):
             self.ledger.verify_integrity()
 
     def test_integrity_detects_missing_receipt(self):
         self.ledger.grant_once("one", "p1", 3, "gem", 2)
         self.db.execute("DELETE FROM reward_receipts WHERE request_id='one'")
+        self.db.commit()
         with self.assertRaisesRegex(RewardConflict, "receipt totals"):
             self.ledger.verify_integrity()
 
@@ -192,6 +194,7 @@ class DurableRewardTests(unittest.TestCase):
         self.db.execute(
             "UPDATE quest_award_keys SET quantity=4 WHERE request_id='quest'"
         )
+        self.db.commit()
         with self.assertRaisesRegex(RewardConflict, "does not match"):
             quest.verify_integrity()
 
