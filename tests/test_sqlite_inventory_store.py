@@ -16,19 +16,6 @@ from server.sqlite_inventory_store import (
 )
 
 
-class PausingInventoryAuditConnection(sqlite3.Connection):
-    """Test connection that pauses before one selected audit query."""
-
-    def execute(self, sql, parameters=()):
-        pause_sql = getattr(self, "pause_sql", None)
-        if pause_sql is not None and pause_sql in sql:
-            self.pause_sql = None
-            self.pause_entered.set()
-            if not self.pause_release.wait(5):
-                raise TimeoutError("test did not release inventory audit query")
-        return super().execute(sql, parameters)
-
-
 class SqliteInventoryStoreTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -328,18 +315,24 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         self.addCleanup(writer.close)
         writer_store = SqliteInventoryStore(writer)
 
-        reader = sqlite3.connect(
-            self.path, timeout=10, isolation_level=None,
-            factory=PausingInventoryAuditConnection,
-        )
+        reader = sqlite3.connect(self.path, timeout=10, isolation_level=None)
         self.addCleanup(reader.close)
         reader_store = SqliteInventoryStore(reader)
 
         entered = threading.Event()
         release = threading.Event()
-        reader.pause_sql = "SELECT character_id, capacity, max_stack, revision"
-        reader.pause_entered = entered
-        reader.pause_release = release
+        original_character_id = reader_store._character_id
+
+        def pause_after_item_read(value):
+            if not entered.is_set():
+                entered.set()
+                if not release.wait(5):
+                    raise TimeoutError("test did not release inventory audit")
+            return original_character_id(value)
+
+        # The audit calls _character_id while consuming inventory_items, after
+        # that SELECT has completed and before it reads inventory_snapshots.
+        reader_store._character_id = pause_after_item_read
         outcome = {}
 
         def audit():
