@@ -11,7 +11,10 @@ def record(identifier, kind="framing", status="unverified"):
         "kind": kind,
         "status": status,
         "artifact_sha256": "a" * 64,
-        "method": "Authorized local synthetic test",
+        "method": (
+            "authorized_local_test" if status == "verified"
+            else "Authorized local synthetic test"
+        ),
         "reproduction": "Run local synthetic unit tests",
         "test_reference": "tests/test_offline_evidence_coverage.py",
         "notes": "Synthetic placeholder only",
