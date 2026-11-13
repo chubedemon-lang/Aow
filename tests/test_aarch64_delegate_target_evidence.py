@@ -212,6 +212,19 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
             {"resolution": "ambiguous_metadata_method"},
         )
 
+    def test_duplicate_identical_metadata_labels_remain_ambiguous(self):
+        targets = dict(self.targets)
+        targets[self.callback] = [self.callback_label, self.callback_label]
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        result = self.analyze(code, targets=targets)
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "ambiguous_metadata_method"},
+        )
+
     def test_constructor_target_must_match_allowlist(self):
         code = words(
             adr(2, self.start, self.callback),
