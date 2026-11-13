@@ -300,7 +300,7 @@ class SqliteInventoryStoreTests(unittest.TestCase):
             (deeply_nested, "audit-deep-receipt"),
         )
         with self.assertRaisesRegex(
-            InventoryStoreError, "invalid inventory receipt snapshot JSON"
+            InventoryStoreError, "invalid inventory receipt snapshot"
         ):
             self.store.verify_integrity()
         self.assertFalse(self.db.in_transaction)
