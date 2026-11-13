@@ -7,8 +7,8 @@ Fixture payload bytes must remain outside the public repository.
 import hashlib
 import re
 
-_SHA256 = re.compile(r"[0-9a-f]{64}\\Z")
-_HEX = re.compile(r"(?:[0-9a-fA-F]{2})*\\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_HEX = re.compile(r"(?:[0-9a-fA-F]{2})*\Z")
 
 
 class FixtureValidationError(ValueError):
