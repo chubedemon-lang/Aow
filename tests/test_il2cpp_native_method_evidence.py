@@ -210,14 +210,15 @@ class NativeMethodEvidenceTests(unittest.TestCase):
                 "namespace": "com.geargames.common.network",
                 "type": "NetworkSettings",
                 "field": "HeaderLength",
+                "field_type_index": 123,
                 "token": "0x4000001",
                 "has_default_value": True,
             }],
         )
         rendered = json.dumps(report["network_field_summary"])
-        self.assertNotIn("123", rendered)
+        self.assertIn("\"field_type_index\": 123", rendered)
+        self.assertNotIn("default_value_bytes", rendered)
         self.assertNotIn("data_index", rendered)
-        self.assertNotIn("type_index", rendered)
 
     def test_message_helper_field_summary_names_both_dictionary_directions(self):
         metadata = make_metadata(
@@ -235,6 +236,10 @@ class NativeMethodEvidenceTests(unittest.TestCase):
                 "m_messageClassByMessageType",
                 "m_messageTypeByMessageClass",
             ],
+        )
+        self.assertEqual(
+            [item["field_type_index"] for item in report["network_field_summary"]],
+            [2, 1],
         )
         self.assertTrue(all(
             item["has_default_value"] is False
