@@ -75,3 +75,13 @@ that any such instruction occurs in the AOW APK.
 
 - [GNU binutils AArch64 opcode table](https://gnu.googlesource.com/binutils-gdb/+/7e8d2d875701971c77224079056a0c8272d63109/opcodes/aarch64-tbl.h)
 - [A64 instruction reference](https://shell-storm.org/armv8-a/)
+
+## Metadata target identity is fail-closed
+
+Direct-call observations require a single ordered metadata association with a
+canonical /pN parameter-count suffix. The analyzer preserves duplicate
+associations instead of collapsing them with a set, rejects unordered or
+malformed association collections, and matches allowlist prefixes only at an
+exact namespace/type boundary. This prevents duplicate, malformed, or
+near-match metadata labels from being promoted to a unique target. The
+regression vectors are synthetic and do not establish any new AOW callsite.
