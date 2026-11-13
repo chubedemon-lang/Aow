@@ -28,6 +28,42 @@ _NOP = 0xD503201F
 _MAX_CODE_WINDOW_BYTES = 64 * 1024
 
 
+def _method_name_from_label(label):
+    """Return a method name only for the canonical IL2CPP metadata /pN suffix."""
+    if type(label) is not str:
+        return None
+    method_name, separator, arity = label.rpartition("/p")
+    if not separator or not method_name or "/p" in method_name:
+        return None
+    if not arity.isascii() or not arity.isdigit():
+        return None
+    # Metadata parameter_count is an unsigned 16-bit value. Avoid converting
+    # an unbounded decimal string and reject non-canonical leading zeroes.
+    if len(arity) > 5 or (len(arity) > 1 and arity.startswith("0")):
+        return None
+    if len(arity) == 5 and arity > "65535":
+        return None
+    return method_name
+
+
+def _ordered_method_labels(labels):
+    """Preserve association multiplicity; reject unordered or malformed input."""
+    if not isinstance(labels, (tuple, list)):
+        return []
+    if any(_method_name_from_label(label) is None for label in labels):
+        return []
+    return sorted(labels)
+
+
+def _matches_method_prefix(method_name, prefixes):
+    """Match a method at an exact namespace/type boundary."""
+    return any(
+        method_name == prefix or method_name.endswith("." + prefix)
+        for prefix in prefixes
+    )
+
+
+
 def _decode_move_wide(word):
     if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
         return None
@@ -367,17 +403,11 @@ def summarize_small_argument_constants(
 
             target = _decode_bl_target(word, pc)
             if target is not None:
-                labels = method_targets.get(target, ())
-                if isinstance(labels, (tuple, list, set, frozenset)):
-                    unique_labels = sorted(set(
-                        label for label in labels if isinstance(label, str)
-                    ))
-                else:
-                    unique_labels = []
-                if len(unique_labels) == 1:
-                    label = unique_labels[0]
-                    method_name = label.split("/p", 1)[0]
-                    if any(method_name.endswith(prefix) for prefix in target_prefixes):
+                labels = _ordered_method_labels(method_targets.get(target, ()))
+                if len(labels) == 1:
+                    label = labels[0]
+                    method_name = _method_name_from_label(label)
+                    if _matches_method_prefix(method_name, target_prefixes):
                         arguments = {
                             f"x{register}": registers[register]
                             for register in range(8)

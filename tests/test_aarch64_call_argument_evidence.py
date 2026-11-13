@@ -220,6 +220,62 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 6})
 
+    def test_duplicate_identical_method_associations_are_ambiguous(self):
+        targets = {self.target: [self.label, self.label]}
+        code = words(movz_x(1, 4), bl(0x1004, self.target))
+        result = summarize_small_argument_constants(
+            code, 0x1000, targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result, [])
+
+    def test_unordered_method_associations_are_not_promoted(self):
+        code = words(movz_x(1, 4), bl(0x1004, self.target))
+        for labels in ({self.label}, frozenset((self.label,))):
+            with self.subTest(labels=labels):
+                result = summarize_small_argument_constants(
+                    code, 0x1000, {self.target: labels},
+                    target_prefixes=self.prefixes,
+                )
+                self.assertEqual(result, [])
+
+    def test_malformed_method_metadata_labels_are_not_promoted(self):
+        malformed = (
+            "com.geargames.common.utils.ClientNetworkStreamBuffer::SetDataAvailable",
+            "com.geargames.common.utils.ClientNetworkStreamBuffer::SetDataAvailable/p",
+            "com.geargames.common.utils.ClientNetworkStreamBuffer::SetDataAvailable/p1extra",
+            "com.geargames.common.utils.ClientNetworkStreamBuffer::SetDataAvailable/p٢",
+            "com.geargames.common.utils.ClientNetworkStreamBuffer::SetDataAvailable/p02",
+            "com.geargames.common.utils.ClientNetworkStreamBuffer::SetDataAvailable/p65536",
+            "com.geargames.common.utils.ClientNetworkStreamBuffer::SetDataAvailable/p1/p2",
+        )
+        code = words(movz_x(1, 4), bl(0x1004, self.target))
+        for label in malformed:
+            with self.subTest(label=label):
+                result = summarize_small_argument_constants(
+                    code, 0x1000, {self.target: [label]},
+                    target_prefixes=self.prefixes,
+                )
+                self.assertEqual(result, [])
+
+    def test_malformed_association_does_not_leave_false_unique_target(self):
+        code = words(movz_x(1, 4), bl(0x1004, self.target))
+        result = summarize_small_argument_constants(
+            code, 0x1000, {self.target: [self.label, None]},
+            target_prefixes=self.prefixes,
+        )
+        self.assertEqual(result, [])
+
+    def test_allowlist_requires_exact_type_boundary(self):
+        near_miss = (
+            "com.geargames.common.utils.FakeClientNetworkStreamBuffer"
+            "::SetDataAvailable/p1"
+        )
+        code = words(movz_x(1, 4), bl(0x1004, self.target))
+        result = summarize_small_argument_constants(
+            code, 0x1000, {self.target: [near_miss]},
+            target_prefixes=self.prefixes,
+        )
+        self.assertEqual(result, [])
     def test_rejects_malformed_windows_and_invalid_prefixes(self):
         for code, start in ((b"abc", 0x1000), (b"\x00" * 4, 0x1002)):
             with self.subTest(code=code, start=start), self.assertRaises(ValueError):
