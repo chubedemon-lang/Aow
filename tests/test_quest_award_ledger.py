@@ -5,6 +5,9 @@ import unittest
 from server.quest_award_ledger import QuestAwardLedger, RewardConflict
 
 
+_MAX_SQLITE_INTEGER = 2**63 - 1
+
+
 class QuestAwardTests(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
@@ -42,10 +45,34 @@ class QuestAwardTests(unittest.TestCase):
         self.assertEqual(self.ledger.balance("p", "gem"), 7)
         self.assertEqual(self.ledger.balance("other", "gem"), 5)
 
+    def test_reward_balance_overflow_rolls_back_quest_and_receipt(self):
+        self.ledger.grant_quest_once("max", "p", 1, "gem", _MAX_SQLITE_INTEGER)
+        with self.assertRaisesRegex(RewardConflict, "integer range"):
+            self.ledger.grant_quest_once("overflow", "p", 2, "gem", 1)
+        self.assertEqual(self.ledger.balance("p", "gem"), _MAX_SQLITE_INTEGER)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM quest_award_keys").fetchone()[0], 1
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM reward_receipts").fetchone()[0], 1
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_quantity_above_sqlite_integer_range_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "quantity"):
+            self.ledger.grant_quest_once(
+                "too-large", "p", 1, "gem", _MAX_SQLITE_INTEGER + 1
+            )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM quest_award_keys").fetchone()[0], 0
+        )
+
     def test_invalid_input_does_not_write(self):
         with self.assertRaises(ValueError):
             self.ledger.grant_quest_once("x", "p", True, "gem", 2)
-        self.assertEqual(self.db.execute("SELECT count(*) FROM quest_award_keys").fetchone()[0], 0)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM quest_award_keys").fetchone()[0], 0
+        )
 
 
 if __name__ == "__main__":
