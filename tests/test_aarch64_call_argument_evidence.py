@@ -24,6 +24,10 @@ def movz_w(register, immediate, shift=0):
     return 0x52800000 | ((shift // 16) << 21) | (immediate << 5) | register
 
 
+def movn_w(register, immediate, shift=0):
+    return 0x12800000 | ((shift // 16) << 21) | (immediate << 5) | register
+
+
 def mov_x(destination, source):
     return 0xAA0003E0 | (source << 16) | destination
 
@@ -315,6 +319,24 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(result[0]["known_small_argument_constants"]["x1"], 4)
 
+    def test_move_wide_writes_to_zero_register_are_noops(self):
+        zero_register_writes = (
+            movz_x(31, 0x1234),
+            movn_w(31, 0x1234),
+            movk_x(31, 0x5678, 16),
+            0x72800000 | (0x4321 << 5) | 31,  # MOVK WZR, #0x4321
+        )
+        for instruction in zero_register_writes:
+            with self.subTest(instruction=hex(instruction)):
+                code = words(movz_x(1, 4), instruction, bl(0x1008, self.target))
+                result = summarize_small_argument_constants(
+                    code, 0x1000, self.targets, target_prefixes=self.prefixes
+                )
+                self.assertEqual(len(result), 1)
+                self.assertEqual(
+                    result[0]["known_small_argument_constants"], {"x1": 4}
+                )
+
     def test_shifted_orr_is_not_misclassified_as_mov_alias(self):
         shifted_orr = 0xAA0007E0 | (2 << 16) | 1
         code = words(movz_x(1, 4), shifted_orr, bl(0x1008, self.target))
@@ -323,10 +345,12 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(result, [])
 
-    def test_move_wide_decoder_rejects_invalid_register_and_shift(self):
-        self.assertIsNone(_decode_move_wide(0xD280003F))  # XZR destination
+    def test_move_wide_decoder_accepts_zero_register_and_rejects_invalid_shift(self):
+        decoded = _decode_move_wide(0xD280003F)  # MOVZ XZR, #1
+        self.assertIsNotNone(decoded)
+        self.assertEqual(decoded[1], 31)
         invalid_w_shift = movz_w(1, 4, 32)
-        self.assertIsNone(_decode_move_wide(invalid_w_shift))
+        self.assertIsNone(_decode_move_wide(invalid_w_shift)
 
 
     def test_conditional_branch_decoder_handles_b_cond_cbz_and_tbz(self):
