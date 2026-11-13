@@ -162,6 +162,82 @@ def _network_methods(metadata, info, allowlist_map=None):
     return records
 
 
+NETWORK_FIELDS = {
+    ("com.geargames.common.network", "NetworkSettings"): {"HeaderLength"},
+    ("com.geargames.common.network", "MessageHelper"): {
+        "m_messageTypeByMessageClass", "m_messageClassByMessageType",
+    },
+}
+
+
+def _network_fields(metadata, allowlist_map=None):
+    """Summarize allowlisted network field names without exposing field values."""
+    if allowlist_map is None:
+        allowlist_map = NETWORK_FIELDS
+    string_off, string_size, _ = _table(metadata, 0x18, 1, "string heap")
+    field_off, _, field_total = _table(metadata, 0x60, 0x0C, "fields")
+    default_off, _, default_total = _table(
+        metadata, 0x40, 0x0C, "field default values"
+    )
+    type_off, _, type_total = _table(metadata, 0xA0, 0x58, "types")
+    heap = _slice(metadata, string_off, string_size, "string heap")
+
+    def read_string(index):
+        if type(index) is not int or not 0 <= index < len(heap):
+            raise CodegenInventoryError("invalid metadata string index")
+        end = heap.find(b"\\0", index)
+        if end < 0:
+            raise CodegenInventoryError("unterminated metadata string")
+        try:
+            return heap[index:end].decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise CodegenInventoryError("invalid metadata UTF-8") from exc
+
+    default_fields = set()
+    for index in range(default_total):
+        field_index = struct.unpack_from(
+            "<i", metadata, default_off + index * 0x0C
+        )[0]
+        if not 0 <= field_index < field_total:
+            raise CodegenInventoryError("field default index is out of range")
+        if field_index in default_fields:
+            raise CodegenInventoryError("duplicate field default record")
+        default_fields.add(field_index)
+
+    records = []
+    for type_index in range(type_total):
+        type_pos = type_off + type_index * 0x58
+        name_index, namespace_index = struct.unpack_from(
+            "<II", metadata, type_pos
+        )
+        name = read_string(name_index)
+        namespace = read_string(namespace_index)
+        allowlist = allowlist_map.get((namespace, name))
+        if not allowlist:
+            continue
+        field_start = struct.unpack_from("<i", metadata, type_pos + 0x20)[0]
+        field_count = struct.unpack_from("<H", metadata, type_pos + 0x44)[0]
+        if (field_start < 0 or field_start > field_total
+                or field_count > field_total - field_start):
+            raise CodegenInventoryError("network type field range is invalid")
+        for field_index in range(field_start, field_start + field_count):
+            field_pos = field_off + field_index * 0x0C
+            field_name_index = struct.unpack_from("<I", metadata, field_pos)[0]
+            field_token = struct.unpack_from("<I", metadata, field_pos + 8)[0]
+            field_name = read_string(field_name_index)
+            if field_name not in allowlist:
+                continue
+            records.append({
+                "namespace": namespace,
+                "type": name,
+                "field": field_name,
+                "token": hex(field_token),
+                "has_default_value": field_index in default_fields,
+            })
+    records.sort(key=lambda item: (item["namespace"], item["type"], item["field"]))
+    return records
+
+
 def _module_tables(elf, images):
     sections, relocations, by_addend, _ = _elf_sections(elf)
     rodata, relro = sections[".rodata"], sections[".data.rel.ro"]
@@ -1205,6 +1281,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
     """Map allowlisted network/serializer methods and summarize direct helper calls."""
     info = _metadata_images(metadata)
     methods = _network_methods(metadata, info)
+    network_fields = _network_fields(metadata)
     helper_methods = _network_methods(metadata, info, SERIALIZER_HELPER_METHODS)
     sections, relocations, tables = _module_tables(elf, info["images"])
     executable = [
@@ -1404,6 +1481,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         "methods": evidence,
         "serializer_callsite_summary": callsite_summary,
         "network_callsite_summary": network_callsite_summary,
+        "network_field_summary": network_fields,
         "primitive_helper_callsite_summary": primitive_helper_summary,
         "native_addresses_emitted": False,
         "raw_instructions_emitted": False,
