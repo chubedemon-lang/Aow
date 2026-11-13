@@ -4,7 +4,7 @@ import unittest
 from server.offline_protocol_evidence import (
     ALLOWED_KINDS, EvidenceError, validate_record, validate_manifest,
 )
-from server.protocol_evidence_registry import ALLOWED_TOPICS
+from server.protocol_evidence_registry import ALLOWED_TOPICS, VERIFIED_METHODS
 
 
 def sample(**changes):
@@ -29,6 +29,15 @@ class EvidenceManifestTests(unittest.TestCase):
         self.assertIn("map", ALLOWED_KINDS)
         self.assertIn("serialization", ALLOWED_KINDS)
 
+    def test_manifest_and_registry_share_verified_method_allowlist(self):
+        self.assertEqual(
+            VERIFIED_METHODS,
+            frozenset({
+                "apk_zip_inventory", "jadx_offline", "il2cpp_offline",
+                "authorized_local_test",
+            }),
+        )
+
     def test_accepts_synthetic_unverified_metadata(self):
         self.assertEqual(validate_record(sample())["status"], "unverified")
 
@@ -49,13 +58,38 @@ class EvidenceManifestTests(unittest.TestCase):
         with self.assertRaises(EvidenceError):
             validate_record(sample(kind="invented_opcode"))
 
+    def test_rejects_unapproved_method_for_verified_record(self):
+        for method in ("web_search", "synthetic_test", "guess", "Authorized local offline inspection"):
+            with self.subTest(method=method), self.assertRaisesRegex(
+                EvidenceError, "approved offline or authorized method"
+            ):
+                validate_record(sample(status="verified", method=method))
+
+    def test_accepts_only_allowlisted_methods_for_verified_records(self):
+        for method in VERIFIED_METHODS:
+            with self.subTest(method=method):
+                item = validate_record(sample(
+                    status="verified",
+                    method=method,
+                ))
+                self.assertEqual(item["status"], "verified")
+                self.assertEqual(item["method"], method)
+
     def test_rejects_missing_reproduction_for_verified(self):
-        with self.assertRaises(EvidenceError):
-            validate_record(sample(status="verified", reproduction="pending"))
+        with self.assertRaisesRegex(EvidenceError, "reproduction instructions"):
+            validate_record(sample(
+                status="verified",
+                method="authorized_local_test",
+                reproduction="pending",
+            ))
 
     def test_rejects_missing_test_for_verified(self):
-        with self.assertRaises(EvidenceError):
-            validate_record(sample(status="verified", test_reference="n/a"))
+        with self.assertRaisesRegex(EvidenceError, "reproducible test reference"):
+            validate_record(sample(
+                status="verified",
+                method="authorized_local_test",
+                test_reference="n/a",
+            ))
 
     def test_rejects_duplicate_identifiers(self):
         with self.assertRaises(EvidenceError):
@@ -66,7 +100,7 @@ class EvidenceManifestTests(unittest.TestCase):
             validate_record(sample(notes="unsafe\\nmetadata".replace("\\n", "\n")))
 
     def test_rejects_invisible_unicode_metadata(self):
-        for invisible in ("\u200b", "\u202e", "\u2060"):
+        for invisible in ("\\u200b", "\\u202e", "\\u2060"):
             with self.subTest(invisible=repr(invisible)):
                 with self.assertRaises(EvidenceError):
                     validate_record(sample(notes="safe" + invisible + "text"))
