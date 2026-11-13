@@ -78,10 +78,23 @@ def _decode_ldr_x_unsigned(word):
 
 
 def _method_labels(labels):
-    """Preserve duplicate metadata associations so they remain ambiguous."""
+    """Return labels only when every metadata association is representable."""
     if not isinstance(labels, (tuple, list, set, frozenset)):
         return []
-    return sorted(label for label in labels if isinstance(label, str) and label)
+    # Filtering malformed entries could turn [valid, invalid] into a false
+    # unique match. Fail closed instead of silently dropping an association.
+    if any(not isinstance(label, str) or not label for label in labels):
+        return []
+    return sorted(labels)
+
+
+def _matches_target_prefix(method_label, prefixes):
+    """Match an allowlisted method suffix only at a type-name boundary."""
+    method_name = method_label.split("/p", 1)[0]
+    return any(
+        method_name == prefix or method_name.endswith("." + prefix)
+        for prefix in prefixes
+    )
 
 
 def summarize_delegate_method_pointer_arguments(
@@ -240,9 +253,8 @@ def summarize_delegate_method_pointer_arguments(
             target = _decode_bl_target(word, pc)
             if target is not None:
                 labels = _method_labels(method_targets.get(target, ()))
-                target_name = labels[0].split("/p", 1)[0] if len(labels) == 1 else ""
-                if len(labels) == 1 and any(
-                    target_name.endswith(prefix) for prefix in target_prefixes
+                if len(labels) == 1 and _matches_target_prefix(
+                    labels[0], target_prefixes
                 ):
                     pointer_arguments = {}
                     for register in argument_registers:
