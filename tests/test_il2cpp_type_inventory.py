@@ -454,6 +454,62 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
             with self.assertRaises(MetadataInventoryError):
                 inspect_type_tables(apk)
 
+    def test_rejects_negative_target_field_type_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "synthetic.apk"
+            types = [{
+                "namespace": "com.geargames.aow.messages",
+                "name": "LoginRequest",
+                "fields": ["token"],
+                "field_type_indexes": {"token": -1},
+            }]
+            write_apk(apk, make_metadata(types))
+            with self.assertRaisesRegex(MetadataInventoryError, "field type index is negative"):
+                inspect_type_tables(apk)
+
+    def test_rejects_negative_field_default_type_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "synthetic.apk"
+            types = [{
+                "namespace": "com.geargames.aow.messages",
+                "name": "LoginRequest",
+                "fields": ["token"],
+                "field_defaults": {"token": {"type_index": -1, "data_index": 0}},
+            }]
+            write_apk(apk, make_metadata(types))
+            with self.assertRaisesRegex(MetadataInventoryError, "field default type index is negative"):
+                inspect_type_tables(apk)
+
+    def test_rejects_negative_target_method_return_type_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "synthetic.apk"
+            types = [{
+                "namespace": "com.geargames.aow.messages",
+                "name": "LoginRequest",
+                "methods": ["get_Token"],
+                "method_signatures": {"get_Token": {"return_type_index": -1}},
+            }]
+            write_apk(apk, make_metadata(types))
+            with self.assertRaisesRegex(MetadataInventoryError, "method return type index is negative"):
+                inspect_type_tables(apk)
+
+    def test_rejects_negative_target_method_parameter_type_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "synthetic.apk"
+            types = [{
+                "namespace": "com.geargames.aow.messages",
+                "name": "LoginRequest",
+                "methods": ["set_Token"],
+                "method_signatures": {
+                    "set_Token": {
+                        "parameters": [{"name": "value", "type_index": -1}],
+                    },
+                },
+            }]
+            write_apk(apk, make_metadata(types))
+            with self.assertRaisesRegex(MetadataInventoryError, "method parameter type index is negative"):
+                inspect_type_tables(apk)
+
 
 if __name__ == "__main__":
     unittest.main()
