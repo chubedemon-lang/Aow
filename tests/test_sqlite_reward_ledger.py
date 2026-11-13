@@ -236,6 +236,7 @@ class DurableRewardTests(unittest.TestCase):
         self.db.execute(
             "UPDATE reward_balances SET quantity=3 WHERE player_id='p1' AND item_id='gem'"
         )
+        self.db.commit()
         with self.assertRaisesRegex(RewardConflict, "receipt totals"):
             self.ledger.verify_integrity()
         self.assertFalse(self.db.in_transaction)
