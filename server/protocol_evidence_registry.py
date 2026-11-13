@@ -25,13 +25,13 @@ _LOCAL_REFERENCE = re.compile(
     r"^(?:issue:[1-9][0-9]*|(?:docs|tests|server|tools)/[A-Za-z0-9_./#-]{1,150})$"
 )
 _REPRODUCTION = re.compile(r"^[A-Za-z0-9_./:# -]{1,512}$")
-_ABSOLUTE_PATH = re.compile(r"(?<!\\S)/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+")
-_PARENT_PATH = re.compile(r"(?:^|[\\s/])\\.\\.(?:/|$)")
-_URI_SCHEME = re.compile(r"\\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+_ABSOLUTE_PATH = re.compile(r"(?<!\S)/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+")
+_PARENT_PATH = re.compile(r"(?:^|[\s/])\.\.(?:/|$)")
+_URI_SCHEME = re.compile(r"\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _IPV4 = re.compile(
     r"(?<![A-Za-z0-9_.])"
     r"(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])"
-    r"(?:\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
+    r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
     r"(?![A-Za-z0-9_.])"
 )
 _IPV6 = re.compile(
@@ -41,7 +41,7 @@ _IPV6 = re.compile(
 )
 _HOSTNAME = re.compile(
     r"(?<![A-Za-z0-9_-])"
-    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
     r"[A-Za-z]{2,}(?::[0-9]{1,5})?"
     r"(?![A-Za-z0-9_-])",
     re.IGNORECASE,
@@ -51,11 +51,11 @@ _LOCALHOST = re.compile(
     re.IGNORECASE,
 )
 _SECRET = re.compile(
-    r"\\b(?:authorization|bearer|token|password|passwd|secret|"
-    r"api[_-]?key|access[_-]?key|refresh[_-]?token)\\s*[:=]\\s*\\S+",
+    r"\b(?:authorization|bearer|token|password|passwd|secret|"
+    r"api[_-]?key|access[_-]?key|refresh[_-]?token)\s*[:=]\s*\S+",
     re.IGNORECASE,
 )
-_RAW_BYTES = re.compile(r"\\b(?:packet|capture|payload)_bytes\\s*[:=]", re.IGNORECASE)
+_RAW_BYTES = re.compile(r"\b(?:packet|capture|payload)_bytes\s*[:=]", re.IGNORECASE)
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.IGNORECASE
 )
