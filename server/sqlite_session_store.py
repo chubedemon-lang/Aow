@@ -86,6 +86,30 @@ class SqliteSessionStore:
             raise SessionError("invalid session")
         return hashlib.sha256(token.encode("ascii")).digest()
 
+    @staticmethod
+    def _validated_stored_session_row(row):
+        """Reject corrupted persisted identity/expiry fields without coercion."""
+        if row is None:
+            return None
+        account_id, created_at, expires_at = row
+        if (type(account_id) is not int
+                or not 1 <= account_id <= _MAX_ACCOUNT_ID):
+            raise SessionError("invalid session")
+        if type(created_at) not in (int, float) or type(expires_at) not in (int, float):
+            raise SessionError("invalid session")
+        try:
+            created = float(created_at)
+            expiry = float(expires_at)
+            latest_expiry = created + _MAX_TTL_SECONDS
+        except (OverflowError, ValueError):
+            raise SessionError("invalid session") from None
+        if (not math.isfinite(created) or created < 0
+                or not math.isfinite(expiry) or expiry <= created
+                or not math.isfinite(latest_expiry) or latest_expiry <= created
+                or expiry > latest_expiry):
+            raise SessionError("invalid session")
+        return account_id, expiry
+
     def issue_in_transaction(self, account_id: int, ttl_seconds=None) -> str:
         """Insert a session without opening or committing the caller's transaction.
 
@@ -133,18 +157,19 @@ class SqliteSessionStore:
         try:
             now = self._now()
             row = self.db.execute(
-                "SELECT account_id, expires_at FROM durable_sessions WHERE token_hash=?",
+                "SELECT account_id, created_at, expires_at "
+                "FROM durable_sessions WHERE token_hash=?",
                 (digest,),
             ).fetchone()
-            if row is None:
-                pass
-            elif now >= float(row[1]):
-                self.db.execute(
-                    "DELETE FROM durable_sessions WHERE token_hash=?", (digest,)
-                )
-                expired = True
-            else:
-                account_id = int(row[0])
+            if row is not None:
+                stored_account_id, expires_at = self._validated_stored_session_row(row)
+                if now >= expires_at:
+                    self.db.execute(
+                        "DELETE FROM durable_sessions WHERE token_hash=?", (digest,)
+                    )
+                    expired = True
+                else:
+                    account_id = stored_account_id
             self.db.commit()
         except BaseException:
             self.db.rollback()
@@ -162,14 +187,16 @@ class SqliteSessionStore:
             raise ValueError("active SQLite transaction required")
         now = self._now()
         row = self.db.execute(
-            "SELECT account_id, expires_at FROM durable_sessions WHERE token_hash=?",
+            "SELECT account_id, created_at, expires_at "
+            "FROM durable_sessions WHERE token_hash=?",
             (digest,),
         ).fetchone()
         if row is None:
             raise SessionError("invalid session")
-        if now >= float(row[1]):
+        account_id, expires_at = self._validated_stored_session_row(row)
+        if now >= expires_at:
             raise SessionError("expired session")
-        return int(row[0])
+        return account_id
 
     def resolve_in_transaction(self, token: str) -> int:
         """Resolve an active token without opening or committing a transaction.
