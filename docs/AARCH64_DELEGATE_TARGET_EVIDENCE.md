@@ -37,6 +37,8 @@ The output never includes candidate pointer values, native addresses, instructio
 - A matching metadata method entry is a static pointer association, not proof that the callback executes at runtime.
 - A pointer to a thunk, shared generic wrapper, runtime-generated method, or non-relocation-backed target may remain unresolved.
 - Bounded method windows can include cold paths or code after early returns. CFG reachability does not evaluate branch conditions.
+- Constructor allowlist suffixes must begin at a namespace/type boundary; a similarly named type is not accepted.
+- If any metadata association for a candidate is malformed, the analyzer does not filter it away to manufacture a unique match. The result stays unresolved or the constructor call is omitted.
 - This does not map registration keys 5004/5005 to wire message IDs, recover message payloads, establish handshake/login semantics, or prove APK/server compatibility.
 
 ## Validation and next step
