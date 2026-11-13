@@ -62,17 +62,19 @@ class StreamReaderTests(unittest.TestCase):
         self.assertEqual(reader.available, 0)
 
     def test_retries_interrupted_receive_without_losing_buffered_prefix(self):
+        reader = make_reader()
+        reader.feed(b"\x02")
         calls = []
 
         def recv(size):
             calls.append(size)
             if len(calls) == 1:
                 raise InterruptedError()
-            return b"\x02xy"
+            return b"xy"
 
-        reader = make_reader()
         self.assertEqual(read_next_frame(reader, recv), b"\x02xy")
-        self.assertEqual(calls, [64, 64])
+        self.assertEqual(calls, [63, 63])
+        self.assertEqual(reader.available, 0)
 
     def test_receive_request_is_capped_by_remaining_buffer_capacity(self):
         reader = make_reader(max_buffer_bytes=4)
@@ -124,6 +126,34 @@ class StreamReaderTests(unittest.TestCase):
         self.assertIsNone(caught.exception.expected)
         self.assertEqual(caught.exception.available, 1)
         self.assertEqual(reader.available, 1)
+
+    def test_drains_complete_frame_before_reporting_truncated_coalesced_tail(self):
+        reader = make_reader()
+        reader.feed(b"\x01A\x03bc")
+
+        self.assertEqual(
+            read_next_frame(reader, lambda _size: self.fail("unexpected recv")),
+            b"\x01A",
+        )
+        with self.assertRaises(TruncatedFrame) as caught:
+            read_next_frame(reader, lambda _size: b"")
+
+        self.assertEqual((caught.exception.expected, caught.exception.available), (4, 3))
+        self.assertEqual(reader.available, 3)
+        self.assertTrue(reader.closed)
+
+    def test_closed_reader_drains_complete_frame_before_clean_eof(self):
+        reader = make_reader()
+        reader.feed(b"\x01A")
+        reader.close()
+
+        self.assertEqual(
+            read_next_frame(reader, lambda _size: self.fail("closed reader received")),
+            b"\x01A",
+        )
+        self.assertIsNone(
+            read_next_frame(reader, lambda _size: self.fail("closed reader received"))
+        )
 
     def test_invalid_receive_types_are_rejected_without_feeding(self):
         for value in (None, bytearray(b"x"), memoryview(b"x"), "x", 1):
