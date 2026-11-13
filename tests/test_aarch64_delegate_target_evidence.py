@@ -225,6 +225,39 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
             {"resolution": "ambiguous_metadata_method"},
         )
 
+    def test_constructor_allowlist_requires_a_type_name_boundary(self):
+        targets = dict(self.targets)
+        targets[self.constructor] = [
+            "com.geargames.common.network.FakeOnMessageReceivedDelegate::.ctor/p2"
+        ]
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        self.assertEqual(self.analyze(code, targets=targets), [])
+
+    def test_malformed_constructor_association_is_not_treated_as_unique(self):
+        targets = dict(self.targets)
+        targets[self.constructor] = [self.constructor_label, None]
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        self.assertEqual(self.analyze(code, targets=targets), [])
+
+    def test_malformed_callback_association_is_not_treated_as_unique(self):
+        targets = dict(self.targets)
+        targets[self.callback] = [self.callback_label, None]
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        result = self.analyze(code, targets=targets)
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unresolved_metadata_method"},
+        )
+
     def test_constructor_target_must_match_allowlist(self):
         code = words(
             adr(2, self.start, self.callback),
