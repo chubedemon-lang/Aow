@@ -321,18 +321,18 @@ class SqliteInventoryStoreTests(unittest.TestCase):
 
         entered = threading.Event()
         release = threading.Event()
-        original_character_id = reader_store._character_id
+        trace_state = {"paused": False}
 
-        def pause_after_item_read(value):
-            if not entered.is_set():
+        def pause_before_snapshot_query(statement):
+            if (not trace_state["paused"]
+                    and "SELECT character_id, capacity, max_stack, revision" in statement):
+                trace_state["paused"] = True
                 entered.set()
-                if not release.wait(5):
-                    raise TimeoutError("test did not release inventory audit")
-            return original_character_id(value)
+                release.wait(5)
 
-        # The audit calls _character_id while consuming inventory_items, after
-        # that SELECT has completed and before it reads inventory_snapshots.
-        reader_store._character_id = pause_after_item_read
+        # SQLite invokes this trace callback after inventory_items was read and
+        # immediately before inventory_snapshots is queried.
+        reader.set_trace_callback(pause_before_snapshot_query)
         outcome = {}
 
         def audit():
@@ -345,14 +345,19 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         thread.start()
         reached_query = entered.wait(5)
         try:
-            self.assertTrue(reached_query, "audit did not reach the paused snapshot query")
-            writer_store.apply(
-                "hero", "during-audit", 1, [("potion", 1)]
-            )
+            if reached_query:
+                writer_store.apply(
+                    "hero", "during-audit", 1, [("potion", 1)]
+                )
         finally:
             release.set()
+            thread.join(5)
+            reader.set_trace_callback(None)
 
-        thread.join(5)
+        self.assertTrue(
+            reached_query,
+            f"audit did not reach the paused snapshot query; outcome={outcome!r}",
+        )
         self.assertFalse(thread.is_alive())
         self.assertNotIn("error", outcome)
         self.assertEqual(
