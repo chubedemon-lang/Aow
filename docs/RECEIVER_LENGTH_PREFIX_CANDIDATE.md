@@ -35,11 +35,11 @@ The callback:
 - rejects negative counts and counts above a caller-selected resource limit;
 - returns `4 + count` for the non-marker candidate branch.
 
-The payload limit is an operational safety choice supplied by the caller. It is not an observed AOW limit. The helper is not wired to a socket, listener, mock HTTP endpoint, login handler or public service.
+The payload limit is an operational safety choice supplied by the caller. It is not an observed AOW limit. `make_four_byte_length_candidate_reader` composes the probe with the generic reader, fixes the probe window at four bytes, and caps the effective payload limit to the available buffer space after the prefix. This factory is still only an in-memory helper: it is not wired to a socket, listener, mock HTTP endpoint, login handler or public service.
 
 ## Tests and non-claims
 
-`tests/test_aow_framing_candidate.py` uses fabricated values and a deliberately synthetic marker sentinel. It exercises signed big-endian parsing, short prefixes, invalid/negative/oversized values, marker rejection, fragmentation, coalescing and truncated EOF through the generic frame reader.
+`tests/test_aow_framing_candidate.py` uses fabricated values and a deliberately synthetic marker sentinel. It exercises signed big-endian parsing, short prefixes, invalid/negative/oversized values, marker rejection, fragmentation, coalescing and truncated EOF through the generic frame reader. Additional tests pass the candidate reader through `read_next_frame` with an in-memory receive callback to cover the composition boundary; they do not create a socket or capture client traffic.
 
 The synthetic override `0x13572468` is not an AOW marker. A separate regression
 test checks the default against the static `HTTP` marker constant. No APK bytes, native library, endpoint, packet capture, credential or proprietary asset is stored in this repository.
