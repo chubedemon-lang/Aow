@@ -407,5 +407,90 @@ class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
         with self.assertRaises(SessionError):
             self.service.get(self.owner_token, 101, "battle-1")
 
+    def test_get_rejects_fractional_persisted_snapshot_values(self):
+        self.create_battle()
+        invalid_values = (
+            ("first_hp", 20.5, 20),
+            ("first_attack", 7.5, 7),
+            ("turn", 0.5, 0),
+            ("revision", 0.5, 0),
+        )
+        for column, invalid, original in invalid_values:
+            with self.subTest(column=column):
+                self.db.execute(
+                    f"UPDATE combat_battles SET {column}=? WHERE battle_id=?",
+                    (invalid, "battle-1"),
+                )
+                with self.assertRaises(CombatStoreError):
+                    self.service.get(self.owner_token, 101, "battle-1")
+                self.assertFalse(self.db.in_transaction)
+                self.db.execute(
+                    f"UPDATE combat_battles SET {column}=? WHERE battle_id=?",
+                    (original, "battle-1"),
+                )
+
+    def test_get_rejects_blob_in_persisted_numeric_field(self):
+        self.create_battle()
+        self.db.execute("PRAGMA ignore_check_constraints = ON")
+        try:
+            self.db.execute(
+                "UPDATE combat_battles SET first_defense=? WHERE battle_id=?",
+                (sqlite3.Binary(b"2"), "battle-1"),
+            )
+        finally:
+            self.db.execute("PRAGMA ignore_check_constraints = OFF")
+        with self.assertRaises(CombatStoreError):
+            self.service.get(self.owner_token, 101, "battle-1")
+        self.assertFalse(self.db.in_transaction)
+
+    def test_get_rejects_revision_turn_mismatch(self):
+        self.create_battle()
+        self.db.execute(
+            "UPDATE combat_battles SET revision=1 WHERE battle_id=?",
+            ("battle-1",),
+        )
+        with self.assertRaisesRegex(
+            CombatStoreError, "revision/turn mismatch"
+        ):
+            self.service.get(self.owner_token, 101, "battle-1")
+        self.assertFalse(self.db.in_transaction)
+
+    def test_terminal_snapshot_requires_matching_persisted_winner(self):
+        battle = Battle(
+            Fighter(101, 1, 10, 0),
+            Fighter(9001, 1, 0, 0),
+            101,
+        )
+        self.service.create(self.owner_token, 101, "terminal", battle)
+        result = self.service.attack(
+            self.owner_token, 101, "terminal", "finish-strict", 0, 101
+        )
+        self.assertEqual(result.event.winner_id, 101)
+        self.assertEqual(
+            self.service.get(self.owner_token, 101, "terminal"),
+            result.snapshot,
+        )
+        self.db.execute(
+            "UPDATE combat_battles SET winner_id=9001 WHERE battle_id=?",
+            ("terminal",),
+        )
+        with self.assertRaisesRegex(
+            CombatStoreError, "winner does not match"
+        ):
+            self.service.get(self.owner_token, 101, "terminal")
+        self.assertFalse(self.db.in_transaction)
+
+    def test_non_terminal_snapshot_rejects_unexpected_winner(self):
+        self.create_battle()
+        self.db.execute(
+            "UPDATE combat_battles SET winner_id=9001 WHERE battle_id=?",
+            ("battle-1",),
+        )
+        with self.assertRaisesRegex(
+            CombatStoreError, "winner does not match"
+        ):
+            self.service.get(self.owner_token, 101, "battle-1")
+        self.assertFalse(self.db.in_transaction)
+
 if __name__ == "__main__":
     unittest.main()
