@@ -26,6 +26,24 @@ class OfflineFrameProbeTests(unittest.TestCase):
         decoder = LengthFrameDecoder(FrameSpec(1, "big"))
         self.assertEqual(decoder.feed(b"\x00\x01x"), [b"", b"x"])
 
+    def test_explicit_zero_payload_cap_accepts_only_empty_frames(self):
+        cases = (
+            (FrameSpec(1, "big", max_payload=0), b"\x00"),
+            (
+                FrameSpec(2, "big", includes_header=True, max_payload=0),
+                b"\x00\x02",
+            ),
+        )
+        for spec, encoded in cases:
+            with self.subTest(spec=spec):
+                decoder = LengthFrameDecoder(spec)
+                self.assertEqual(decoder.feed(encoded), [b""])
+                decoder.finish()
+
+        decoder = LengthFrameDecoder(FrameSpec(1, "big", max_payload=0))
+        with self.assertRaises(FrameDecodeError):
+            decoder.feed(b"\x01")
+
     def test_reject_oversize_and_poison_decoder(self):
         decoder = LengthFrameDecoder(FrameSpec(2, "big", max_payload=3))
         with self.assertRaises(FrameDecodeError):
@@ -110,8 +128,7 @@ class OfflineFrameProbeTests(unittest.TestCase):
         for args in ((3, "big"), (2, "middle")):
             with self.assertRaises(ValueError):
                 FrameSpec(*args)
-        with self.assertRaises(ValueError):
-            FrameSpec(2, "big", max_payload=0)
+        self.assertEqual(FrameSpec(2, "big", max_payload=0).max_payload, 0)
         with self.assertRaises(TypeError):
             LengthFrameDecoder(None)
         with self.assertRaises(TypeError):
