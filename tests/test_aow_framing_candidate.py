@@ -7,8 +7,10 @@ from server.aow_framing_candidate import (
     ReceiverPayloadTooLarge,
     UnsupportedHttpMarkerBranch,
     make_four_byte_length_candidate_probe,
+    make_four_byte_length_candidate_reader,
 )
 from server.frame_reader import CallbackFrameReader, TruncatedFrame
+from server.stream_reader import read_next_frame
 
 
 # Deliberately synthetic override; the default marker is tested separately.
@@ -136,6 +138,98 @@ class ReceiverLengthCandidateTests(unittest.TestCase):
         reader.feed(marker + b"tail")
         with self.assertRaises(UnsupportedHttpMarkerBranch):
             reader.read_frame()
+        self.assertEqual(reader.available, 8)
+
+
+    def test_reader_factory_uses_four_byte_probe_and_buffer_derived_frame_limit(self):
+        reader = make_four_byte_length_candidate_reader(
+            max_payload_bytes=32, max_buffer_bytes=8,
+            http_marker_value=SYNTHETIC_HTTP_MARKER,
+        )
+        reader.feed(b"\\x00\\x00\\x00")
+        self.assertIsNone(reader.read_frame())
+        reader.feed(b"\\x01A")
+        self.assertEqual(reader.read_frame(), candidate_frame(b"A"))
+        self.assertEqual(reader.max_frame_bytes, 8)
+
+    def test_reader_factory_caps_payload_to_buffer_space_after_prefix(self):
+        reader = make_four_byte_length_candidate_reader(
+            max_payload_bytes=32, max_buffer_bytes=6,
+            http_marker_value=SYNTHETIC_HTTP_MARKER,
+        )
+        reader.feed(b"\\x00\\x00\\x00\\x03")
+        with self.assertRaises(ReceiverPayloadTooLarge) as caught:
+            reader.read_frame()
+        self.assertEqual((caught.exception.requested, caught.exception.limit), (3, 2))
+        self.assertEqual(reader.available, 4)
+
+    def test_reader_factory_rejects_buffer_smaller_than_prefix(self):
+        for value in (True, 3, 3.5):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                make_four_byte_length_candidate_reader(
+                    max_payload_bytes=8, max_buffer_bytes=value,
+                    http_marker_value=SYNTHETIC_HTTP_MARKER,
+                )
+
+    def test_stream_adapter_reads_fragmented_candidate_frame(self):
+        reader = make_four_byte_length_candidate_reader(
+            max_payload_bytes=32, max_buffer_bytes=64,
+            http_marker_value=SYNTHETIC_HTTP_MARKER,
+        )
+        chunks = iter((b"\\x00", b"\\x00\\x00", b"\\x03ab", b"c"))
+        requests = []
+
+        def recv(size):
+            requests.append(size)
+            return next(chunks)
+
+        self.assertEqual(
+            read_next_frame(reader, recv, max_chunk_bytes=8),
+            candidate_frame(b"abc"),
+        )
+        self.assertEqual(len(requests), 4)
+        self.assertEqual(reader.available, 0)
+
+    def test_stream_adapter_drains_coalesced_candidate_frames_without_extra_receive(self):
+        reader = make_four_byte_length_candidate_reader(
+            max_payload_bytes=32, max_buffer_bytes=64,
+            http_marker_value=SYNTHETIC_HTTP_MARKER,
+        )
+        first = candidate_frame(b"A")
+        second = candidate_frame(b"BC")
+        calls = []
+
+        def recv(size):
+            calls.append(size)
+            return first + second
+
+        self.assertEqual(read_next_frame(reader, recv), first)
+        self.assertEqual(
+            read_next_frame(reader, lambda _size: self.fail("unexpected receive")),
+            second,
+        )
+        self.assertEqual(calls, [64])
+        self.assertEqual(reader.available, 0)
+
+    def test_stream_adapter_preserves_truncated_candidate_at_eof(self):
+        reader = make_four_byte_length_candidate_reader(
+            max_payload_bytes=32, max_buffer_bytes=64,
+            http_marker_value=SYNTHETIC_HTTP_MARKER,
+        )
+        chunks = iter((b"\\x00\\x00\\x00\\x03a", b""))
+        with self.assertRaises(TruncatedFrame) as caught:
+            read_next_frame(reader, lambda _size: next(chunks))
+        self.assertEqual((caught.exception.expected, caught.exception.available), (7, 5))
+        self.assertEqual(reader.available, 5)
+        self.assertTrue(reader.closed)
+
+    def test_stream_adapter_rejects_static_http_marker_without_consuming_input(self):
+        reader = make_four_byte_length_candidate_reader(
+            max_payload_bytes=32, max_buffer_bytes=64
+        )
+        with self.assertRaises(UnsupportedHttpMarkerBranch) as caught:
+            read_next_frame(reader, lambda _size: b"HTTPtail")
+        self.assertEqual(caught.exception.marker_value, OBSERVED_HTTP_MARKER_VALUE)
         self.assertEqual(reader.available, 8)
 
 
