@@ -78,28 +78,21 @@ def make_metadata(method_names, wrong_owner=False, *, image="ScriptsAssembly.dll
 
 def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
              image="ScriptsAssembly.dll", text_words=()):
-    names = b"\0.shstrtab\0.rodata\0.data.rel.ro\0.text\0.rela.dyn\0"
+    names = b"\\0.shstrtab\\0.rodata\\0.data.rel.ro\\0.text\\0.rela.dyn\\0"
     offsets = {
         name: names.index(name.encode())
         for name in (".shstrtab", ".rodata", ".data.rel.ro", ".text", ".rela.dyn")
     }
-    image_name = image.encode("ascii") + b"\0"
-    ro_off, relro_off, text_off, rela_off, names_off = 0x100, 0x120, 0x220, 0x240, 0x2A0
-    names_end = names_off + len(names)
-    shoff = (names_end + 7) & ~7
-    elf = bytearray(shoff + 6 * 64)
+    image_name = image.encode("ascii") + b"\\0"
+    ro_off, relro_off, text_off, rela_off = 0x100, 0x120, 0x220, 0x280
+    if len(text_words) > 16:
+        raise ValueError("synthetic text window exceeds .text fixture")
+
     relro = bytearray(0x100)
     struct.pack_into("<I", relro, 8, method_count)
     pointer_table = 0x3040
     struct.pack_into("<Q", relro, 16, pointer_table)
-    elf[ro_off:ro_off + len(image_name)] = image_name
-    elf[relro_off:relro_off + len(relro)] = relro
-    elf[text_off:text_off + 0x40] = b"\x1f\x20\x03\xd5" * 16
-    if len(text_words) > 16:
-        raise ValueError("synthetic text window exceeds .text fixture")
-    for index, word in enumerate(text_words):
-        struct.pack_into("<I", elf, text_off + index * 4, word)
-    elf[names_off:names_end] = names
+
     relocations = [(0x3000, (1 << 32) | 1027, 0x2000)]
     if not omit_table:
         relocations.append((0x3010, (1 << 32) | 1027, pointer_table))
@@ -110,8 +103,24 @@ def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
                 target + index * 4,
             ))
     rela_data = b"".join(struct.pack("<QQq", *item) for item in relocations)
+
+    # Keep every synthetic ELF file range disjoint. The previous fixture put
+    # .rela.dyn at 0x240, inside the 0x220..0x260 .text range, silently
+    # overwriting the final eight bytes of longer instruction vectors.
+    names_off = (rela_off + len(rela_data) + 7) & ~7
+    names_end = names_off + len(names)
+    shoff = (names_end + 7) & ~7
+    elf = bytearray(shoff + 6 * 64)
+
+    elf[ro_off:ro_off + len(image_name)] = image_name
+    elf[relro_off:relro_off + len(relro)] = relro
+    elf[text_off:text_off + 0x40] = b"\\x1f\\x20\\x03\\xd5" * 16
+    for index, word in enumerate(text_words):
+        struct.pack_into("<I", elf, text_off + index * 4, word)
     elf[rela_off:rela_off + len(rela_data)] = rela_data
-    ident = b"\x7fELF\x02\x01\x01" + bytes(9)
+    elf[names_off:names_end] = names
+
+    ident = b"\\x7fELF\\x02\\x01\\x01" + bytes(9)
     struct.pack_into(
         "<16sHHIQQQIHHHHHH", elf, 0, ident, 3, 183, 1, 0, 0, shoff, 0,
         64, 56, 0, 64, 6, 1,
@@ -135,7 +144,6 @@ def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
         start = shoff + index * 64
         elf[start:start + 64] = item
     return bytes(elf)
-
 
 class NativeMethodEvidenceTests(unittest.TestCase):
     def test_maps_named_methods_to_executable_entries(self):
