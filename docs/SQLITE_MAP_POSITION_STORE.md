@@ -21,7 +21,7 @@ Every successful transition increments the revision exactly once.
 
 ## Transaction and retry semantics
 
-Each transition and its receipt are committed in one SQLite BEGIN IMMEDIATE transaction. A request ID is globally unique within this store:
+A standalone create or enter/move/leave transition uses one SQLite BEGIN IMMEDIATE transaction. When the caller already owns a transaction, each operation uses a private savepoint: success releases only that savepoint, while failure rolls back only that operation and leaves the outer transaction open. The caller remains responsible for the outer commit or rollback. A request ID is globally unique within this store:
 
 - An exact retry returns the original committed snapshot, even if later transitions have advanced the current state.
 - Reusing a request ID for another character, operation, expected revision, map, or coordinate is rejected.
