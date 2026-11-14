@@ -69,6 +69,9 @@ on:
       - 'server/sqlite_map_position_store.py'
       - 'tests/test_sqlite_map_position_store.py'
       - 'docs/SQLITE_MAP_POSITION_STORE.md'
+      - 'server/sqlite_authorized_map_position_service.py'
+      - 'tests/test_sqlite_authorized_map_position_service.py'
+      - 'docs/AUTHORIZED_MAP_POSITION_SERVICE.md'
       - 'server/sqlite_authorized_transaction.py'
       - 'tests/test_sqlite_authorized_player_state_service.py'
       - 'docs/AUTHORIZED_PLAYER_STATE_SERVICE.md'
@@ -222,3 +225,18 @@ jobs:
         run: python -m py_compile server/sqlite_authorized_transaction.py
       - name: Session/character transaction integration tests (synthetic only)
         run: python -m unittest discover -s tests -p 'test_sqlite_authorized_player_state_service.py' -v
+
+  authorized-map-position:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile authorized map-position service
+        run: python -m py_compile server/sqlite_authorized_map_position_service.py
+      - name: Session/character/map transaction integration tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_sqlite_authorized_map_position_service.py' -v
