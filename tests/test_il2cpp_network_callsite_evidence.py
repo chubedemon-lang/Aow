@@ -210,7 +210,7 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         summary = report["callsite_summary"][0]["delegate_constructor_argument_shape"]
         self.assertTrue(summary["argument_pointer_dereferenced"])
         self.assertTrue(summary["argument_pointer_retained_on_receiver"])
-        self.assertTrue(summary["dereferenced_value_retained_on_receiver"])
+        self.assertTrue(summary["dereferenced_value_retained_on_receiver"], summary)
         rendered = json.dumps(summary)
         self.assertNotIn("0x28", rendered)
         self.assertNotIn("0x10", rendered)
