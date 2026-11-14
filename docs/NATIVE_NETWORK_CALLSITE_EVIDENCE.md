@@ -277,3 +277,37 @@ callsite summary is bounded and redacted; it is not a control-flow proof.
 Continue to treat `HeaderLength` use and the sender/receiver framing
 relationship as unresolved until a private APK pass or authorized local
 fixture establishes them.
+
+
+## Fresh authorized offline APK re-verification — 2026-11-14
+
+The original APK was re-materialized into a private workspace and read successfully. Its SHA-256 matched the established fingerprint; the ZIP integrity test passed for all 7,368 entries, with no duplicate entry names. The IL2CPP metadata is version 31 and contains 31,187 type definitions, 197,631 method definitions and 165 metadata images. The bounded AArch64 codegen pass matched all 165 image names to native codegen module records and resolved 164,023 relocation-backed executable method-pointer slots. This is static registration evidence only; no binary, extracted asset, raw address, instruction word, endpoint or packet data was committed.
+
+### Receiver and message-type lookup path
+
+A fresh bounded disassembly of `Receiver.Cycle` confirms two direct `SimpleDeserializer.deserializeInt` callsites:
+
+- The first follows a four-byte receive-buffer setup/copy. Its result is used as the subsequent read/copy count on the non-HTTP branch. Together with the previously checked primitive helper bodies, this supports a four-byte big-endian receive-length candidate, not a complete verified frame.
+- The second integer is passed as the key argument to a lookup helper using an object loaded from static state. The lookup occurs before the decompression path, `MessageMeta` construction and receiver-queue handoff. The lookup target and object owner are not yet resolved, so this integer is **not** labeled a numeric wire message ID.
+
+The metadata confirms that `MessageHelper` declares both `m_messageTypeByMessageClass` and `m_messageClassByMessageType`. The current native data-flow pass does not yet prove that the receiver-side lookup object is either of those exact fields. The owner-resolution step remains open.
+
+### Login and session-restore serializer callsites
+
+The fresh bounded entry-window pass reproduced the existing LoginRequest direct primitive-helper counts:
+
+- Serializer: 19 `serializeInt`, 16 `serializeString`, 2 `serializeLong`, 1 `serializeBoolean`.
+- Deserializer: 14 `deserializeInt`, 16 `deserializeString`, 2 `deserializeLong`, 1 `deserializeBoolean`.
+
+It also produced the following SessionRestoreRequest counts:
+
+- Serializer: 5 `serializeInt`, 2 `serializeString`.
+- Deserializer: 4 `deserializeInt`, 2 `deserializeString`.
+
+These are direct helper **callsite counts in bounded native entry windows**, not runtime execution counts, field counts, serializer order, or a reconstructed message schema. Branches and helper indirection can affect the relationship between callsites and serialized values. No LoginRequest or SessionRestoreRequest field order is inferred.
+
+### Remaining limits
+
+The `NetworkSettings` initializer is mapped, but the native field-offset relationship needed to attribute a runtime value to `HeaderLength` is still unresolved. The receiver lookup object owner, numeric wire IDs, compression/encryption placement, complete sender/receiver symmetry, LoginRequest field order, handshake order and authentication ownership remain unverified. No authorized client-side wire fixture or end-to-end test with the unchanged APK was available in this pass.
+
+The transport adapter therefore remains disabled. This re-verification adds static evidence and narrows the next tracing task; it does not establish APK/server compatibility.
