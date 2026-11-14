@@ -11,6 +11,25 @@ from server.sqlite_reward_ledger import RewardConflict, SqliteRewardLedger
 _MAX_SQLITE_INTEGER = 2**63 - 1
 
 
+class _NoFetchallCursor(sqlite3.Cursor):
+    def fetchall(self):
+        if getattr(self.connection, "forbid_fetchall", False):
+            raise AssertionError("integrity audit must stream SQLite rows")
+        return super().fetchall()
+
+
+class _NoFetchallConnection(sqlite3.Connection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.forbid_fetchall = False
+
+    def cursor(self, factory=None):
+        return super().cursor(factory or _NoFetchallCursor)
+
+    def execute(self, sql, parameters=()):
+        return self.cursor().execute(sql, parameters)
+
+
 class DurableRewardTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -240,6 +259,82 @@ class DurableRewardTests(unittest.TestCase):
         with self.assertRaisesRegex(RewardConflict, "receipt totals"):
             self.ledger.verify_integrity()
         self.assertFalse(self.db.in_transaction)
+
+
+    def test_integrity_streams_receipts_and_quest_rows_without_fetchall(self):
+        connection = sqlite3.connect(self.path, factory=_NoFetchallConnection)
+        try:
+            ledger = QuestAwardLedger(connection)
+            for quest_id in range(40):
+                ledger.grant_quest_once(
+                    "quest-" + str(quest_id), "p1", quest_id, "gem", 1
+                )
+            ledger.grant_once("generic", "p1", 0, "gem", 2)
+
+            connection.forbid_fetchall = True
+            self.assertEqual(
+                ledger.verify_integrity(),
+                {"balances": 1, "receipts": 41, "quest_award_keys": 40},
+            )
+        finally:
+            connection.forbid_fetchall = False
+            connection.close()
+
+    def test_integrity_detects_duplicate_legacy_receipt_ids(self):
+        legacy = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(legacy.close)
+        legacy.executescript(
+            """CREATE TABLE reward_balances (
+                   player_id TEXT, item_id TEXT, quantity INTEGER);
+               CREATE TABLE reward_receipts (
+                   request_id TEXT, player_id TEXT, quest_id INTEGER,
+                   item_id TEXT, quantity INTEGER);
+               INSERT INTO reward_balances VALUES ('p1', 'gem', 2);
+               INSERT INTO reward_receipts VALUES ('r1', 'p1', 1, 'gem', 1);
+               INSERT INTO reward_receipts VALUES ('r1', 'p1', 1, 'gem', 1);"""
+        )
+        ledger = SqliteRewardLedger(legacy)
+        with self.assertRaisesRegex(RewardConflict, "duplicate stored reward request id"):
+            ledger.verify_integrity()
+
+    def test_integrity_detects_duplicate_legacy_balance_keys(self):
+        legacy = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(legacy.close)
+        legacy.executescript(
+            """CREATE TABLE reward_balances (
+                   player_id TEXT, item_id TEXT, quantity INTEGER);
+               CREATE TABLE reward_receipts (
+                   request_id TEXT, player_id TEXT, quest_id INTEGER,
+                   item_id TEXT, quantity INTEGER);
+               INSERT INTO reward_balances VALUES ('p1', 'gem', 1);
+               INSERT INTO reward_balances VALUES ('p1', 'gem', 1);
+               INSERT INTO reward_receipts VALUES ('r1', 'p1', 1, 'gem', 2);"""
+        )
+        ledger = SqliteRewardLedger(legacy)
+        with self.assertRaisesRegex(RewardConflict, "duplicate stored reward balance"):
+            ledger.verify_integrity()
+
+    def test_integrity_detects_duplicate_legacy_quest_keys(self):
+        legacy = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(legacy.close)
+        legacy.executescript(
+            """CREATE TABLE reward_balances (
+                   player_id TEXT, item_id TEXT, quantity INTEGER);
+               CREATE TABLE reward_receipts (
+                   request_id TEXT, player_id TEXT, quest_id INTEGER,
+                   item_id TEXT, quantity INTEGER);
+               CREATE TABLE quest_award_keys (
+                   player_id TEXT, quest_id INTEGER, item_id TEXT,
+                   request_id TEXT, quantity INTEGER);
+               INSERT INTO reward_balances VALUES ('p1', 'gem', 2);
+               INSERT INTO reward_receipts VALUES ('r1', 'p1', 1, 'gem', 1);
+               INSERT INTO reward_receipts VALUES ('r2', 'p1', 1, 'gem', 1);
+               INSERT INTO quest_award_keys VALUES ('p1', 1, 'gem', 'r1', 1);
+               INSERT INTO quest_award_keys VALUES ('p1', 1, 'gem', 'r2', 1);"""
+        )
+        ledger = QuestAwardLedger(legacy)
+        with self.assertRaisesRegex(RewardConflict, "duplicate stored quest-award key"):
+            ledger.verify_integrity()
 
 
 if __name__ == "__main__":
