@@ -170,6 +170,32 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
             },
         )
 
+    def test_non_relative_cell_relocation_blocks_static_memory_fallback(self):
+        pointer_slot = 0x9000
+        data_cell = 0xA000
+        encoded_token = 0x60000000 | ((321 << 1) | 1)
+        code = words(
+            adrp(8, self.start, pointer_slot),
+            ldr_x(8, 8, 0x6F0),
+            ldr_x(2, 8),
+            bl(self.start + 12, self.constructor),
+        )
+        result = self.analyze(
+            code,
+            relocations={
+                pointer_slot + 0x6F0: (R_AARCH64_RELATIVE, data_cell),
+                data_cell: (1025, 0xB000),
+            },
+            static_memory_values={data_cell: encoded_token},
+            encoded_method_usage_targets={
+                encoded_token: [self.callback],
+            },
+        )
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unknown"},
+        )
+
     def test_ambiguous_encoded_method_usage_is_not_named(self):
         pointer_slot = 0x9000
         data_cell = 0xA000
