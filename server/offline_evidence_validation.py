@@ -42,9 +42,11 @@ _LOCAL_FILE_SUFFIXES = frozenset({
 # location of captures even when no network host or credential is present.
 # Repository-relative references remain usable and are intentionally not
 # matched by these patterns.
+# Also reject shell-home paths (~/...) and POSIX double-slash roots (//host/share).
 _ABSOLUTE_PATH = re.compile(
     r"(?<![A-Za-z0-9])(?:"
-    r"/(?:[^/\s]+/)*[^/\s]+"
+    r"~[\\/][^\s]+"
+    r"|/{1,}(?:[^/\s]+/)*[^/\s]+"
     r"|[A-Za-z]:[\\/][^\s]+"
     r"|\\\\[^\\/\s]+[\\/][^\s]+"
     r")"
