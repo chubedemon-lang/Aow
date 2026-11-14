@@ -307,6 +307,92 @@ class SqlitePlayerStateStoreTests(unittest.TestCase):
             0,
         )
 
+    def test_create_failure_inside_caller_transaction_rolls_back_only_operation(self):
+        self.db.execute("CREATE TABLE caller_work (value TEXT)")
+        self.db.execute(
+            """CREATE TRIGGER reject_nested_player_creation_receipt
+               BEFORE INSERT ON player_state_creations
+               BEGIN SELECT RAISE(ABORT, 'blocked'); END"""
+        )
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_work VALUES ('before')")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.create("nested-hero", currency=50)
+
+        self.assertTrue(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM player_state_snapshots "
+                "WHERE character_id='nested-hero'"
+            ).fetchone()[0],
+            0,
+        )
+        self.db.execute("INSERT INTO caller_work VALUES ('after')")
+        self.db.commit()
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM caller_work").fetchone()[0],
+            2,
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM player_state_creations "
+                "WHERE character_id='nested-hero'"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_apply_failure_inside_caller_transaction_rolls_back_only_operation(self):
+        self.store.create("hero", currency=20)
+        self.db.execute("CREATE TABLE caller_work (value TEXT)")
+        self.db.execute(
+            """CREATE TRIGGER reject_nested_player_mutation
+               BEFORE INSERT ON player_state_mutations
+               BEGIN SELECT RAISE(ABORT, 'blocked'); END"""
+        )
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_work VALUES ('before')")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.apply("hero", "nested-failure", 0, currency_delta=-5)
+
+        self.assertTrue(self.db.in_transaction)
+        current = self.store.get("hero")
+        self.assertEqual((current.currency, current.revision), (20, 0))
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM player_state_mutations "
+                "WHERE request_id='nested-failure'"
+            ).fetchone()[0],
+            0,
+        )
+        self.db.execute("INSERT INTO caller_work VALUES ('after')")
+        self.db.commit()
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM caller_work").fetchone()[0],
+            2,
+        )
+        self.assertEqual(self.store.get("hero").currency, 20)
+
+    def test_successful_operations_join_caller_transaction_without_committing_it(self):
+        self.store.create("hero", currency=10)
+        self.db.execute("BEGIN")
+        self.store.create("other")
+        self.store.apply("hero", "nested-success", 0, currency_delta=3)
+
+        self.assertTrue(self.db.in_transaction)
+        self.assertEqual(self.store.get("hero").currency, 13)
+        self.db.rollback()
+
+        self.assertEqual(self.store.get("hero").currency, 10)
+        with self.assertRaises(PlayerNotFound):
+            self.store.get("other")
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM player_state_mutations "
+                "WHERE request_id='nested-success'"
+            ).fetchone()[0],
+            0,
+        )
+
     def test_legacy_schema_migrates_as_unanchored(self):
         legacy_path = os.path.join(self.temp.name, "legacy.sqlite3")
         legacy = sqlite3.connect(legacy_path, isolation_level=None)
