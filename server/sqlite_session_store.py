@@ -324,6 +324,13 @@ class SqliteSessionStore:
             if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
                 raise SessionError("invalid session store")
 
+            duplicate_digest = self.db.execute(
+                "SELECT 1 FROM durable_sessions "
+                "GROUP BY token_hash HAVING COUNT(*) > 1 LIMIT 1"
+            ).fetchone()
+            if duplicate_digest is not None:
+                raise SessionError("invalid session store")
+
             session_count = 0
             rows = self.db.execute(
                 "SELECT token_hash, account_id, created_at, expires_at "

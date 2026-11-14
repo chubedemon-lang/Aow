@@ -87,3 +87,8 @@ transaction on success or failure. In WAL mode, concurrent commits from other
 connections do not change the snapshot being audited; a later audit observes
 those commits. This is persistence diagnostics for synthetic server sessions,
 not APK authentication evidence.
+
+The audit also rejects duplicate token digests in legacy tables that lack the
+current primary-key constraint. Duplicate digests could make one bearer token
+resolve ambiguously to more than one account; the audit reports corruption and
+leaves all rows untouched.
