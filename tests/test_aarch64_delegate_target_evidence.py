@@ -382,6 +382,27 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
             self.analyze(valid, target_prefixes=())
 
 
+    def test_rejects_start_addresses_outside_unsigned_64_bit_space(self):
+        valid = words(0xD503201F)
+        for start in (True, -4, 1 << 64):
+            with self.subTest(start=start), self.assertRaises(ValueError):
+                self.analyze(valid, start_va=start)
+
+    def test_rejects_code_window_that_wraps_unsigned_64_bit_space(self):
+        # The first instruction fits at the highest aligned address, but the
+        # second instruction would wrap the 64-bit virtual-address space.
+        code = words(0xD503201F, 0xD503201F)
+        with self.assertRaises(ValueError):
+            self.analyze(code, start_va=0xFFFFFFFFFFFFFFFC)
+
+    def test_accepts_code_window_ending_at_highest_aligned_address(self):
+        code = words(0xD503201F, 0xD503201F)
+        self.assertEqual(
+            self.analyze(code, start_va=0xFFFFFFFFFFFFFFF8),
+            [],
+        )
+
+
 
     def test_constructor_argument_shape_reports_dereference_and_retention_without_offsets(self):
         code = words(

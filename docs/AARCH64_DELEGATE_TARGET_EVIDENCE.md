@@ -20,6 +20,14 @@ Within a bounded method window, the pass follows only:
 
 The pass uses the existing bounded intraprocedural CFG. Register state crosses a block boundary only through one reachable forward predecessor. Joins and backedges discard state. Direct/indirect calls clobber caller-saved registers; unrecognized instructions clear the modeled state. Unsupported forms remain unresolved rather than being guessed.
 
+## Input address bounds
+
+The analysis window start must be an exact, non-boolean unsigned 64-bit
+address aligned to four bytes. For a non-empty window, the address of its
+last instruction must also remain inside the unsigned 64-bit address space.
+Windows that would wrap the address space are rejected before instruction
+decoding; addresses are never silently reduced modulo 2^64.
+
 ## Redacted output
 
 Each matching constructor callsite reports relative instruction/block indexes and one of these states for the configured candidate register:

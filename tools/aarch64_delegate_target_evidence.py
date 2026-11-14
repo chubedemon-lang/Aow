@@ -151,8 +151,14 @@ def summarize_delegate_method_pointer_arguments(
         raise ValueError("AArch64 code window must be a multiple of four bytes")
     if len(code) > _MAX_CODE_WINDOW_BYTES:
         raise ValueError("AArch64 code window exceeds the 64 KiB analysis limit")
-    if type(start_va) is not int or start_va < 0 or start_va % 4:
-        raise ValueError("AArch64 code window start must be an aligned address")
+    if type(start_va) is not int or not 0 <= start_va <= _MASK64 or start_va % 4:
+        raise ValueError(
+            "AArch64 code window start must be an aligned unsigned 64-bit address"
+        )
+    if code and start_va > _MASK64 - (len(code) - 4):
+        raise ValueError(
+            "AArch64 code window exceeds the unsigned 64-bit address space"
+        )
     if not isinstance(method_targets, dict) or not isinstance(relocations, dict):
         raise ValueError("method_targets and relocations must be mappings")
     if descriptor_method_targets is not None:
