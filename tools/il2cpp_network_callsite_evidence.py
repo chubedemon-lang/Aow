@@ -103,6 +103,9 @@ def _metadata_usage_static_values(elf, sections, relocations, metadata_version):
         ):
             continue
         target = relocation[1]
+        # A cell with its own relocation is not a stable file-backed word.
+        if target in relocations:
+            continue
         for section in data_sections:
             if not _contains(section, target, 8):
                 continue
@@ -142,10 +145,13 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
     allowlist[("", "<StartConnectToServer>d__12")] = {"MoveNext"}
     # Keep the two startup message callbacks explicit; their numeric registration
     # constants remain redacted from public reports.
-    allowlist[(
+    loading_presenter_key = (
         "com.geargames.aow.gui.loadingwindow",
         "GUILoadingPvpStartPresenter",
-    )] = {"OnProgressAnswer", "OnProgressNotification"}
+    )
+    allowlist[loading_presenter_key] = set(
+        allowlist.get(loading_presenter_key, ())
+    ) | {"OnProgressAnswer", "OnProgressNotification"}
     methods = [
         method for method in _network_methods(metadata, info, allowlist)
         if method["category"] != "login_session_serializer"
