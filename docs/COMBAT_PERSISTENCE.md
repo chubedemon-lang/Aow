@@ -67,3 +67,19 @@ requests, and schema fail-closed behavior.
 
 All fighter stats and IDs remain synthetic. No APK packet, combat catalog,
 asset, or original-game rule is inferred here.
+
+## Strict persisted snapshot decoding — 2026-11-14
+
+The authorized combat facade now validates persisted SQLite rows without lossy
+`int()` or `str()` coercion before returning a battle snapshot. Numeric
+storage values must be actual integers within the synthetic fighter/turn
+bounds; REAL and BLOB values are rejected. Revision must equal the battle
+turn. The persisted winner column is checked against the terminal battle
+state: a non-terminal battle must have two living fighters and no winner, while
+a terminal battle must have exactly one defeated fighter and the living winner
+must be the next actor.
+
+Regression tests cover fractional numeric values, a BLOB in a numeric field,
+revision/turn mismatch, a valid terminal snapshot, and mismatched winner
+metadata. This is synthetic persistence validation only; it does not define
+AOW combat fields, damage rules, message schemas, or wire compatibility.
