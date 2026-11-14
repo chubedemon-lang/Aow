@@ -130,6 +130,7 @@ def summarize_delegate_method_pointer_arguments(
     *,
     target_prefixes=("OnMessageReceivedDelegate::.ctor",),
     argument_registers=(2,),
+    descriptor_method_targets=None,
 ):
     """Summarize candidate method-pointer arguments at delegate constructors.
 
@@ -139,9 +140,12 @@ def summarize_delegate_method_pointer_arguments(
     relocations from the same authorized offline analysis pass.
 
     A unique metadata method label is emitted only when the tracked register
-    value exactly matches one metadata-backed executable entry. Missing,
-    ambiguous, or unsupported values are reported without publishing the
-    underlying address.
+    value exactly matches one metadata-backed executable entry, or when an
+    explicitly supplied descriptor-to-method mapping resolves it to exactly
+    one such entry. The descriptor mapping must come from the same authorized
+    offline analysis pass; this function does not infer object layouts.
+    Missing, ambiguous, or unsupported values remain unresolved without
+    publishing the underlying address.
     """
     if not isinstance(code, bytes) or len(code) % 4:
         raise ValueError("AArch64 code window must be a multiple of four bytes")
@@ -151,6 +155,8 @@ def summarize_delegate_method_pointer_arguments(
         raise ValueError("AArch64 code window start must be an aligned address")
     if not isinstance(method_targets, dict) or not isinstance(relocations, dict):
         raise ValueError("method_targets and relocations must be mappings")
+    if descriptor_method_targets is not None and not isinstance(descriptor_method_targets, dict):
+        raise ValueError("descriptor_method_targets must be a mapping")
     if (
         not isinstance(target_prefixes, (tuple, list, set, frozenset))
         or not target_prefixes
@@ -287,22 +293,68 @@ def summarize_delegate_method_pointer_arguments(
                         if register not in registers:
                             pointer_arguments[name] = {"resolution": "unknown"}
                             continue
-                        candidate_labels = _method_labels(
-                            method_targets.get(registers[register], ())
-                        )
-                        if len(candidate_labels) == 1:
-                            pointer_arguments[name] = {
-                                "resolution": "unique_metadata_method",
-                                "method": candidate_labels[0],
-                            }
-                        elif len(candidate_labels) > 1:
-                            pointer_arguments[name] = {
-                                "resolution": "ambiguous_metadata_method"
-                            }
+                        candidate_value = registers[register]
+                        # A descriptor association, when explicitly supplied,
+                        # takes precedence over direct-entry matching. The
+                        # mapping is caller-derived from the same private
+                        # offline pass; this analyzer never guesses a layout.
+                        if (
+                            descriptor_method_targets is not None
+                            and candidate_value in descriptor_method_targets
+                        ):
+                            descriptor_targets = descriptor_method_targets[candidate_value]
+                            if type(descriptor_targets) is int:
+                                descriptor_targets = (descriptor_targets,)
+                            if (
+                                not isinstance(descriptor_targets, (tuple, list))
+                                or not descriptor_targets
+                                or any(
+                                    type(item) is not int or not 0 <= item <= _MASK64
+                                    for item in descriptor_targets
+                                )
+                            ):
+                                pointer_arguments[name] = {
+                                    "resolution": "unresolved_metadata_method"
+                                }
+                            elif len(descriptor_targets) != 1:
+                                pointer_arguments[name] = {
+                                    "resolution": "ambiguous_metadata_method"
+                                }
+                            else:
+                                descriptor_labels = _method_labels(
+                                    method_targets.get(descriptor_targets[0], ())
+                                )
+                                if len(descriptor_labels) == 1:
+                                    pointer_arguments[name] = {
+                                        "resolution": "unique_metadata_method",
+                                        "method": descriptor_labels[0],
+                                        "via": "descriptor_metadata",
+                                    }
+                                elif len(descriptor_labels) > 1:
+                                    pointer_arguments[name] = {
+                                        "resolution": "ambiguous_metadata_method"
+                                    }
+                                else:
+                                    pointer_arguments[name] = {
+                                        "resolution": "unresolved_metadata_method"
+                                    }
                         else:
-                            pointer_arguments[name] = {
-                                "resolution": "unresolved_metadata_method"
-                            }
+                            candidate_labels = _method_labels(
+                                method_targets.get(candidate_value, ())
+                            )
+                            if len(candidate_labels) == 1:
+                                pointer_arguments[name] = {
+                                    "resolution": "unique_metadata_method",
+                                    "method": candidate_labels[0],
+                                }
+                            elif len(candidate_labels) > 1:
+                                pointer_arguments[name] = {
+                                    "resolution": "ambiguous_metadata_method"
+                                }
+                            else:
+                                pointer_arguments[name] = {
+                                    "resolution": "unresolved_metadata_method"
+                                }
                     observations.append({
                         "linear_window_call_ordinal": call_ordinals[instruction_index],
                         "control_flow_block_index": block_index,
