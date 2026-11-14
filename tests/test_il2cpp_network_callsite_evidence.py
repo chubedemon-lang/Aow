@@ -207,6 +207,7 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
             ),
             make_elf(1, text_words=code),
         )
+        self.assertEqual(report["callsite_summary"][0]["entry_window_bytes"], 64)
         summary = report["callsite_summary"][0]["delegate_constructor_argument_shape"]
         self.assertTrue(summary["argument_pointer_dereferenced"])
         self.assertTrue(summary["argument_pointer_retained_on_receiver"])
