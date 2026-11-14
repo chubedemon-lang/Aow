@@ -72,6 +72,12 @@ on:
       - 'server/sqlite_authorized_map_position_service.py'
       - 'tests/test_sqlite_authorized_map_position_service.py'
       - 'docs/AUTHORIZED_MAP_POSITION_SERVICE.md'
+      - 'server/character_snapshot.py'
+      - 'server/sqlite_authorized_character_service.py'
+      - 'server/sqlite_authorized_world_state_service.py'
+      - 'server/sqlite_authorized_player_bootstrap_service.py'
+      - 'tests/test_character_snapshot_validation.py'
+      - 'docs/CHARACTER_LIFECYCLE.md'
       - 'server/sqlite_authorized_transaction.py'
       - 'tests/test_sqlite_authorized_player_state_service.py'
       - 'docs/AUTHORIZED_PLAYER_STATE_SERVICE.md'
@@ -240,3 +246,23 @@ jobs:
         run: python -m py_compile server/sqlite_authorized_map_position_service.py
       - name: Session/character/map transaction integration tests (synthetic only)
         run: python -m unittest discover -s tests -p 'test_sqlite_authorized_map_position_service.py' -v
+
+  character-snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile shared character snapshot decoder and authorized readers
+        run: |
+          python -m py_compile \\
+            server/character_snapshot.py \\
+            server/sqlite_authorized_character_service.py \\
+            server/sqlite_authorized_world_state_service.py \\
+            server/sqlite_authorized_player_bootstrap_service.py
+      - name: Strict persisted character snapshot tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_character_snapshot_validation.py' -v
