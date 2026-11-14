@@ -17,6 +17,28 @@ from server.sqlite_map_position_store import (
 from server.synthetic_map_position import MapPosition, Position
 
 
+class _NoMaterializedMapAuditCursor(sqlite3.Cursor):
+    def execute(self, sql, parameters=()):
+        self._audit_sql = " ".join(str(sql).lower().split())
+        return super().execute(sql, parameters)
+
+    def fetchall(self):
+        if ("from map_position_snapshots" in getattr(self, "_audit_sql", "")
+                or "from map_position_mutations" in getattr(self, "_audit_sql", "")):
+            raise AssertionError("map integrity audit must stream table rows")
+        return super().fetchall()
+
+
+class _NoMaterializedMapAuditConnection(sqlite3.Connection):
+    def cursor(self, factory=_NoMaterializedMapAuditCursor):
+        return super().cursor(factory)
+
+    def execute(self, sql, parameters=()):
+        cursor = self.cursor()
+        cursor.execute(sql, parameters)
+        return cursor
+
+
 class SqliteMapPositionStoreTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -226,6 +248,27 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
             "SELECT count(*) FROM caller_work"
         ).fetchone()[0], 0)
 
+
+    def test_integrity_audit_streams_snapshot_and_mutation_rows(self):
+        self.store.create("hero")
+        self.store.enter("hero", "enter-stream", 0, 2, 10, -4)
+        self.store.move("hero", "move-stream", 1, 2, 12, -3)
+        self.store.create("alt")
+        self.store.enter("alt", "enter-alt-stream", 0, 7, 0, 0)
+
+        streaming_db = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None,
+            factory=_NoMaterializedMapAuditConnection,
+        )
+        try:
+            streaming_store = SqliteMapPositionStore(streaming_db)
+            self.assertEqual(
+                streaming_store.verify_integrity(),
+                {"snapshots": 2, "mutations": 3},
+            )
+            self.assertFalse(streaming_db.in_transaction)
+        finally:
+            streaming_db.close()
 
     def test_integrity_audit_replays_complete_history(self):
         self.store.create("hero")
