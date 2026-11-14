@@ -163,6 +163,33 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             ["Cycle", "DoStreamReadedBytes"],
         )
 
+    def test_message_helper_dictionary_roots_are_reported(self):
+        method_names = (
+            "EnsureLoadDictionary",
+            "GetMessageTypeName",
+            "GetMessageClassName",
+        )
+        report = inspect_bytes(
+            make_metadata(method_names, type_name="MessageHelper"),
+            make_elf(len(method_names)),
+        )
+        self.assertEqual(report["observed_network_methods"], len(method_names))
+        observed = {
+            (item["type"], item["method"])
+            for item in report["network_callsite_summary"]
+        }
+        self.assertEqual(
+            observed,
+            {("MessageHelper", name) for name in method_names},
+        )
+        self.assertTrue(all(
+            item["entry_window_bytes"] == 4
+            for item in report["network_callsite_summary"]
+        ))
+        rendered = json.dumps(report["network_callsite_summary"])
+        self.assertNotIn("0x5000", rendered)
+        self.assertNotIn("0x5004", rendered)
+
     def test_missing_relocation_is_not_guessed(self):
         report = inspect_bytes(
             make_metadata(["Cycle", "DoStreamReadedBytes"]),
