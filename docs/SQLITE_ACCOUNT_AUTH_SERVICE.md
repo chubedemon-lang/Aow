@@ -28,9 +28,12 @@ bounded; that test setting is not the production default.
 credentials, malformed credential rows and wrong passwords. Unknown-account
 paths perform a dummy PBKDF2 derivation to reduce obvious timing differences.
 
-The expensive KDF runs before acquiring SQLite's writer lock. After successful
-verification, the service starts `BEGIN IMMEDIATE`, re-reads the credential
-and rejects the request if it changed, then calls
+The expensive KDF runs before acquiring SQLite's writer lock. Username lookup
+is bounded to two rows and fails closed unless exactly one account matches;
+this protects legacy account tables that do not enforce `UNIQUE(username)`
+from arbitrary `fetchone()` selection. After successful verification, the
+service starts `BEGIN IMMEDIATE`, re-reads the credential and again requires
+one unambiguous username match before calling
 `SqliteSessionStore.issue_in_transaction`. Credential recheck and durable
 session insertion commit together.
 
