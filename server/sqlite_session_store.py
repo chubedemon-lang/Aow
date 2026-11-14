@@ -245,6 +245,28 @@ class SqliteSessionStore:
             self.db.rollback()
             raise
 
+    def revoke_all_for_account(self, account_id: int) -> int:
+        """Revoke every session for one account and return the number removed.
+
+        This is the synthetic server-side equivalent of logging out all devices.
+        It removes active and expired rows alike. BEGIN IMMEDIATE serializes the
+        revocation with authorized_transaction() on other SQLite connections.
+        """
+        if (type(account_id) is not int
+                or not 1 <= account_id <= _MAX_ACCOUNT_ID):
+            raise ValueError("invalid account id")
+
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            result = self.db.execute(
+                "DELETE FROM durable_sessions WHERE account_id=?", (account_id,)
+            )
+            self.db.commit()
+            return result.rowcount
+        except BaseException:
+            self.db.rollback()
+            raise
+
     def purge_expired(self, batch_size=None) -> int:
         """Delete expired sessions, optionally bounding one cleanup transaction.
 
