@@ -1,7 +1,8 @@
 """Synthetic-only connection gate tests; no APK protocol assumptions."""
+from dataclasses import FrozenInstanceError
 import unittest
 
-from server.synthetic_connection_gate import ConnectionGate
+from server.synthetic_connection_gate import ConnectionGate, SessionSnapshot
 from server.synthetic_handshake import HandshakeError, Phase as HandshakePhase
 from server.synthetic_session import Phase, SessionError
 
@@ -65,6 +66,37 @@ class ConnectionGateTests(unittest.TestCase):
         with self.assertRaises(SessionError):
             gate.authenticate("account")
         self.assertIsNone(gate.session.account_id)
+
+    def test_session_is_a_frozen_snapshot_not_a_mutable_handle(self):
+        gate = ConnectionGate()
+        snapshot = gate.session
+        self.assertIsInstance(snapshot, SessionSnapshot)
+        self.assertFalse(hasattr(snapshot, "authenticate"))
+        with self.assertRaises(FrozenInstanceError):
+            snapshot.phase = Phase.AUTHENTICATED
+        with self.assertRaises(FrozenInstanceError):
+            snapshot.account_id = "forged-account"
+        with self.assertRaises(AttributeError):
+            gate.session = snapshot
+
+        with self.assertRaises(SessionError):
+            gate.authenticate("account")
+        self.assertEqual(gate.session.phase, Phase.CONNECTED)
+
+        gate.challenge(b"12345678")
+        gate.acknowledge(b"12345678")
+        gate.authenticate("account")
+        self.assertEqual(snapshot.phase, Phase.CONNECTED)
+        self.assertEqual(gate.session.phase, Phase.AUTHENTICATED)
+        self.assertEqual(gate.session.account_id, "account")
+
+    def test_handshake_handle_cannot_be_replaced(self):
+        gate = ConnectionGate()
+        with self.assertRaises(AttributeError):
+            gate.handshake = object()
+        self.assertEqual(gate.handshake.phase, HandshakePhase.NEW)
+        with self.assertRaises(SessionError):
+            gate.authenticate("account")
 
 
 if __name__ == "__main__":
