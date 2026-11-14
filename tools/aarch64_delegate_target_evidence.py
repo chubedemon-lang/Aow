@@ -320,7 +320,8 @@ def summarize_delegate_method_pointer_arguments(
                 ):
                     registers[destination] = relocation[1]
                 elif (
-                    effective_address is not None
+                    relocation is None
+                    and effective_address is not None
                     and static_memory_values is not None
                     and effective_address in static_memory_values
                 ):
