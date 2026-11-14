@@ -37,6 +37,28 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(values, {0x9000: encoded})
 
+    def test_metadata_usage_cells_with_their_own_relocation_are_ignored(self):
+        encoded = encode_method_def_usage_index(321, 31)
+        elf = bytearray(64)
+        struct.pack_into("<Q", elf, 16, encoded)
+        sections = {
+            ".data": {
+                "type": 1,
+                "flags": 3,
+                "address": 0x9000,
+                "offset": 16,
+                "size": 8,
+            },
+        }
+        relocations = {
+            0x8000: (R_AARCH64_RELATIVE, 0x9000),
+            0x9000: (R_AARCH64_RELATIVE, 0xA000),
+        }
+        self.assertEqual(
+            _metadata_usage_static_values(bytes(elf), sections, relocations, 31),
+            {},
+        )
+
     def test_metadata_usage_cells_ignore_other_usage_types_and_unmarked_values(self):
         values_to_reject = (
             0x40000003,
