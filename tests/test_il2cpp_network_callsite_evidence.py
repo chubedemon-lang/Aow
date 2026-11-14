@@ -7,12 +7,65 @@ from test_il2cpp_native_method_evidence import make_elf, make_metadata
 from tools.aarch64_call_argument_evidence import summarize_small_argument_constants
 from tools.il2cpp_network_callsite_evidence import (
     CALLSITE_ARGUMENT_TARGET_PREFIXES,
+    _metadata_usage_static_values,
     inspect_bytes,
     NETWORK_SUPPORT_METHODS,
 )
+from tools.il2cpp_codegen_inventory import R_AARCH64_RELATIVE
+from tools.il2cpp_metadata_usage_evidence import encode_method_def_usage_index
 
 
 class NetworkCallsiteEvidenceTests(unittest.TestCase):
+    def test_metadata_usage_cells_are_read_only_and_redacted(self):
+        encoded = encode_method_def_usage_index(321, 31)
+        elf = bytearray(64)
+        struct.pack_into("<Q", elf, 16, encoded)
+        sections = {
+            ".data": {
+                "type": 1,
+                "flags": 3,
+                "address": 0x9000,
+                "offset": 16,
+                "size": 8,
+            },
+        }
+        values = _metadata_usage_static_values(
+            bytes(elf),
+            sections,
+            {0x8000: (R_AARCH64_RELATIVE, 0x9000)},
+            31,
+        )
+        self.assertEqual(values, {0x9000: encoded})
+
+    def test_metadata_usage_cells_ignore_other_usage_types_and_unmarked_values(self):
+        values_to_reject = (
+            0x40000003,
+            0x60000282,
+            0x0000000160000283,
+        )
+        for value in values_to_reject:
+            with self.subTest(value=value):
+                elf = bytearray(64)
+                struct.pack_into("<Q", elf, 16, value)
+                sections = {
+                    ".data": {
+                        "type": 1,
+                        "flags": 3,
+                        "address": 0x9000,
+                        "offset": 16,
+                        "size": 8,
+                    },
+                }
+                self.assertEqual(
+                    _metadata_usage_static_values(
+                        bytes(elf),
+                        sections,
+                        {0x8000: (R_AARCH64_RELATIVE, 0x9000)},
+                        31,
+                    ),
+                    {},
+                )
+
     def test_known_network_method_gets_a_redacted_callsite_record(self):
         report = inspect_bytes(
             make_metadata(["Cycle"], type_name="Receiver"),
@@ -154,9 +207,9 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         code = b"".join(
             struct.pack("<I", word)
             for word in (
-                movz_w(1, 5004),
+                movz_w(1, 0x1357),
                 bl(0x1004, target),
-                movz_w(1, 5005),
+                movz_w(1, 0x2468),
                 bl(0x100C, target),
             )
         )
@@ -169,7 +222,7 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         self.assertEqual(
             [item["known_small_argument_constants"]["x1"]
              for item in observations],
-            [5004, 5005],
+            [0x1357, 0x2468],
         )
         rendered = json.dumps(observations)
         self.assertNotIn("0x4000", rendered)
