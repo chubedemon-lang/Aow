@@ -51,8 +51,8 @@ _ABSOLUTE_PATH = re.compile(
     r"|\\\\[^\\/\s]+[\\/][^\s]+"
     r"|\\(?!\\)[^\\/\s]+(?:\\[^\\/\s]+)*"
     r")"
-_PARENT_PATH = re.compile(r"(?:^|[\\/])\.\.(?:[\\/]|$)")
 )
+_PARENT_PATH = re.compile(r"(?:^|[\\/])\.\.(?:[\\/]|$)")
 _CREDENTIAL_ASSIGNMENT = re.compile(
     r"\b(?:authorization|bearer|token|password|passwd|secret|"
     r"api[_-]?key|access[_-]?key|refresh[_-]?token)\s*[:=]\s*\S+",
