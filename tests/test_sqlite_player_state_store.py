@@ -357,6 +357,60 @@ class SqlitePlayerStateStoreTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_verify_integrity_uses_one_read_snapshot_during_concurrent_commit(self):
+        self.db.execute("PRAGMA journal_mode=WAL").fetchone()
+        self.store.create("hero", currency=10)
+        writer = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        self.addCleanup(writer.close)
+        writer_store = SqlitePlayerStateStore(writer)
+        committed = []
+
+        def commit_after_snapshot(statement):
+            if (not committed
+                    and "FROM player_state_mutations" in statement):
+                committed.append(True)
+                writer_store.apply(
+                    "hero", "concurrent-audit", 0, experience_delta=5
+                )
+
+        self.db.set_trace_callback(commit_after_snapshot)
+        try:
+            result = self.store.verify_integrity()
+        finally:
+            self.db.set_trace_callback(None)
+
+        self.assertEqual(committed, [True])
+        self.assertEqual(
+            result,
+            {
+                "snapshots": 1,
+                "mutations": 0,
+                "anchored_snapshots": 1,
+                "legacy_unanchored_snapshots": 0,
+            },
+        )
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(self.store.get("hero").experience, 5)
+        self.assertEqual(
+            self.store.verify_integrity(),
+            {
+                "snapshots": 1,
+                "mutations": 1,
+                "anchored_snapshots": 1,
+                "legacy_unanchored_snapshots": 0,
+            },
+        )
+
+    def test_verify_integrity_releases_read_transaction_after_failure(self):
+        self.store.create("hero")
+        self.store.apply("hero", "audit", 0, experience_delta=1)
+        self.db.execute(
+            "DELETE FROM player_state_mutations WHERE request_id='audit'"
+        )
+        with self.assertRaisesRegex(PlayerStoreError, "no mutation history"):
+            self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
     def test_verify_integrity_requires_idle_connection(self):
         self.store.create("hero")
         self.db.execute("BEGIN")

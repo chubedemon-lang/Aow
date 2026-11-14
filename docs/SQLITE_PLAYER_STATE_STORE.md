@@ -12,6 +12,13 @@
 - Replaying the same request id and exact payload returns the original result snapshot. Reusing the request id with a different payload is rejected.
 - Separate SQLite connections serialize writers; concurrent identical requests produce one mutation and idempotent replays.
 
+## Integrity audit
+
+- `verify_integrity` requires an idle connection and pins one deferred SQLite read snapshot before checking snapshots, creation receipts, and mutation history.
+- Concurrent commits are observed either wholly before or wholly after the audit snapshot; a single audit cannot combine rows from different database revisions.
+- The read transaction is always rolled back on success or failure, leaving the connection idle for subsequent operations.
+- This verifies local consistency only. It does not establish AOW protocol semantics or provide cryptographic tamper resistance.
+
 ## Authorization boundary
 
 Authenticate the account and verify character ownership before calling this store. Never accept a client-selected account id or trust a client-supplied request id without namespacing it to an authenticated server-side operation. Every state-changing route must authorize the account/character pair before calling `apply`. Keep the database private and back it up.

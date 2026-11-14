@@ -192,18 +192,30 @@ class SqlitePlayerStateStore:
         return self._snapshot(row)
 
     def verify_integrity(self) -> dict:
-        """Audit snapshots against creation baselines and mutation receipts.
+        """Audit player state in one consistent, read-only SQLite snapshot.
 
-        New snapshots have an immutable-by-convention creation receipt written
-        atomically with the snapshot. Databases created before that receipt
-        existed are migrated with baseline_version=0 and remain explicitly
-        classified as legacy/unanchored. This is a consistency audit, not a
-        cryptographic integrity boundary; an attacker able to rewrite all
-        related rows can rewrite the marker and receipts too.
+        The connection must be idle. A deferred read transaction pins one
+        database snapshot before any audit query, so concurrent commits cannot
+        mix snapshots, creation receipts, and mutation history from different
+        points in time. The transaction is always rolled back, including when
+        validation fails. This is a consistency audit, not a cryptographic
+        integrity boundary.
         """
         if self.db.in_transaction:
             raise ValueError("connection must not have an active transaction")
+        self.db.execute("BEGIN")
+        try:
+            # Force SQLite to establish the read snapshot before the audit.
+            self.db.execute(
+                "SELECT name FROM sqlite_master LIMIT 1"
+            ).fetchone()
+            return self._verify_integrity_snapshot()
+        finally:
+            if self.db.in_transaction:
+                self.db.rollback()
 
+    def _verify_integrity_snapshot(self) -> dict:
+        """Run the audit while verify_integrity owns the read snapshot."""
         if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
             raise PlayerStoreError("SQLite quick_check failed")
         if self.db.execute("PRAGMA foreign_key_check").fetchall():
