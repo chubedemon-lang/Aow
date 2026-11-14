@@ -75,5 +75,27 @@ class QuestAwardTests(unittest.TestCase):
         )
 
 
+    def test_rejects_caller_transaction_without_touching_caller_work(self):
+        self.db.execute("CREATE TABLE caller_work (value INTEGER)")
+        self.db.commit()
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_work VALUES (7)")
+
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            self.ledger.grant_quest_once("nested", "p", 2, "gem", 1)
+
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM caller_work").fetchone()[0], 0
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM quest_award_keys").fetchone()[0], 0
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM reward_receipts").fetchone()[0], 0
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
