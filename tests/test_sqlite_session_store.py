@@ -217,7 +217,8 @@ class SqliteSessionStoreTests(unittest.TestCase):
             0,
         )
 
-    def test_issue_rejects_finite_clock_values_that_cannot_represent_expiry(self):        for value in (1e20, float.fromhex("0x1.fffffffffffffp+1023")):
+    def test_issue_rejects_finite_clock_values_that_cannot_represent_expiry(self):
+        for value in (1e20, float.fromhex("0x1.fffffffffffffp+1023")):
             store = SqliteSessionStore(self.db, clock=lambda value=value: value)
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "expiry"):
                 store.issue(51)
