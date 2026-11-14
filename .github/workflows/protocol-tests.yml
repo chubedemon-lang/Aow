@@ -63,6 +63,9 @@ on:
       - 'server/sqlite_session_store.py'
       - 'tests/test_sqlite_session_store.py'
       - 'docs/SQLITE_SESSION_STORE.md'
+      - 'server/sqlite_player_state_store.py'
+      - 'tests/test_sqlite_player_state_store.py'
+      - 'docs/SQLITE_PLAYER_STATE_STORE.md'
       - 'docs/IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md'
       - '.github/workflows/protocol-tests.yml'
 jobs:
@@ -171,3 +174,17 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_sqlite_reward_ledger.py' -v
       - name: Quest award ledger regression tests (synthetic only)
         run: python -m unittest discover -s tests -p 'test_quest_award_ledger.py' -v
+  player-state-store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile durable player state store
+        run: python -m py_compile server/sqlite_player_state_store.py
+      - name: Durable player state integrity tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_sqlite_player_state_store.py' -v
