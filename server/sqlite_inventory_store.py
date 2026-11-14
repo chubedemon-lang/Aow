@@ -153,12 +153,36 @@ class SqliteInventoryStore:
 
     @staticmethod
     def _snapshot(character_id, capacity, max_stack, revision, rows):
+        """Decode a persisted/current snapshot without coercing SQLite values."""
+        character_id = SqliteInventoryStore._character_id(character_id)
+        if (type(capacity) is not int or not 1 <= capacity <= _MAX_CAPACITY
+                or type(max_stack) is not int
+                or not 1 <= max_stack <= _MAX_STACK
+                or type(revision) is not int
+                or not 0 <= revision <= _MAX_REVISION):
+            raise InventoryStoreError("invalid stored inventory snapshot")
+        if type(rows) not in (list, tuple) or len(rows) > capacity:
+            raise InventoryStoreError("invalid stored inventory items")
+
+        items = []
+        previous_id = None
+        for row in rows:
+            if type(row) not in (list, tuple) or len(row) != 2:
+                raise InventoryStoreError("invalid stored inventory item")
+            item_id = SqliteInventoryStore._item_id(row[0])
+            quantity = row[1]
+            if (type(quantity) is not int or not 1 <= quantity <= max_stack
+                    or (previous_id is not None and item_id <= previous_id)):
+                raise InventoryStoreError("invalid stored inventory item")
+            items.append((item_id, quantity))
+            previous_id = item_id
+
         return InventorySnapshot(
             character_id=character_id,
-            capacity=int(capacity),
-            max_stack=int(max_stack),
-            revision=int(revision),
-            items=tuple((str(item_id), int(quantity)) for item_id, quantity in rows),
+            capacity=capacity,
+            max_stack=max_stack,
+            revision=revision,
+            items=tuple(items),
         )
 
     @staticmethod
@@ -526,18 +550,22 @@ class SqliteInventoryStore:
             ).fetchone()
             if header is None:
                 raise InventoryNotFound("inventory not found")
-            capacity, max_stack, revision = map(int, header)
+            current_rows = self.db.execute(
+                "SELECT item_id, quantity FROM inventory_items "
+                "WHERE character_id=?", (character_id,)
+            ).fetchall()
+            current_snapshot = self._snapshot(
+                character_id, *header, current_rows
+            )
+            capacity = current_snapshot.capacity
+            max_stack = current_snapshot.max_stack
+            revision = current_snapshot.revision
             if revision != expected_revision:
                 raise InventoryRevisionConflict("stale inventory revision")
             if revision >= _MAX_REVISION:
                 raise InventoryStoreError("inventory revision overflow")
 
-            current_rows = self.db.execute(
-                "SELECT item_id, quantity FROM inventory_items "
-                "WHERE character_id=?", (character_id,)
-            ).fetchall()
-            candidate = {str(item_id): int(quantity)
-                         for item_id, quantity in current_rows}
+            candidate = dict(current_snapshot.items)
             for item_id, delta in normalised:
                 updated = candidate.get(item_id, 0) + delta
                 if not 0 <= updated <= max_stack:
