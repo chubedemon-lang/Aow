@@ -4,6 +4,7 @@ This is a provenance gate, not a parser for the original AOW protocol.
 """
 import re
 from dataclasses import dataclass
+from urllib.parse import unquote
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _ALLOWED = frozenset({"apk", "local_capture", "decompiled_symbol", "test_observation"})
@@ -96,7 +97,7 @@ def _contains_network_locator(value):
     return False
 
 
-def _contains_sensitive_material(value):
+def _contains_sensitive_material_once(value):
     return (
         _contains_network_locator(value)
         or _ABSOLUTE_PATH.search(value) is not None
@@ -106,6 +107,25 @@ def _contains_sensitive_material(value):
         or _PACKET_BYTES.search(value) is not None
         or _PRIVATE_KEY.search(value) is not None
     )
+
+
+def _contains_sensitive_material(value):
+    """Screen literal and bounded percent-decoded forms of public metadata.
+
+    Some downstream systems decode URL-style escapes before displaying or
+    processing provenance. Check the original text and up to three decoding
+    rounds so encoded paths, locators, and credential hints cannot bypass the
+    metadata-only publication boundary.
+    """
+    candidate = value
+    for _ in range(4):
+        if _contains_sensitive_material_once(candidate):
+            return True
+        decoded = unquote(candidate)
+        if decoded == candidate:
+            return False
+        candidate = decoded
+    return _contains_sensitive_material_once(candidate)
 
 
 def validate_record(record):
