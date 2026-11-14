@@ -78,7 +78,7 @@ class CharacterSnapshotValidationTests(unittest.TestCase):
             (valid_id, "Alice", b"test_map", 0, 0),
             (valid_id, "Alice", "test_map", 1.5, 0),
             (valid_id, "Alice", "test_map", 0, -1.5),
-            (valid_id, "Bad\\x00Name", "test_map", 0, 0),
+            (valid_id, "Bad\x00Name", "test_map", 0, 0),
             (valid_id, "Alice", "bad/map", 0, 0),
             (valid_id, "Alice", "test_map", -(2**31) - 1, 0),
             (valid_id, "Alice", "test_map", 0, 2**31),
