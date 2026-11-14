@@ -6,6 +6,7 @@ idempotent receipt. This store does not authenticate character ownership.
 """
 import json
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable
 
@@ -74,10 +75,11 @@ def _load_json_object(raw, label, max_chars):
 class SqliteMapPositionStore:
     """SQLite-backed synthetic map position snapshots.
 
-    Every enter/move/leave transition and its receipt commit in one
-    BEGIN IMMEDIATE transaction. The supplied connection must be idle before
-    construction. Mutations may join a caller-owned transaction without
-    committing or rolling it back.
+    Standalone transitions and their receipts commit in one BEGIN IMMEDIATE
+    transaction. If a caller transaction is active, each create/transition
+    uses a savepoint so failure rolls back only that operation; the caller
+    retains ownership of the outer commit or rollback. Construction requires
+    an idle connection.
     """
 
     def __init__(self, connection: sqlite3.Connection):
@@ -330,12 +332,41 @@ class SqliteMapPositionStore:
 
         return {"snapshots": len(snapshots), "mutations": mutation_count}
 
-    def create(self, character_id: str) -> MapPosition:
-        character_id = self._character_id(character_id)
+    @contextmanager
+    def _write_scope(self, savepoint_name: str):
+        """Make one map-position operation atomic within its transaction scope.
+
+        Standalone operations own BEGIN IMMEDIATE/COMMIT. When a caller already
+        owns the connection transaction, a private savepoint rolls back only
+        this operation on failure and leaves the outer transaction untouched.
+        Savepoint names are selected only by internal callsites.
+        """
         owns_transaction = not self.db.in_transaction
         if owns_transaction:
             self.db.execute("BEGIN IMMEDIATE")
+        else:
+            if savepoint_name not in (
+                "map_position_create", "map_position_mutate"
+            ):
+                raise ValueError("invalid map-position savepoint")
+            self.db.execute(f"SAVEPOINT {savepoint_name}")
         try:
+            yield
+            if owns_transaction:
+                self.db.commit()
+            else:
+                self.db.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        except BaseException:
+            if owns_transaction:
+                self.db.rollback()
+            else:
+                self.db.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                self.db.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+            raise
+
+    def create(self, character_id: str) -> MapPosition:
+        character_id = self._character_id(character_id)
+        with self._write_scope("map_position_create"):
             try:
                 self.db.execute(
                     """INSERT INTO map_position_snapshots
@@ -347,13 +378,7 @@ class SqliteMapPositionStore:
                 raise MapPositionAlreadyExists(
                     "map-position snapshot already exists"
                 ) from exc
-            if owns_transaction:
-                self.db.commit()
             return MapPosition()
-        except BaseException:
-            if owns_transaction:
-                self.db.rollback()
-            raise
 
     def get(self, character_id: str) -> MapPosition:
         character_id = self._character_id(character_id)
@@ -377,76 +402,66 @@ class SqliteMapPositionStore:
             separators=(",", ":"),
             ensure_ascii=True,
         )
-        owns_transaction = not self.db.in_transaction
-        if owns_transaction:
-            self.db.execute("BEGIN IMMEDIATE")
         try:
-            previous = self.db.execute(
-                """SELECT character_id, expected_revision, payload_json, result_json
-                   FROM map_position_mutations WHERE request_id=?""",
-                (request_id,),
-            ).fetchone()
-            if previous is not None:
-                if tuple(previous[:3]) != (
-                    character_id, expected_revision, payload_json
-                ):
-                    raise MapPositionOperationConflict(
-                        "request id reused with a different map transition"
+            with self._write_scope("map_position_mutate"):
+                previous = self.db.execute(
+                    """SELECT character_id, expected_revision, payload_json, result_json
+                       FROM map_position_mutations WHERE request_id=?""",
+                    (request_id,),
+                ).fetchone()
+                if previous is not None:
+                    if tuple(previous[:3]) != (
+                        character_id, expected_revision, payload_json
+                    ):
+                        raise MapPositionOperationConflict(
+                            "request id reused with a different map transition"
+                        )
+                    snapshot = self._decode_snapshot(previous[3])
+                    return MapPositionMutation(snapshot, True)
+
+                row = self.db.execute(
+                    """SELECT map_id, x, y, revision
+                       FROM map_position_snapshots WHERE character_id=?""",
+                    (character_id,),
+                ).fetchone()
+                if row is None:
+                    raise MapPositionNotFound("map-position snapshot not found")
+                current = self._snapshot(row)
+                if current.revision != expected_revision:
+                    raise MapPositionRevisionConflict("stale map-position revision")
+                if current.revision >= _MAX_REVISION:
+                    raise MapPositionStoreError("map-position revision overflow")
+
+                updated = transition(current)
+                if (not isinstance(updated, MapPosition)
+                        or updated.revision != current.revision + 1):
+                    raise MapPositionStoreError("invalid map-position transition")
+
+                x = None if updated.position is None else updated.position.x
+                y = None if updated.position is None else updated.position.y
+                cursor = self.db.execute(
+                    """UPDATE map_position_snapshots
+                       SET map_id=?, x=?, y=?, revision=?
+                       WHERE character_id=? AND revision=?""",
+                    (updated.map_id, x, y, updated.revision,
+                     character_id, current.revision),
+                )
+                if cursor.rowcount != 1:
+                    raise MapPositionRevisionConflict(
+                        "map-position changed concurrently"
                     )
-                snapshot = self._decode_snapshot(previous[3])
-                if owns_transaction:
-                    self.db.commit()
-                return MapPositionMutation(snapshot, True)
 
-            row = self.db.execute(
-                """SELECT map_id, x, y, revision
-                   FROM map_position_snapshots WHERE character_id=?""",
-                (character_id,),
-            ).fetchone()
-            if row is None:
-                raise MapPositionNotFound("map-position snapshot not found")
-            current = self._snapshot(row)
-            if current.revision != expected_revision:
-                raise MapPositionRevisionConflict("stale map-position revision")
-            if current.revision >= _MAX_REVISION:
-                raise MapPositionStoreError("map-position revision overflow")
-
-            updated = transition(current)
-            if (not isinstance(updated, MapPosition)
-                    or updated.revision != current.revision + 1):
-                raise MapPositionStoreError("invalid map-position transition")
-
-            x = None if updated.position is None else updated.position.x
-            y = None if updated.position is None else updated.position.y
-            cursor = self.db.execute(
-                """UPDATE map_position_snapshots
-                   SET map_id=?, x=?, y=?, revision=?
-                   WHERE character_id=? AND revision=?""",
-                (updated.map_id, x, y, updated.revision,
-                 character_id, current.revision),
-            )
-            if cursor.rowcount != 1:
-                raise MapPositionRevisionConflict("map-position changed concurrently")
-
-            self.db.execute(
-                """INSERT INTO map_position_mutations
-                   (request_id, character_id, expected_revision, payload_json,
-                    result_json, result_revision)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (request_id, character_id, expected_revision, payload_json,
-                 self._encode_snapshot(updated), updated.revision),
-            )
-            if owns_transaction:
-                self.db.commit()
-            return MapPositionMutation(updated, False)
+                self.db.execute(
+                    """INSERT INTO map_position_mutations
+                       (request_id, character_id, expected_revision, payload_json,
+                        result_json, result_revision)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (request_id, character_id, expected_revision, payload_json,
+                     self._encode_snapshot(updated), updated.revision),
+                )
+                return MapPositionMutation(updated, False)
         except MapPositionError as exc:
-            if owns_transaction:
-                self.db.rollback()
             raise MapPositionStoreError(str(exc)) from exc
-        except BaseException:
-            if owns_transaction:
-                self.db.rollback()
-            raise
 
     def enter(self, character_id: str, request_id: str, expected_revision: int,
               map_id: int, x: int, y: int) -> MapPositionMutation:
