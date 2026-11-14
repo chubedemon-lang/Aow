@@ -193,6 +193,8 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
             0xA90157F6,
             0xA9024FF4,
             ldr_x(8, 2, 8),
+            mov_x(20, 2),
+            mov_x(21, 1),
             mov_x(19, 0),
             str_x(2, 0, 0x28),
             str_x(8, 0, 0x10),
