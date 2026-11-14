@@ -33,7 +33,7 @@ class FrameSpec:
                 min(1024 * 1024, max_representable_payload),
             )
         elif type(self.max_payload) is not int or not (
-            1 <= self.max_payload <= min(16 * 1024 * 1024, max_representable_payload)
+            0 <= self.max_payload <= min(16 * 1024 * 1024, max_representable_payload)
         ):
             raise ValueError("invalid or unrepresentable max_payload")
         if type(self.max_chunk_bytes) is not int or not (1 <= self.max_chunk_bytes <= 16 * 1024 * 1024):
