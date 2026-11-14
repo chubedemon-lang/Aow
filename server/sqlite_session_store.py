@@ -302,3 +302,41 @@ class SqliteSessionStore:
         except BaseException:
             self.db.rollback()
             raise
+
+
+    def verify_integrity(self) -> dict:
+        """Audit persisted sessions in one consistent, read-only snapshot.
+
+        The connection must be idle. The audit pins a SQLite read snapshot,
+        runs quick_check, and streams every row through the same strict
+        account/expiry validator used by token resolution. It never deletes
+        expired rows or repairs data. The returned count includes expired
+        sessions because cleanup is a separate explicit operation.
+        """
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+        self.db.execute("BEGIN")
+        try:
+            # Establish the read snapshot before quick_check and row scanning.
+            self.db.execute(
+                "SELECT name FROM sqlite_master LIMIT 1"
+            ).fetchone()
+            if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                raise SessionError("invalid session store")
+
+            session_count = 0
+            rows = self.db.execute(
+                "SELECT token_hash, account_id, created_at, expires_at "
+                "FROM durable_sessions"
+            )
+            for token_hash, account_id, created_at, expires_at in rows:
+                if not isinstance(token_hash, bytes) or len(token_hash) != 32:
+                    raise SessionError("invalid session store")
+                self._validated_stored_session_row(
+                    (account_id, created_at, expires_at)
+                )
+                session_count += 1
+            return {"session_count": session_count}
+        finally:
+            if self.db.in_transaction:
+                self.db.rollback()
