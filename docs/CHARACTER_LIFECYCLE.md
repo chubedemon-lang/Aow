@@ -38,3 +38,24 @@ invariant. Creation and wallet initialization roll back together on failure. The
 ## Tests
 
 Run: python -m unittest discover -s tests -p 'test_sqlite_authorized_character_service.py' -v
+
+
+## Strict persisted-row decoding
+
+All authorized character readers now share
+`server.character_snapshot.character_snapshot_from_row()`. It validates
+SQLite storage classes and synthetic bounds before constructing a snapshot:
+character IDs and coordinates must be integers (coordinates are signed
+32-bit), names must satisfy the same UTF-8/name limits as creation, and map
+identifiers must satisfy the synthetic identifier grammar.
+
+The decoder deliberately does not use `int()` or `str()` coercion. This
+matters because ordinary SQLite tables can contain REAL or BLOB values even
+when a column was declared INTEGER or TEXT. Malformed persisted rows raise
+`CharacterSnapshotError`; the surrounding authorized read transaction rolls
+back and leaves the data untouched.
+
+This is a local synthetic storage contract only. It does not establish AOW
+character fields, map identifiers, coordinate units, or APK compatibility.
+
+Run: `python -m unittest discover -s tests -p 'test_character_snapshot_validation.py' -v`

@@ -9,6 +9,10 @@ from dataclasses import dataclass
 import sqlite3
 
 from server.sessions import SessionError
+from server.character_snapshot import (
+    CharacterSnapshot,
+    character_snapshot_from_row,
+)
 from server.sqlite_map_position_store import SqliteMapPositionStore
 from server.sqlite_player_state_store import SqlitePlayerStateStore
 from server.sqlite_session_store import SqliteSessionStore
@@ -18,15 +22,6 @@ from server.synthetic_player_state import PlayerSnapshot
 
 class CharacterAlreadyExists(ValueError):
     """The authenticated account already owns its one synthetic character."""
-
-
-@dataclass(frozen=True)
-class CharacterSnapshot:
-    character_id: int
-    name: str
-    map_id: str
-    x: int
-    y: int
 
 
 @dataclass(frozen=True)
@@ -156,13 +151,7 @@ class SqliteAuthorizedCharacterService:
 
     @staticmethod
     def _character(row) -> CharacterSnapshot:
-        return CharacterSnapshot(
-            character_id=int(row[0]),
-            name=str(row[1]),
-            map_id=str(row[2]),
-            x=int(row[3]),
-            y=int(row[4]),
-        )
+        return character_snapshot_from_row(row)
 
     def _create_in_transaction(self, token: str, name: str) -> CharacterSnapshot:
         """Insert a character and wallet inside the caller's active transaction."""
