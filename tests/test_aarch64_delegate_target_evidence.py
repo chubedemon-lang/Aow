@@ -457,5 +457,16 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
         self.assertTrue(result["argument_pointer_retained_on_receiver"])
         self.assertTrue(result["dereferenced_value_retained_on_receiver"])
 
+
+    def test_constructor_argument_shape_stops_on_unknown_before_dereference(self):
+        code = words(
+            0x91000442,  # unsupported ADD X2, X2, #1 may overwrite candidate x2
+            ldr_x(8, 2, 8),
+            str_x(8, 0, 0x10),
+        )
+        result = summarize_delegate_constructor_argument_shape(code)
+        self.assertFalse(result["argument_pointer_dereferenced"])
+        self.assertFalse(result["dereferenced_value_retained_on_receiver"])
+
 if __name__ == "__main__":
     unittest.main()
