@@ -170,8 +170,8 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             "GetMessageClassName",
         )
         report = inspect_bytes(
-            make_metadata(method_names, type_name="MessageHelper"),
-            make_elf(len(method_names)),
+            make_metadata((*method_names, "Unrelated"), type_name="MessageHelper"),
+            make_elf(len(method_names) + 1),
         )
         self.assertEqual(report["observed_network_methods"], len(method_names))
         observed = {
