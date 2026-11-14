@@ -552,5 +552,19 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.analyze(code, descriptor_method_targets=[])
 
+    def test_descriptor_mapping_rejects_non_integer_or_out_of_range_keys(self):
+        code = words(
+            adr(2, self.start, 0x7000),
+            bl(self.start + 4, self.constructor),
+        )
+        for descriptor in (True, -1, 1 << 64, "0x7000"):
+            with self.subTest(descriptor=descriptor):
+                with self.assertRaises(ValueError):
+                    self.analyze(
+                        code,
+                        descriptor_method_targets={descriptor: self.callback},
+                    )
+
+
 if __name__ == "__main__":
     unittest.main()
