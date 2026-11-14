@@ -75,10 +75,11 @@ def _load_json_object(raw, label, max_chars):
 class SqliteMapPositionStore:
     """SQLite-backed synthetic map position snapshots.
 
-    Every enter/move/leave transition and its receipt commit in one
-    BEGIN IMMEDIATE transaction. The supplied connection must be idle before
-    construction. Mutations may join a caller-owned transaction without
-    committing or rolling it back.
+    Standalone transitions and their receipts commit in one BEGIN IMMEDIATE
+    transaction. If a caller transaction is active, each create/transition
+    uses a savepoint so failure rolls back only that operation; the caller
+    retains ownership of the outer commit or rollback. Construction requires
+    an idle connection.
     """
 
     def __init__(self, connection: sqlite3.Connection):
