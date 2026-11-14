@@ -164,12 +164,22 @@ class SqliteMapPositionStore:
     @staticmethod
     def _snapshot(row):
         map_id, x, y, revision = row
-        position = None if map_id is None else Position(int(x), int(y))
-        return MapPosition(
-            map_id=None if map_id is None else int(map_id),
-            position=position,
-            revision=int(revision),
-        )
+        if type(revision) is not int or not 0 <= revision <= _MAX_REVISION:
+            raise MapPositionStoreError("invalid stored map revision")
+        if map_id is None:
+            if x is not None or y is not None:
+                raise MapPositionStoreError("inconsistent unplaced snapshot")
+            return MapPosition(revision=revision)
+        if type(map_id) is not int or not 0 <= map_id <= _MAX_MAP_ID:
+            raise MapPositionStoreError("invalid stored map identifier")
+        try:
+            return MapPosition(
+                map_id=map_id,
+                position=Position(x, y),
+                revision=revision,
+            )
+        except MapPositionError as exc:
+            raise MapPositionStoreError("invalid stored map position") from exc
 
     @staticmethod
     def _encode_snapshot(snapshot):

@@ -142,6 +142,37 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
             self.store.enter("hero", "", 0, 1, 0, 0)
         self.assertEqual(self.store.get("hero"), MapPosition())
 
+    def test_get_rejects_fractional_persisted_snapshot_values(self):
+        self.store.create("hero")
+        self.store.enter("hero", "valid-position", 0, 7, 10, 20)
+
+        corruptions = (
+            ("map_id", 7.5, 7),
+            ("x", 10.5, 10),
+            ("y", 20.5, 20),
+            ("revision", 1.5, 1),
+        )
+        for column, corrupt_value, original_value in corruptions:
+            with self.subTest(column=column):
+                self.db.execute(
+                    f"UPDATE map_position_snapshots SET {column}=? "
+                    "WHERE character_id=?",
+                    (corrupt_value, "hero"),
+                )
+                try:
+                    with self.assertRaises(MapPositionStoreError):
+                        self.store.get("hero")
+                finally:
+                    self.db.execute(
+                        f"UPDATE map_position_snapshots SET {column}=? "
+                        "WHERE character_id=?",
+                        (original_value, "hero"),
+                    )
+
+        self.assertEqual(
+            self.store.get("hero"), MapPosition(7, Position(10, 20), 1)
+        )
+
     def test_reopen_preserves_position_and_receipts(self):
         self.store.create("hero")
         result = self.store.enter("hero", "persist", 0, 9, -10, 11)
