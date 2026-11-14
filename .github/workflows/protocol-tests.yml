@@ -258,11 +258,6 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile shared character snapshot decoder and authorized readers
-        run: |
-          python -m py_compile \\
-            server/character_snapshot.py \\
-            server/sqlite_authorized_character_service.py \\
-            server/sqlite_authorized_world_state_service.py \\
-            server/sqlite_authorized_player_bootstrap_service.py
+        run: python -m py_compile server/character_snapshot.py server/sqlite_authorized_character_service.py server/sqlite_authorized_world_state_service.py server/sqlite_authorized_player_bootstrap_service.py
       - name: Strict persisted character snapshot tests (synthetic only)
         run: python -m unittest discover -s tests -p 'test_character_snapshot_validation.py' -v
