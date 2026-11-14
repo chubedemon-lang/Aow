@@ -217,8 +217,7 @@ class SqliteSessionStoreTests(unittest.TestCase):
             0,
         )
 
-    def test_issue_rejects_finite_clock_values_that_cannot_represent_expiry(self):
-        for value in (1e20, float.fromhex("0x1.fffffffffffffp+1023")):
+    def test_issue_rejects_finite_clock_values_that_cannot_represent_expiry(self):        for value in (1e20, float.fromhex("0x1.fffffffffffffp+1023")):
             store = SqliteSessionStore(self.db, clock=lambda value=value: value)
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "expiry"):
                 store.issue(51)
@@ -404,6 +403,53 @@ class SqliteSessionStoreTests(unittest.TestCase):
         token = self.store.issue_in_transaction(46, ttl_seconds=10)
         self.db.commit()
         self.assertEqual(self.store.resolve(token), 46)
+
+
+    def test_revoke_all_for_account_removes_every_session_and_preserves_other_accounts(self):
+        first = self.store.issue(91)
+        second = self.store.issue(91)
+        other = self.store.issue(92)
+
+        self.assertEqual(self.store.revoke_all_for_account(91), 2)
+        self.assertEqual(self.store.revoke_all_for_account(91), 0)
+        self.assertEqual(self.store.resolve(other), 92)
+        for token in (first, second):
+            with self.subTest(token_hash=hashlib.sha256(token.encode()).hexdigest()[:8]):
+                with self.assertRaises(SessionError):
+                    self.store.resolve(token)
+
+    def test_revoke_all_for_account_rejects_invalid_ids_without_mutation(self):
+        token = self.store.issue(93)
+        for account_id in (True, 0, -1, 1.5, "93", 2**63):
+            with self.subTest(account_id=account_id), self.assertRaisesRegex(
+                ValueError, "account id"
+            ):
+                self.store.revoke_all_for_account(account_id)
+        self.assertEqual(self.store.resolve(token), 93)
+        self.assertFalse(self.db.in_transaction)
+
+    def test_revoke_all_for_account_serializes_with_authorized_transaction(self):
+        token = self.store.issue(94)
+        second_connection = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None
+        )
+        self.addCleanup(second_connection.close)
+        second_store = SqliteSessionStore(
+            second_connection, ttl_seconds=60, clock=lambda: self.now
+        )
+        second_connection.execute("PRAGMA busy_timeout = 0")
+
+        with self.store.authorized_transaction(token) as account_id:
+            self.assertEqual(account_id, 94)
+            with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                second_store.revoke_all_for_account(94)
+            self.assertTrue(self.db.in_transaction)
+
+        self.assertEqual(second_store.revoke_all_for_account(94), 1)
+        with self.assertRaises(SessionError):
+            self.store.resolve(token)
+        self.assertFalse(self.db.in_transaction)
+
 
 
 if __name__ == "__main__":
