@@ -33,7 +33,8 @@ TARGET_METHODS = {
         "Cycle", "TrySendHeartbeat", "SerializedMessageTest",
     },
     ("com.geargames.common.network", "MessageHelper"): {
-        "InternalGetMessageType", "GetMessageType",
+        "EnsureLoadDictionary", "InternalGetMessageType", "GetMessageType",
+        "GetMessageTypeName", "GetMessageClassName",
     },
     ("com.geargames.common.network", "MessageDispatcher"): {
         "Dispatch", "TypeRegister",
@@ -85,8 +86,11 @@ NETWORK_CALLSITE_METHODS = {
     ("com.geargames.common.network", "Sender", "Cycle"),
     ("com.geargames.common.network", "MessageDispatcher", "Dispatch"),
     ("com.geargames.common.network", "MessageDispatcher", "TypeRegister"),
+    ("com.geargames.common.network", "MessageHelper", "EnsureLoadDictionary"),
     ("com.geargames.common.network", "MessageHelper", "InternalGetMessageType"),
     ("com.geargames.common.network", "MessageHelper", "GetMessageType"),
+    ("com.geargames.common.network", "MessageHelper", "GetMessageTypeName"),
+    ("com.geargames.common.network", "MessageHelper", "GetMessageClassName"),
 }
 
 MAX_ENTRYPOINT_WINDOW_BYTES = 64 * 1024
