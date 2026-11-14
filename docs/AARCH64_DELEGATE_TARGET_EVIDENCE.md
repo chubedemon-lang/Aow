@@ -126,3 +126,15 @@ sequence, LoginRequest field order, or APK/server compatibility is established.
 
 Synthetic tests use invented AArch64 instruction words only. The real APK and
 native library remain outside this repository.
+
+
+## Encoded metadata-usage loads
+
+The bounded analyzer can optionally consume `static_memory_values` and
+`encoded_method_usage_targets` from the same authorized offline pass. A
+static-memory value is used only when the load address is explicitly present
+in the supplied map; relocation-backed loads retain precedence. Encoded
+MethodDef usage tokens are resolved only through caller-supplied
+metadata-to-entrypoint associations. The analyzer emits the resulting method
+label and resolution path, never the token, data-cell address, or native
+entrypoint. It does not infer a MethodInfo object layout or runtime execution.
