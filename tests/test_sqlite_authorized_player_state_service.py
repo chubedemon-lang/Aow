@@ -11,6 +11,7 @@ from server.sqlite_authorized_player_state_service import (
 )
 from server.sqlite_player_state_store import PlayerAlreadyExists, PlayerSnapshot
 from server.sqlite_session_store import SqliteSessionStore
+from server.sqlite_authorized_transaction import authorized_character_transaction
 
 
 class SqliteAuthorizedPlayerStateServiceTests(unittest.TestCase):
@@ -223,6 +224,50 @@ class SqliteAuthorizedPlayerStateServiceTests(unittest.TestCase):
         with self.assertRaises(SessionError):
             self.service.get_snapshot(self.owner_token, 101)
 
+
+    def test_transaction_rejects_authorizer_session_store_on_other_connection_before_lock(self):
+        other_db = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(other_db.close)
+        other_sessions = SqliteSessionStore(
+            other_db, ttl_seconds=30, clock=lambda: self.now[0]
+        )
+        original_sessions = self.service.authorizer.sessions
+        self.service.authorizer.sessions = other_sessions
+        try:
+            with self.assertRaisesRegex(
+                ValueError, "session store must use the same SQLite connection"
+            ):
+                with authorized_character_transaction(
+                    self.db, self.service.authorizer, self.owner_token, 101
+                ):
+                    self.fail("mismatched session connection must be rejected")
+
+            self.assertFalse(self.db.in_transaction)
+            self.assertEqual(
+                self.db.execute(
+                    "SELECT count(*) FROM player_state_mutations"
+                ).fetchone()[0],
+                0,
+            )
+        finally:
+            self.service.authorizer.sessions = original_sessions
+
+    def test_transaction_rejects_authorizer_without_transactional_method(self):
+        class IncompleteAuthorizer:
+            def __init__(self, connection, sessions):
+                self.db = connection
+                self.sessions = sessions
+
+        incomplete = IncompleteAuthorizer(self.db, self.service.sessions)
+        with self.assertRaisesRegex(
+            TypeError, "authorizer must support transactional authorization"
+        ):
+            with authorized_character_transaction(
+                self.db, incomplete, self.owner_token, 101
+            ):
+                self.fail("incomplete authorizer must be rejected")
+
+        self.assertFalse(self.db.in_transaction)
 
 if __name__ == "__main__":
     unittest.main()
