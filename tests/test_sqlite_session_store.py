@@ -539,15 +539,15 @@ class SqliteSessionStoreTests(unittest.TestCase):
 
         snapshot_ready = threading.Event()
         resume_audit = threading.Event()
-        original_audit = self.store._verify_integrity_snapshot
+        original_validate = self.store._validated_stored_session_row
 
-        def pause_after_snapshot_is_pinned():
+        def pause_during_snapshot_scan(row):
             snapshot_ready.set()
             if not resume_audit.wait(timeout=5):
                 raise RuntimeError("timed out waiting to resume session audit")
-            return original_audit()
+            return original_validate(row)
 
-        self.store._verify_integrity_snapshot = pause_after_snapshot_is_pinned
+        self.store._validated_stored_session_row = pause_during_snapshot_scan
         results = []
         errors = []
 
@@ -569,7 +569,8 @@ class SqliteSessionStoreTests(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(errors, [])
         self.assertEqual(results, [{"session_count": 1}])
-        self.assertEqual(original_audit(), {"session_count": 2})
+        self.store._validated_stored_session_row = original_validate
+        self.assertEqual(self.store.verify_integrity(), {"session_count": 2})
 
 if __name__ == "__main__":
     unittest.main()
