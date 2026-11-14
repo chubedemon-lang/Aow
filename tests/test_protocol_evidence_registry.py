@@ -53,6 +53,33 @@ class EvidenceRegistryTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(EvidenceError):
                 Evidence("transport", self.sha, values["observation"], values["method"])
 
+    def test_rejects_absolute_and_parent_traversing_public_metadata(self):
+        invalid = (
+            "/mnt/data/private/aow.apk",
+            "~/private/capture.pcap",
+            r"C:\Users\Operator\capture.pcap",
+            "C:/Users/Operator/capture.pcap",
+            r"\Users\Operator\capture.pcap",
+            r"\\fileserver\private\capture.pcap",
+            "docs/../private/capture.pcap",
+            r"docs\..\private\capture.pcap",
+        )
+        for observation in invalid:
+            with self.subTest(observation=observation), self.assertRaises(EvidenceError):
+                Evidence("transport", self.sha, observation, "il2cpp_offline")
+
+    def test_rejects_absolute_paths_in_reproduction_commands(self):
+        for reproduction in (
+            "python C:/Users/Operator/capture.py",
+            "python /mnt/private/capture.py",
+            r"python \\fileserver\private\capture.py",
+        ):
+            with self.subTest(reproduction=reproduction), self.assertRaises(EvidenceError):
+                Evidence(
+                    "transport", self.sha, "offline observation", "il2cpp_offline",
+                    False, "tests/test_protocol_evidence_registry.py", reproduction,
+                )
+
     def test_rejects_non_local_test_references(self):
         invalid = (
             "https://example.invalid/capture",
