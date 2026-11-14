@@ -30,9 +30,11 @@ class QuestAwardLedger(SqliteRewardLedger):
         if type(quest_id) is not int or quest_id < 0:
             raise ValueError("invalid quest")
         self._validate_quantity(quantity)
-        if self.db.in_transaction:
-            raise ValueError("connection must not have an active transaction")
-        self.db.execute("BEGIN IMMEDIATE")
+        owns_transaction = not self.db.in_transaction
+        if owns_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
+        else:
+            self.db.execute("SAVEPOINT quest_award_once")
         try:
             key = self.db.execute(
                 "SELECT request_id, quantity FROM quest_award_keys WHERE player_id=? AND quest_id=? AND item_id=?",
@@ -45,7 +47,10 @@ class QuestAwardLedger(SqliteRewardLedger):
                     (request_id,)).fetchone()
                 if receipt != (player_id, quest_id, item_id, quantity):
                     raise RewardConflict("inconsistent receipt")
-                self.db.commit()
+                if owns_transaction:
+                    self.db.commit()
+                else:
+                    self.db.execute("RELEASE SAVEPOINT quest_award_once")
                 return False
             receipt = self.db.execute(
                 "SELECT player_id,quest_id,item_id,quantity FROM reward_receipts WHERE request_id=?",
@@ -57,8 +62,15 @@ class QuestAwardLedger(SqliteRewardLedger):
             self.db.execute("INSERT INTO reward_receipts VALUES (?,?,?,?,?)",
                             (request_id, player_id, quest_id, item_id, quantity))
             self._credit_balance_in_transaction(player_id, item_id, quantity)
-            self.db.commit()
+            if owns_transaction:
+                self.db.commit()
+            else:
+                self.db.execute("RELEASE SAVEPOINT quest_award_once")
             return True
         except BaseException:
-            self.db.rollback()
+            if owns_transaction:
+                self.db.rollback()
+            else:
+                self.db.execute("ROLLBACK TO SAVEPOINT quest_award_once")
+                self.db.execute("RELEASE SAVEPOINT quest_award_once")
             raise
