@@ -311,3 +311,32 @@ These are direct helper **callsite counts in bounded native entry windows**, not
 The `NetworkSettings` initializer is mapped, but the native field-offset relationship needed to attribute a runtime value to `HeaderLength` is still unresolved. The receiver lookup object owner, numeric wire IDs, compression/encryption placement, complete sender/receiver symmetry, LoginRequest field order, handshake order and authentication ownership remain unverified. No authorized client-side wire fixture or end-to-end test with the unchanged APK was available in this pass.
 
 The transport adapter therefore remains disabled. This re-verification adds static evidence and narrows the next tracing task; it does not establish APK/server compatibility.
+
+
+## Startup delegate method association — 2026-11-14
+
+The unchanged APK's `<StartConnectToServer>d__12.MoveNext` entry window
+contains two `OnMessageReceivedDelegate::.ctor` calls followed by
+`MessageDispatcher.SafeRegister(type, listener)` calls. The method argument
+is loaded through a relocation-backed global pointer and then from a
+file-backed static data cell. For this metadata v31 build, the encoded
+MethodDef usage token is decoded with the v27+ low-bit marker before looking
+up the metadata method definition and its codegen entrypoint.
+
+The redacted analyzer now associates the two startup delegates with:
+
+- `GUILoadingPvpStartPresenter.OnProgressAnswer(message)`: static method; its
+  mapped entry window is a single return instruction.
+- `GUILoadingPvpStartPresenter.OnProgressNotification(message)`: instance
+  method; its entry window contains a message-type check and an indirect call.
+
+Both methods have one parameter named `message`, matching the metadata
+signatures of `OnMessageReceivedDelegate.Invoke(message)` and
+`MessageDispatcher.Dispatch(message)`. `SafeRegister` metadata names its
+parameters `type` and `listener`. The numeric registration constants are
+intentionally omitted from public output and are not identified as wire
+message IDs.
+
+This is static delegate-to-method association at the registration sites, not
+proof of runtime execution, server semantics, a complete message schema,
+handshake order, or APK/server compatibility.
