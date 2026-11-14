@@ -75,5 +75,54 @@ class QuestAwardTests(unittest.TestCase):
         )
 
 
+    def test_nested_award_uses_savepoint_and_outer_rollback_remains_owned(self):
+        self.db.execute("CREATE TABLE caller_work (value INTEGER)")
+        self.db.commit()
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_work VALUES (7)")
+
+        self.assertTrue(self.ledger.grant_quest_once("nested", "p", 2, "gem", 1))
+        self.assertTrue(self.db.in_transaction)
+        self.assertEqual(self.ledger.balance("p", "gem"), 1)
+
+        self.db.rollback()
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM caller_work").fetchone()[0], 0
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM quest_award_keys").fetchone()[0], 0
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM reward_receipts").fetchone()[0], 0
+        )
+        self.assertEqual(self.ledger.balance("p", "gem"), 0)
+
+    def test_nested_failure_rolls_back_award_only_and_preserves_outer_work(self):
+        self.ledger.grant_quest_once("max", "p", 1, "gem", _MAX_SQLITE_INTEGER)
+        self.db.execute("CREATE TABLE caller_work (value INTEGER)")
+        self.db.commit()
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_work VALUES (7)")
+
+        with self.assertRaisesRegex(RewardConflict, "integer range"):
+            self.ledger.grant_quest_once("overflow", "p", 2, "gem", 1)
+
+        self.assertTrue(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM caller_work").fetchone()[0], 1
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM quest_award_keys").fetchone()[0], 1
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM reward_receipts").fetchone()[0], 1
+        )
+        self.db.commit()
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM caller_work").fetchone()[0], 1
+        )
+        self.assertEqual(self.ledger.balance("p", "gem"), _MAX_SQLITE_INTEGER)
+
+
 if __name__ == "__main__":
     unittest.main()
