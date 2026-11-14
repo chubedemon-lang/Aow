@@ -235,6 +235,63 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
             "SELECT count(*) FROM map_position_mutations"
         ).fetchone()[0], 0)
 
+    def test_nested_mutation_failure_rolls_back_only_its_savepoint(self):
+        self.store.create("p1")
+        self.db.execute("CREATE TABLE caller_work (value INTEGER)")
+        self.db.execute(
+            """CREATE TRIGGER reject_map_receipt
+               BEFORE INSERT ON map_position_mutations
+               BEGIN
+                   SELECT RAISE(ABORT, 'synthetic receipt failure');
+               END"""
+        )
+        self.db.commit()
+
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_work VALUES (7)")
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "synthetic receipt failure"):
+            self.store.enter("p1", "failed-enter", 0, 4, 10, 20)
+
+        self.assertTrue(self.db.in_transaction)
+        self.assertEqual(self.store.get("p1"), MapPosition(revision=0))
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_mutations"
+            ).fetchone()[0],
+            0,
+        )
+
+        self.db.execute("INSERT INTO caller_work VALUES (8)")
+        self.db.commit()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT value FROM caller_work ORDER BY value"
+            ).fetchall(),
+            [(7,), (8,)],
+        )
+        self.assertEqual(self.store.get("p1"), MapPosition(revision=0))
+
+    def test_nested_create_conflict_preserves_caller_transaction(self):
+        self.store.create("existing")
+        self.db.execute("CREATE TABLE caller_work (value INTEGER)")
+        self.db.commit()
+
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_work VALUES (11)")
+        with self.assertRaises(MapPositionAlreadyExists):
+            self.store.create("existing")
+
+        self.assertTrue(self.db.in_transaction)
+        self.db.execute("INSERT INTO caller_work VALUES (12)")
+        self.db.commit()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT value FROM caller_work ORDER BY value"
+            ).fetchall(),
+            [(11,), (12,)],
+        )
+        self.assertEqual(self.store.get("existing"), MapPosition())
+
     def test_constructor_does_not_commit_callers_transaction(self):
         self.db.execute("CREATE TABLE caller_work (value INTEGER)")
         self.db.commit()
