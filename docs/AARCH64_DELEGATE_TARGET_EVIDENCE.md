@@ -60,6 +60,12 @@ metadata-backed executable method label may produce
 duplicate, ambiguous, or unresolved associations stay unresolved/ambiguous.
 Duplicate entries are never deduplicated.
 
+The mapping keys must be exact, non-boolean unsigned 64-bit integer
+descriptor addresses. Invalid keys reject the mapping before analysis rather
+than being silently ignored. Each value is one candidate executable method
+pointer, or an ordered tuple/list of candidates; malformed values remain
+unresolved and repeated candidates remain ambiguous.
+
 The mapping, descriptor addresses, and executable pointers are inputs only;
 none are emitted in the redacted report. The method label is still static
 metadata evidence, not proof of runtime callback execution. Synthetic tests

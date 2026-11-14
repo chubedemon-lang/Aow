@@ -155,8 +155,16 @@ def summarize_delegate_method_pointer_arguments(
         raise ValueError("AArch64 code window start must be an aligned address")
     if not isinstance(method_targets, dict) or not isinstance(relocations, dict):
         raise ValueError("method_targets and relocations must be mappings")
-    if descriptor_method_targets is not None and not isinstance(descriptor_method_targets, dict):
-        raise ValueError("descriptor_method_targets must be a mapping")
+    if descriptor_method_targets is not None:
+        if not isinstance(descriptor_method_targets, dict):
+            raise ValueError("descriptor_method_targets must be a mapping")
+        if any(
+            type(descriptor) is not int or not 0 <= descriptor <= _MASK64
+            for descriptor in descriptor_method_targets
+        ):
+            raise ValueError(
+                "descriptor_method_targets keys must be unsigned 64-bit addresses"
+            )
     if (
         not isinstance(target_prefixes, (tuple, list, set, frozenset))
         or not target_prefixes
