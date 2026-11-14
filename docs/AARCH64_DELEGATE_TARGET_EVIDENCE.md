@@ -41,6 +41,32 @@ The output never includes candidate pointer values, native addresses, instructio
 - If any metadata association for a candidate is malformed, the analyzer does not filter it away to manufacture a unique match. The result stays unresolved or the constructor call is omitted.
 - This does not map registration keys 5004/5005 to wire message IDs, recover message payloads, establish handshake/login semantics, or prove APK/server compatibility.
 
+## Descriptor-aware follow-up
+
+The delegate-constructor entry window shows that the candidate second argument
+is dereferenced and both the original argument and loaded value are retained
+on the receiver. This is pointer-like, descriptor-shaped evidence; it is not
+enough to compare the argument itself with executable method-entry addresses.
+
+The analyzer therefore accepts an optional
+`descriptor_method_targets` mapping supplied by the caller from the **same
+authorized offline analysis pass**. Each key is a descriptor address and each
+value is one candidate executable method pointer, or an ordered tuple/list of
+candidates. The analyzer does not infer descriptor layouts or read arbitrary
+object memory. An explicit descriptor association takes precedence over direct
+entry matching. Exactly one well-formed candidate with exactly one
+metadata-backed executable method label may produce
+`unique_metadata_method` with `via: descriptor_metadata`. Missing, malformed,
+duplicate, ambiguous, or unresolved associations stay unresolved/ambiguous.
+Duplicate entries are never deduplicated.
+
+The mapping, descriptor addresses, and executable pointers are inputs only;
+none are emitted in the redacted report. The method label is still static
+metadata evidence, not proof of runtime callback execution. Synthetic tests
+use invented addresses and mappings only. This change does not run the
+analyzer against the APK and does not identify either callback or a wire
+message ID.
+
 ## Validation and next step
 
 tests/test_aarch64_delegate_target_evidence.py uses fabricated instruction words and relocation maps only. It covers ADR, ADRP/LDR relocation, register copies, call clobbering, unknown instructions, ambiguous targets, branch joins, unreachable blocks, input validation, and output redaction.
