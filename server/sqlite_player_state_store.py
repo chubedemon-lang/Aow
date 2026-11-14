@@ -4,6 +4,7 @@ This store persists explicit server-authorized state changes. It deliberately
 does not invent AOW leveling, movement, combat, inventory or economy rules.
 """
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from server.synthetic_player_state import PlayerSnapshot
@@ -45,8 +46,9 @@ class SqlitePlayerStateStore:
     """SQLite-backed player snapshots with optimistic revisions and idempotency.
 
     Every mutation and its receipt commit in one BEGIN IMMEDIATE transaction.
-    Mutations start their own transaction when called standalone, or join an
-    existing caller-owned transaction without committing or rolling it back.
+    Mutations use BEGIN IMMEDIATE when called standalone. Inside a caller-owned
+    transaction they use a private savepoint, never committing or rolling back
+    the caller's outer transaction.
     """
 
     def __init__(self, connection: sqlite3.Connection):
@@ -139,6 +141,38 @@ class SqlitePlayerStateStore:
             revision=int(row[4]),
         )
 
+    @contextmanager
+    def _write_scope(self, savepoint_name: str):
+        """Make one operation atomic without taking caller transaction ownership.
+
+        Standalone operations use BEGIN IMMEDIATE. When the caller already owns
+        a transaction, a private savepoint makes this operation atomic while
+        leaving the outer transaction open for the caller to commit or roll back.
+        Savepoint names are selected only by internal callsites.
+        """
+        owns_transaction = not self.db.in_transaction
+        if owns_transaction:
+            self.db.execute("BEGIN IMMEDIATE")
+        else:
+            if savepoint_name not in (
+                "player_state_create", "player_state_apply"
+            ):
+                raise ValueError("invalid player-state savepoint")
+            self.db.execute(f"SAVEPOINT {savepoint_name}")
+        try:
+            yield
+            if owns_transaction:
+                self.db.commit()
+            else:
+                self.db.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        except BaseException:
+            if owns_transaction:
+                self.db.rollback()
+            else:
+                self.db.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                self.db.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+            raise
+
     def create(self, character_id: str, *, level: int = 1,
                experience: int = 0, currency: int = 0) -> PlayerSnapshot:
         """Create the initial snapshot; duplicate character ids are rejected."""
@@ -153,10 +187,7 @@ class SqlitePlayerStateStore:
             raise PlayerStoreError("invalid currency")
 
         snapshot = PlayerSnapshot(character_id, level, experience, currency, 0)
-        owns_transaction = not self.db.in_transaction
-        if owns_transaction:
-            self.db.execute("BEGIN IMMEDIATE")
-        try:
+        with self._write_scope("player_state_create"):
             try:
                 self.db.execute(
                     "INSERT INTO player_state_snapshots "
@@ -171,13 +202,7 @@ class SqlitePlayerStateStore:
                 "(character_id, level, experience, currency) VALUES (?, ?, ?, ?)",
                 (character_id, level, experience, currency),
             )
-            if owns_transaction:
-                self.db.commit()
-            return snapshot
-        except BaseException:
-            if owns_transaction:
-                self.db.rollback()
-            raise
+        return snapshot
 
     def get(self, character_id: str) -> PlayerSnapshot:
         """Read a snapshot without taking ownership of the caller's transaction."""
@@ -434,10 +459,7 @@ class SqlitePlayerStateStore:
             character_id, expected_revision, level,
             experience_delta, currency_delta,
         )
-        owns_transaction = not self.db.in_transaction
-        if owns_transaction:
-            self.db.execute("BEGIN IMMEDIATE")
-        try:
+        with self._write_scope("player_state_apply"):
             previous = self.db.execute(
                 """SELECT character_id, expected_revision, requested_level,
                           experience_delta, currency_delta, result_level,
@@ -454,8 +476,6 @@ class SqlitePlayerStateStore:
                     character_id, int(previous[5]), int(previous[6]),
                     int(previous[7]), int(previous[8]),
                 )
-                if owns_transaction:
-                    self.db.commit()
                 return PlayerMutation(replay, True)
 
             row = self.db.execute(
@@ -499,10 +519,4 @@ class SqlitePlayerStateStore:
                 (request_id, *request, updated.level, updated.experience,
                  updated.currency, updated.revision),
             )
-            if owns_transaction:
-                self.db.commit()
             return PlayerMutation(updated, False)
-        except BaseException:
-            if owns_transaction:
-                self.db.rollback()
-            raise

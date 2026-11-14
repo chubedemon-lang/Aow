@@ -7,7 +7,8 @@
 - A character snapshot contains `character_id`, `level`, `experience`, `currency` and a monotonically increasing `revision`.
 - `create` creates revision 0 and rejects duplicate character ids.
 - `apply` requires an expected revision and a server-generated request id. It can apply an explicit level value plus experience/currency deltas; it never calculates AOW level thresholds.
-- Each mutation and its idempotency receipt commit in one `BEGIN IMMEDIATE` transaction.
+- Standalone `create` and `apply` operations use `BEGIN IMMEDIATE` so the snapshot and its receipt commit atomically.
+- When called inside a caller-owned transaction, each operation uses a private SQLite savepoint. A failed operation rolls back only its own partial writes; a successful operation releases its savepoint but leaves the outer transaction open for the caller to commit or roll back.
 - A stale expected revision is rejected without changing the snapshot or writing a receipt.
 - Replaying the same request id and exact payload returns the original result snapshot. Reusing the request id with a different payload is rejected.
 - Separate SQLite connections serialize writers; concurrent identical requests produce one mutation and idempotent replays.
