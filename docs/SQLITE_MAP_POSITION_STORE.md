@@ -26,8 +26,8 @@ Each transition and its receipt are committed in one SQLite BEGIN IMMEDIATE tran
 - An exact retry returns the original committed snapshot, even if later transitions have advanced the current state.
 - Reusing a request ID for another character, operation, expected revision, map, or coordinate is rejected.
 - A stale revision, invalid map transition, or mismatched map ID leaves both the snapshot and receipt table unchanged.
-- Separate SQLite connections serialize writers; tests cover duplicate and competing concurrent requests.
-- The store refuses to take over a caller-owned transaction.
+- Separate SQLite connections serialize standalone writers; tests cover duplicate and competing concurrent requests.
+- Nested operation failures are isolated by savepoints, so a failed snapshot/receipt pair cannot leave a partial position update in the caller's transaction.
 
 The connection is supplied by the caller and remains caller-owned.
 
