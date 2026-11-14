@@ -227,7 +227,7 @@ class SqlitePlayerStateStoreTests(unittest.TestCase):
         self.db.execute(
             "DELETE FROM player_state_mutations WHERE request_id='audit-first'"
         )
-        with self.assertRaisesRegex(PlayerStoreError, "history has a gap"):
+        with self.assertRaisesRegex(PlayerStoreError, "no mutation history"):
             self.store.verify_integrity()
 
     def test_verify_integrity_rejects_tampered_intermediate_receipt(self):
