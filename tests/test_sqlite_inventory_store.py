@@ -278,7 +278,9 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         )
         self.db.execute("PRAGMA ignore_check_constraints=ON")
         try:
-            for index, (label, corrupt_sql, corrupt_args, restore_sql, restore_args) in enumerate(corruptions):
+            for index, (
+                label, corrupt_sql, corrupt_args, restore_sql, restore_args
+            ) in enumerate(corruptions):
                 with self.subTest(field=label):
                     self.db.execute(corrupt_sql, corrupt_args)
                     with self.assertRaises(InventoryStoreError):
