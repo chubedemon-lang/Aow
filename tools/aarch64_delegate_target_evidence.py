@@ -335,3 +335,153 @@ def summarize_delegate_method_pointer_arguments(
         observations,
         key=lambda item: item["linear_window_call_ordinal"],
     )
+
+
+def _decode_str_x_unsigned(word):
+    """Decode STR Xrt, [Xn, #imm12*8] without exposing the offset."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    if (word & 0xFFC00000) != 0xF9000000:
+        return None
+    source = word & 0x1F
+    base = (word >> 5) & 0x1F
+    if source == 31 or base == 31:
+        return None
+    offset = ((word >> 10) & 0xFFF) * 8
+    return source, base, offset
+
+
+def _is_stack_prologue_store(word):
+    """Recognize only common SP-based STR/STP prologue stores."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return False
+    if ((word >> 5) & 0x1F) != 31:
+        return False
+    return (word & 0xFFC00000) in {
+        0xF8000000,  # STR X, pre/post-index
+        0xF9000000,  # STR X, unsigned offset
+        0xB8000000,  # STR W, pre/post-index
+        0xB9000000,  # STR W, unsigned offset
+        0xA8800000,  # STP X, post-index
+        0xA9000000,  # STP X, signed offset
+        0xA9800000,  # STP X, pre-index
+        0x28800000,  # STP W, post-index
+        0x29000000,  # STP W, signed offset
+        0x29800000,  # STP W, pre-index
+    }
+
+
+def summarize_delegate_constructor_argument_shape(
+    code, *, argument_register=2, receiver_register=0
+):
+    """Report a redacted straight-line argument/receiver access shape.
+
+    This is intended for a bounded delegate-constructor entry window. It
+    follows only 64-bit MOV copies, unsigned-offset LDR X and STR X operations
+    before the first call or control-flow transfer. Unknown instructions after
+    the first dereference terminate the scan. The output contains booleans only:
+    it never publishes field offsets, native addresses or instruction words.
+
+    The default x2/x0 registers are candidates from the observed call shape,
+    not an ABI proof. A dereference-and-retain pattern is pointer-like evidence;
+    it does not identify the argument's managed type or callback target.
+    """
+    if not isinstance(code, bytes) or len(code) % 4:
+        raise ValueError("AArch64 code window must be a multiple of four bytes")
+    if len(code) > _MAX_CODE_WINDOW_BYTES:
+        raise ValueError("AArch64 code window exceeds the 64 KiB analysis limit")
+    for name, register in (
+        ("argument_register", argument_register),
+        ("receiver_register", receiver_register),
+    ):
+        if type(register) is not int or not 0 <= register <= 30:
+            raise ValueError(f"{name} must be an AArch64 general register index")
+    if argument_register == receiver_register:
+        raise ValueError("argument and receiver registers must differ")
+    if not code:
+        return {
+            "argument_register": f"x{argument_register}",
+            "receiver_register": f"x{receiver_register}",
+            "argument_pointer_dereferenced": False,
+            "argument_pointer_retained_on_receiver": False,
+            "dereferenced_value_retained_on_receiver": False,
+            "straight_line_prefix_only": True,
+        }
+
+    words = struct.unpack("<" + "I" * (len(code) // 4), code)
+    argument_aliases = {argument_register}
+    receiver_aliases = {receiver_register}
+    loaded_from_argument = set()
+    dereferenced = False
+    retained_argument = False
+    retained_loaded_value = False
+    tracking_started = False
+
+    for index, word in enumerate(words):
+        pc = index * 4
+        if (
+            _decode_bl_target(word, pc) is not None
+            or _is_indirect_call(word)
+            or _decode_conditional_branch_target(word, pc) is not None
+            or _decode_unconditional_branch_target(word, pc) is not None
+            or _is_indirect_branch(word)
+        ):
+            break
+
+        move = _decode_move_register(word)
+        if move is not None:
+            destination, source, width_mask = move
+            if destination != 31:
+                if width_mask == _MASK64 and source in argument_aliases:
+                    argument_aliases.add(destination)
+                else:
+                    argument_aliases.discard(destination)
+                if width_mask == _MASK64 and source in receiver_aliases:
+                    receiver_aliases.add(destination)
+                else:
+                    receiver_aliases.discard(destination)
+                if width_mask == _MASK64 and source in loaded_from_argument:
+                    loaded_from_argument.add(destination)
+                else:
+                    loaded_from_argument.discard(destination)
+            continue
+
+        load = _decode_ldr_x_unsigned(word)
+        if load is not None:
+            destination, base, _offset = load
+            loaded_from_argument_base = base in argument_aliases
+            if destination != 31:
+                argument_aliases.discard(destination)
+                receiver_aliases.discard(destination)
+                loaded_from_argument.discard(destination)
+                if loaded_from_argument_base:
+                    loaded_from_argument.add(destination)
+                    dereferenced = True
+                    tracking_started = True
+            continue
+
+        store = _decode_str_x_unsigned(word)
+        if store is not None:
+            source, base, _offset = store
+            if base in receiver_aliases:
+                if source in argument_aliases:
+                    retained_argument = True
+                if source in loaded_from_argument:
+                    retained_loaded_value = True
+            continue
+
+        # Ignore only recognized SP-based save stores before tracking starts.
+        # Any other unknown instruction could overwrite an argument or alias,
+        # so fail closed instead of carrying stale register state.
+        if not tracking_started and (word == _NOP or _is_stack_prologue_store(word)):
+            continue
+        break
+
+    return {
+        "argument_register": f"x{argument_register}",
+        "receiver_register": f"x{receiver_register}",
+        "argument_pointer_dereferenced": dereferenced,
+        "argument_pointer_retained_on_receiver": retained_argument,
+        "dereferenced_value_retained_on_receiver": retained_loaded_value,
+        "straight_line_prefix_only": True,
+    }

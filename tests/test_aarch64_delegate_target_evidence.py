@@ -3,6 +3,7 @@ import struct
 import unittest
 
 from tools.aarch64_delegate_target_evidence import (
+    summarize_delegate_constructor_argument_shape,
     summarize_delegate_method_pointer_arguments,
 )
 from tools.il2cpp_codegen_inventory import R_AARCH64_RELATIVE
@@ -43,6 +44,12 @@ def ldr_x(destination, base, byte_offset=0):
     if byte_offset % 8:
         raise ValueError("LDR X offset must be 8-byte aligned")
     return 0xF9400000 | ((byte_offset // 8) << 10) | (base << 5) | destination
+
+
+def str_x(source, base, byte_offset=0):
+    if byte_offset % 8:
+        raise ValueError("STR X offset must be 8-byte aligned")
+    return 0xF9000000 | ((byte_offset // 8) << 10) | (base << 5) | source
 
 
 def mov_x(destination, source):
@@ -374,6 +381,92 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.analyze(valid, target_prefixes=())
 
+
+
+    def test_constructor_argument_shape_reports_dereference_and_retention_without_offsets(self):
+        code = words(
+            0xF81D0FFE,  # prologue store
+            0xA90157F6,  # saved registers
+            0xA9024FF4,
+            ldr_x(8, 2, 8),  # load a value through candidate x2
+            mov_x(20, 2),
+            mov_x(21, 1),
+            mov_x(19, 0),
+            str_x(2, 0, 0x28),  # retain original candidate on receiver
+            str_x(8, 0, 0x10),  # retain dereferenced value on receiver
+            0xF8020C01,  # unsupported pre-index store ends the bounded scan
+        )
+        result = summarize_delegate_constructor_argument_shape(code)
+        self.assertEqual(
+            result,
+            {
+                "argument_register": "x2",
+                "receiver_register": "x0",
+                "argument_pointer_dereferenced": True,
+                "argument_pointer_retained_on_receiver": True,
+                "dereferenced_value_retained_on_receiver": True,
+                "straight_line_prefix_only": True,
+            },
+        )
+        rendered = repr(result)
+        self.assertNotIn("0x28", rendered)
+        self.assertNotIn("0x10", rendered)
+        self.assertNotIn("0xF940", rendered)
+
+    def test_constructor_argument_shape_does_not_promote_unrelated_load(self):
+        code = words(
+            ldr_x(8, 3, 8),  # unrelated base, not the candidate argument
+            str_x(2, 0, 0x28),
+            str_x(8, 0, 0x10),
+        )
+        result = summarize_delegate_constructor_argument_shape(code)
+        self.assertFalse(result["argument_pointer_dereferenced"])
+        self.assertTrue(result["argument_pointer_retained_on_receiver"])
+        self.assertFalse(result["dereferenced_value_retained_on_receiver"])
+
+    def test_constructor_argument_shape_stops_at_unknown_after_dereference(self):
+        code = words(
+            ldr_x(8, 2, 8),
+            0x8B090108,  # unsupported ADD-register form may overwrite x8
+            str_x(8, 0, 0x10),
+        )
+        result = summarize_delegate_constructor_argument_shape(code)
+        self.assertTrue(result["argument_pointer_dereferenced"])
+        self.assertFalse(result["dereferenced_value_retained_on_receiver"])
+
+    def test_constructor_argument_shape_rejects_invalid_inputs(self):
+        with self.assertRaises(ValueError):
+            summarize_delegate_constructor_argument_shape(b"abc")
+        with self.assertRaises(ValueError):
+            summarize_delegate_constructor_argument_shape(words(0xD503201F), argument_register=31)
+        with self.assertRaises(ValueError):
+            summarize_delegate_constructor_argument_shape(words(0xD503201F), receiver_register=True)
+        with self.assertRaises(ValueError):
+            summarize_delegate_constructor_argument_shape(words(0xD503201F), argument_register=0)
+
+
+    def test_constructor_argument_shape_tracks_receiver_register_copies(self):
+        code = words(
+            mov_x(19, 0),  # receiver alias
+            ldr_x(8, 2, 8),
+            str_x(2, 19, 0x28),
+            str_x(8, 19, 0x10),
+        )
+        result = summarize_delegate_constructor_argument_shape(code)
+        self.assertTrue(result["argument_pointer_dereferenced"])
+        self.assertTrue(result["argument_pointer_retained_on_receiver"])
+        self.assertTrue(result["dereferenced_value_retained_on_receiver"])
+
+
+    def test_constructor_argument_shape_stops_on_unknown_before_dereference(self):
+        code = words(
+            0x91000442,  # unsupported ADD X2, X2, #1 may overwrite candidate x2
+            ldr_x(8, 2, 8),
+            str_x(8, 0, 0x10),
+        )
+        result = summarize_delegate_constructor_argument_shape(code)
+        self.assertFalse(result["argument_pointer_dereferenced"])
+        self.assertFalse(result["dereferenced_value_retained_on_receiver"])
 
 if __name__ == "__main__":
     unittest.main()
