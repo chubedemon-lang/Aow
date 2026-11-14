@@ -88,6 +88,9 @@ class EvidenceValidationTests(unittest.TestCase):
             r"C:\Users\Operator\AppData\Local\capture.pcap",
             r"C:/Users/Operator/AppData/Local/capture.pcap",
             r"\\fileserver\private\capture.pcap",
+            r"..\private\capture.pcap",
+            r"docs\..\private\capture.pcap",
+            r"\Users\Operator\AppData\Local\capture.pcap",
         )
         for field in ("source", "observation"):
             for value in examples:
