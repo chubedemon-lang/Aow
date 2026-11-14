@@ -7,6 +7,7 @@ and a reproducible command; synthetic-only tests never unlock protocol gates.
 from dataclasses import dataclass
 import hashlib
 import re
+from urllib.parse import unquote
 
 
 _SHA = re.compile(r"^[0-9a-f]{64}$")
@@ -70,6 +71,7 @@ _RAW_BYTES = re.compile(r"\b(?:packet|capture|payload)_bytes\s*[:=]", re.IGNOREC
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.IGNORECASE
 )
+_PERCENT_ESCAPE = re.compile(r"%[0-9a-f]{2}", re.IGNORECASE)
 _LOCAL_FILE_SUFFIXES = frozenset({
     "apk", "bat", "c", "cfg", "cpp", "cs", "css", "csv", "dll", "go",
     "h", "html", "ini", "java", "js", "json", "log", "md", "py", "ps1",
@@ -81,7 +83,7 @@ class EvidenceError(ValueError):
     pass
 
 
-def _contains_sensitive_material(value):
+def _contains_sensitive_material_once(value):
     if (
         _URI_SCHEME.search(value)
         or _IPV4.search(value)
@@ -99,6 +101,27 @@ def _contains_sensitive_material(value):
         if suffix not in _LOCAL_FILE_SUFFIXES:
             return True
     return False
+
+
+def _contains_sensitive_material(value):
+    """Screen literal and bounded URL-decoded forms of public evidence text.
+
+    Decode at most three rounds, matching the offline evidence validator. If
+    valid percent escapes remain after that bound, reject conservatively rather
+    than allowing deeper nested encoding to hide a locator or credential.
+    """
+    candidate = value
+    for _ in range(3):
+        if _contains_sensitive_material_once(candidate):
+            return True
+        decoded = unquote(candidate)
+        if decoded == candidate:
+            return False
+        candidate = decoded
+    return (
+        _contains_sensitive_material_once(candidate)
+        or _PERCENT_ESCAPE.search(candidate) is not None
+    )
 
 
 def _validate_public_text(value, field, maximum=2000):
