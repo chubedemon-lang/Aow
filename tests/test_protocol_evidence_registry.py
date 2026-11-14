@@ -68,6 +68,40 @@ class EvidenceRegistryTests(unittest.TestCase):
             with self.subTest(observation=observation), self.assertRaises(EvidenceError):
                 Evidence("transport", self.sha, observation, "il2cpp_offline")
 
+    def test_rejects_percent_encoded_sensitive_observation_and_method(self):
+        invalid_observations = (
+            "%2Fmnt%2Fdata%2Fprivate%2Faow.apk",
+            "%2e%2e%2fprivate%2fcapture.pcap",
+            "docs%5c..%5cprivate%5ccapture.pcap",
+            "https%3A%2F%2Fexample.invalid%2Fcapture",
+            "token%3Dsample-secret",
+            "https%253A%252F%252Fexample.invalid%252Fcapture",
+            "token%2525253Dsample-secret",
+        )
+        for observation in invalid_observations:
+            with self.subTest(observation=observation), self.assertRaises(EvidenceError):
+                Evidence("transport", self.sha, observation, "il2cpp_offline")
+
+        invalid_methods = (
+            "offline%20https%3A%2F%2Fexample.invalid",
+            "token%3Dsample-secret",
+        )
+        for method in invalid_methods:
+            with self.subTest(method=method), self.assertRaises(EvidenceError):
+                Evidence("transport", self.sha, "offline observation", method)
+
+    def test_accepts_safe_percent_encoded_repository_reference_in_observation(self):
+        record = Evidence(
+            "transport",
+            self.sha,
+            "review docs%2FPROTOCOL.md%23framing",
+            "offline native inspection",
+        )
+        self.assertEqual(
+            record.observation,
+            "review docs%2FPROTOCOL.md%23framing",
+        )
+
     def test_rejects_absolute_paths_in_reproduction_commands(self):
         for reproduction in (
             "python C:/Users/Operator/capture.py",
