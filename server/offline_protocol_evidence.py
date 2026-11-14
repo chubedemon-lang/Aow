@@ -22,11 +22,11 @@ FIELDS = frozenset({
 # Reject arbitrary URI schemes (not just HTTP), IP literals, localhost,
 # DNS-like hostnames, credentials, and raw-byte markers before public export.
 # This is a conservative guardrail, not a general-purpose DLP scanner.
-_URI_SCHEME = re.compile(r"\\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+_URI_SCHEME = re.compile(r"\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _IPV4 = re.compile(
     r"(?<![A-Za-z0-9_.])"
     r"(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])"
-    r"(?:\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
+    r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
     r"(?![A-Za-z0-9_.])"
 )
 _IPV6 = re.compile(
@@ -36,7 +36,7 @@ _IPV6 = re.compile(
 )
 _HOSTNAME = re.compile(
     r"(?<![A-Za-z0-9_-])"
-    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
     r"[A-Za-z]{2,}(?::[0-9]{1,5})?"
     r"(?![A-Za-z0-9_-])",
     re.IGNORECASE,
@@ -50,13 +50,13 @@ _LOCALHOST = re.compile(
 # and tests/test_module.py usable. Parent traversal is rejected separately.
 _ABSOLUTE_PATH = re.compile(
     r"(?<![A-Za-z0-9])(?:"
-    r"~[\\/][^\\s]+"
-    r"|/{1,}(?:[^/\\s]+/)*[^/\\s]+"
-    r"|[A-Za-z]:[\\/][^\\s]+"
-    r"|\\\\\\\\[^\\\\/\\s]+[\\/][^\\s]+"
+    r"~[\\/][^\s]+"
+    r"|/{1,}(?:[^/\s]+/)*[^/\s]+"
+    r"|[A-Za-z]:[\\/][^\s]+"
+    r"|\\\\[^\\/\s]+[\\/][^\s]+"
     r")"
 )
-_PARENT_PATH = re.compile(r"(?:^|[\\/])\\.\\.(?:[\\/]|$)")
+_PARENT_PATH = re.compile(r"(?:^|[\\/])\.\.(?:[\\/]|$)")
 # Local source references such as tests/test_module.py and docs/PROTOCOL.md
 # are allowed; these suffixes are not treated as DNS top-level domains.
 _LOCAL_FILE_SUFFIXES = frozenset({
@@ -65,13 +65,13 @@ _LOCAL_FILE_SUFFIXES = frozenset({
     "rst", "sh", "so", "sql", "toml", "ts", "txt", "xml", "yaml", "yml",
 })
 _CREDENTIAL_ASSIGNMENT = re.compile(
-    r"\\b(?:authorization|bearer|token|password|passwd|secret|"
-    r"api[_-]?key|access[_-]?key|refresh[_-]?token)\\s*[:=]\\s*\\S+",
+    r"\b(?:authorization|bearer|token|password|passwd|secret|"
+    r"api[_-]?key|access[_-]?key|refresh[_-]?token)\s*[:=]\s*\S+",
     re.IGNORECASE,
 )
-_BEARER_VALUE = re.compile(r"\\bBearer\\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
+_BEARER_VALUE = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
 _PACKET_BYTES = re.compile(
-    r"\\b(?:packet|capture|payload)_bytes\\s*[:=]", re.IGNORECASE
+    r"\b(?:packet|capture|payload)_bytes\s*[:=]", re.IGNORECASE
 )
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.IGNORECASE
