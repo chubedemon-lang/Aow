@@ -19,14 +19,14 @@ FIELDS = frozenset({
 })
 
 # Free-text metadata is intended for public provenance, not raw observations.
-# Reject arbitrary URI schemes (not just HTTP), IPv4/IPv6 literals, localhost,
-# and DNS-like hostnames before a caller writes metadata to a public manifest.
+# Reject arbitrary URI schemes (not just HTTP), IP literals, localhost,
+# DNS-like hostnames, credentials, and raw-byte markers before public export.
 # This is a conservative guardrail, not a general-purpose DLP scanner.
-_URI_SCHEME = re.compile(r"\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+_URI_SCHEME = re.compile(r"\\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _IPV4 = re.compile(
     r"(?<![A-Za-z0-9_.])"
     r"(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])"
-    r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
+    r"(?:\\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}"
     r"(?![A-Za-z0-9_.])"
 )
 _IPV6 = re.compile(
@@ -36,7 +36,7 @@ _IPV6 = re.compile(
 )
 _HOSTNAME = re.compile(
     r"(?<![A-Za-z0-9_-])"
-    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+"
     r"[A-Za-z]{2,}(?::[0-9]{1,5})?"
     r"(?![A-Za-z0-9_-])",
     re.IGNORECASE,
@@ -45,6 +45,18 @@ _LOCALHOST = re.compile(
     r"(?<![A-Za-z0-9_.-])localhost(?::[0-9]{1,5})?(?![A-Za-z0-9_.-])",
     re.IGNORECASE,
 )
+# Reject absolute POSIX, shell-home, Windows drive-rooted and UNC paths.
+# The lookbehind keeps repository-relative references such as docs/PROTOCOL.md
+# and tests/test_module.py usable. Parent traversal is rejected separately.
+_ABSOLUTE_PATH = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"~[\\/][^\\s]+"
+    r"|/{1,}(?:[^/\\s]+/)*[^/\\s]+"
+    r"|[A-Za-z]:[\\/][^\\s]+"
+    r"|\\\\\\\\[^\\\\/\\s]+[\\/][^\\s]+"
+    r")"
+)
+_PARENT_PATH = re.compile(r"(?:^|[\\/])\\.\\.(?:[\\/]|$)")
 # Local source references such as tests/test_module.py and docs/PROTOCOL.md
 # are allowed; these suffixes are not treated as DNS top-level domains.
 _LOCAL_FILE_SUFFIXES = frozenset({
@@ -53,13 +65,13 @@ _LOCAL_FILE_SUFFIXES = frozenset({
     "rst", "sh", "so", "sql", "toml", "ts", "txt", "xml", "yaml", "yml",
 })
 _CREDENTIAL_ASSIGNMENT = re.compile(
-    r"\b(?:authorization|bearer|token|password|passwd|secret|"
-    r"api[_-]?key|access[_-]?key|refresh[_-]?token)\s*[:=]\s*\S+",
+    r"\\b(?:authorization|bearer|token|password|passwd|secret|"
+    r"api[_-]?key|access[_-]?key|refresh[_-]?token)\\s*[:=]\\s*\\S+",
     re.IGNORECASE,
 )
-_BEARER_VALUE = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
+_BEARER_VALUE = re.compile(r"\\bBearer\\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
 _PACKET_BYTES = re.compile(
-    r"\b(?:packet|capture|payload)_bytes\s*[:=]", re.IGNORECASE
+    r"\\b(?:packet|capture|payload)_bytes\\s*[:=]", re.IGNORECASE
 )
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.IGNORECASE
@@ -87,12 +99,14 @@ def _validate_public_text(key, value):
     if not value.isprintable():
         raise EvidenceError("control character in metadata")
     if (_contains_network_locator(value)
+            or _ABSOLUTE_PATH.search(value)
+            or _PARENT_PATH.search(value)
             or _CREDENTIAL_ASSIGNMENT.search(value)
             or _BEARER_VALUE.search(value)
             or _PACKET_BYTES.search(value)
             or _PRIVATE_KEY.search(value)):
         raise EvidenceError(
-            "sensitive endpoint, credential, or raw-byte marker in " + key
+            "sensitive endpoint, path, credential, or raw-byte marker in " + key
         )
     return value.strip()
 
@@ -101,8 +115,9 @@ def validate_record(record):
     """Return sanitized, schema-limited metadata for an offline evidence record.
 
     Hashes are identifiers, not proof of compatibility. Unknown fields and
-    common secret/endpoint/raw-byte forms in free text are rejected to reduce
-    accidental publication of private captures or credentials.
+    common secret, endpoint, absolute/parent path, and raw-byte forms in free
+    text are rejected to reduce accidental publication of private captures
+    or credentials.
     """
     if not isinstance(record, dict) or set(record) != FIELDS:
         raise EvidenceError("record must have exactly the approved metadata fields")
