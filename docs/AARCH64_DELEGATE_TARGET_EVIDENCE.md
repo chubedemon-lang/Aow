@@ -51,3 +51,31 @@ Duplicate method-label associations are not deduplicated before resolution. Even
 - Metadata associations must be supplied as an ordered list or tuple. Set and frozenset inputs are rejected because they can erase duplicate associations before the analyzer can detect ambiguity.
 
 - Metadata method labels must retain the canonical `/pN` suffix emitted from the IL2CPP unsigned 16-bit parameter-count field. Missing, non-ASCII, non-decimal, non-canonical leading-zero, over-range, or repeated suffixes are unresolved; malformed labels must never be promoted to a unique constructor or callback target.
+
+
+## Delegate constructor argument shape — 2026-11-14
+
+A fresh private, read-only disassembly of the unchanged authorized APK's
+`OnMessageReceivedDelegate::.ctor` entry window shows a bounded straight-line
+pattern: the candidate second argument register is dereferenced at a positive
+offset, the original argument is retained on the receiver object, and the
+dereferenced value is also retained on the receiver object. The public analyzer
+now reports only those three boolean observations for the allowlisted
+constructor; it does not publish the offsets, pointer values, native addresses,
+or instruction words.
+
+This changes how the earlier delegate-target result must be interpreted:
+the constructor argument is pointer-like and descriptor-shaped in this entry
+window, so comparing that argument directly with executable method-entry
+addresses is insufficient to identify a callback. The direct-entry matcher
+remains conservative and may return unresolved. The analysis does **not**
+identify the argument's managed type, callback method, or runtime target.
+
+In the connection-start state-machine window, the two delegate constructions
+precede `MessageDispatcher.SafeRegister` calls carrying client-side
+registration keys 5004 and 5005. Those values remain dispatcher registration
+keys, not confirmed wire message IDs. No packet bytes, runtime trace, handshake
+sequence, LoginRequest field order, or APK/server compatibility is established.
+
+Synthetic tests use invented AArch64 instruction words only. The real APK and
+native library remain outside this repository.
