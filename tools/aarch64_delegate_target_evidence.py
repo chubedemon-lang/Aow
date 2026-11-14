@@ -351,6 +351,26 @@ def _decode_str_x_unsigned(word):
     return source, base, offset
 
 
+def _is_stack_prologue_store(word):
+    """Recognize only common SP-based STR/STP prologue stores."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return False
+    if ((word >> 5) & 0x1F) != 31:
+        return False
+    return (word & 0xFFC00000) in {
+        0xF8000000,  # STR X, pre/post-index
+        0xF9000000,  # STR X, unsigned offset
+        0xB8000000,  # STR W, pre/post-index
+        0xB9000000,  # STR W, unsigned offset
+        0xA8800000,  # STP X, post-index
+        0xA9000000,  # STP X, signed offset
+        0xA9800000,  # STP X, pre-index
+        0x28800000,  # STP W, post-index
+        0x29000000,  # STP W, signed offset
+        0x29800000,  # STP W, pre-index
+    }
+
+
 def summarize_delegate_constructor_argument_shape(
     code, *, argument_register=2, receiver_register=0
 ):
@@ -450,11 +470,12 @@ def summarize_delegate_constructor_argument_shape(
                     retained_loaded_value = True
             continue
 
-        # Ignore prologue instructions before the first argument dereference.
-        # Once tracking begins, stop rather than guessing through an unknown
-        # instruction that could overwrite one of the tracked registers.
-        if tracking_started:
-            break
+        # Ignore only recognized SP-based save stores before tracking starts.
+        # Any other unknown instruction could overwrite an argument or alias,
+        # so fail closed instead of carrying stale register state.
+        if not tracking_started and (word == _NOP or _is_stack_prologue_store(word)):
+            continue
+        break
 
     return {
         "argument_register": f"x{argument_register}",
