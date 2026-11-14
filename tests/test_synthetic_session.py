@@ -65,6 +65,24 @@ class SyntheticSessionTests(unittest.TestCase):
                 s.enter_map(value)
         self.assertEqual((s.phase, s.map_id), (Phase.PLAYER_SELECTED, None))
 
+    def test_lifecycle_properties_are_read_only_and_slots_block_injection(self):
+        s = SyntheticSession()
+        attempted = (
+            ("phase", Phase.AUTHENTICATED),
+            ("account_id", "forged-account"),
+            ("player_id", "forged-player"),
+            ("map_id", 99),
+            ("injected", True),
+        )
+        for name, value in attempted:
+            with self.subTest(name=name), self.assertRaises(AttributeError):
+                setattr(s, name, value)
+        self.assertEqual(
+            (s.phase, s.account_id, s.player_id, s.map_id),
+            (Phase.CONNECTED, None, None, None),
+        )
+        self.assertFalse(hasattr(s, "__dict__"))
+
     def test_close_revokes_everything_and_is_terminal(self):
         s = SyntheticSession()
         s.authenticate("one")
