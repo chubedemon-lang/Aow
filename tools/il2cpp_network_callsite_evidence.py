@@ -29,6 +29,7 @@ from tools.aarch64_call_argument_evidence import (
     summarize_small_argument_constants,
 )
 from tools.aarch64_delegate_target_evidence import (
+    summarize_delegate_constructor_argument_shape,
     summarize_delegate_method_pointer_arguments,
 )
 from tools.il2cpp_native_method_evidence import (
@@ -170,7 +171,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         indirect = _summarize_relocated_indirect_calls(
             code, target, relocations, method_targets
         )
-        callsite_summary.append({
+        record = {
             "namespace": method["namespace"],
             "type": method["type"],
             "method": method["method"],
@@ -199,7 +200,16 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
                     argument_registers=(2,),
                 )
             ),
-        })
+        }
+        if (
+            method["namespace"] == "com.geargames.common.network"
+            and method["type"] == "OnMessageReceivedDelegate"
+            and method["method"] == ".ctor"
+        ):
+            record["delegate_constructor_argument_shape"] = (
+                summarize_delegate_constructor_argument_shape(code)
+            )
+        callsite_summary.append(record)
     callsite_summary.sort(key=lambda item: (
         item["namespace"], item["type"], item["method"],
         item["parameter_count"], item["image"],
