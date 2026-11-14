@@ -453,5 +453,131 @@ class SqliteSessionStoreTests(unittest.TestCase):
 
 
 
+
+    def test_verify_integrity_counts_expired_sessions_without_mutating_them(self):
+        active = self.store.issue(101)
+        expired = self.store.issue(102, ttl_seconds=1)
+        self.now += 1
+
+        self.assertEqual(
+            self.store.verify_integrity(), {"session_count": 2}
+        )
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            2,
+        )
+        self.assertEqual(self.store.resolve(active), 101)
+        with self.assertRaises(SessionError):
+            self.store.resolve(expired)
+
+    def test_verify_integrity_rejects_non_blob_or_wrong_length_token_hash(self):
+        legacy = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(legacy.close)
+        legacy.execute(
+            "CREATE TABLE durable_sessions "
+            "(token_hash, account_id, created_at, expires_at)"
+        )
+        store = SqliteSessionStore(legacy, clock=lambda: self.now)
+        legacy.execute(
+            "INSERT INTO durable_sessions VALUES (?, ?, ?, ?)",
+            ("x" * 32, 1, 1_000.0, 1_060.0),
+        )
+
+        with self.assertRaisesRegex(SessionError, "session store"):
+            store.verify_integrity()
+        self.assertFalse(legacy.in_transaction)
+
+    def test_verify_integrity_rejects_corrupt_legacy_identity_and_expiry_rows(self):
+        corrupt_rows = (
+            (b"x" * 32, 1.5, 1_000.0, 1_060.0),
+            (b"x" * 32, 1, float("inf"), 1_060.0),
+            (b"x" * 32, 1, 1_000.0, 1_000.0),
+            (b"x" * 32, 1, 1_000.0, 1_000.0 + 31_536_001),
+        )
+        for row in corrupt_rows:
+            with self.subTest(row=row):
+                legacy = sqlite3.connect(":memory:", isolation_level=None)
+                self.addCleanup(legacy.close)
+                legacy.execute(
+                    "CREATE TABLE durable_sessions "
+                    "(token_hash, account_id, created_at, expires_at)"
+                )
+                store = SqliteSessionStore(legacy, clock=lambda: self.now)
+                legacy.execute(
+                    "INSERT INTO durable_sessions VALUES (?, ?, ?, ?)", row
+                )
+                with self.assertRaisesRegex(SessionError, "invalid session"):
+                    store.verify_integrity()
+                self.assertFalse(legacy.in_transaction)
+
+    def test_verify_integrity_rejects_active_caller_transaction_without_taking_it_over(self):
+        self.db.execute("CREATE TABLE caller_state (value INTEGER)")
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_state VALUES (1)")
+
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            self.store.verify_integrity()
+
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM caller_state").fetchone()[0],
+            0,
+        )
+
+    def test_verify_integrity_uses_one_wal_snapshot_during_concurrent_issue(self):
+        self.db.execute("PRAGMA journal_mode = WAL").fetchone()
+        self.store.issue(111)
+        second_db = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None
+        )
+        self.addCleanup(second_db.close)
+        second_store = SqliteSessionStore(
+            second_db, ttl_seconds=60, clock=lambda: self.now
+        )
+
+        audit_db = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, check_same_thread=False
+        )
+        self.addCleanup(audit_db.close)
+        audit_store = SqliteSessionStore(
+            audit_db, ttl_seconds=60, clock=lambda: self.now
+        )
+        snapshot_ready = threading.Event()
+        resume_audit = threading.Event()
+        original_validate = audit_store._validated_stored_session_row
+
+        def pause_during_snapshot_scan(row):
+            snapshot_ready.set()
+            if not resume_audit.wait(timeout=5):
+                raise RuntimeError("timed out waiting to resume session audit")
+            return original_validate(row)
+
+        audit_store._validated_stored_session_row = pause_during_snapshot_scan
+        results = []
+        errors = []
+
+        def run_audit():
+            try:
+                results.append(audit_store.verify_integrity())
+            except BaseException as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(target=run_audit)
+        worker.start()
+        try:
+            self.assertTrue(snapshot_ready.wait(timeout=5))
+            second_store.issue(112)
+        finally:
+            resume_audit.set()
+            worker.join(timeout=5)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(results, [{"session_count": 1}])
+        audit_store._validated_stored_session_row = original_validate
+        self.assertEqual(audit_store.verify_integrity(), {"session_count": 2})
+
 if __name__ == "__main__":
     unittest.main()

@@ -71,3 +71,19 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 No APK bytes, proprietary assets, credentials or packet captures belong in this public repository.
+
+## Read-only integrity audit
+
+`verify_integrity()` pins one SQLite read snapshot, runs
+`PRAGMA quick_check`, then streams all durable-session rows through
+the same strict account/expiry validation used by token resolution. It also
+requires each stored token digest to be a 32-byte BLOB. It returns
+`{"session_count": N}` and does not delete expired rows, repair
+corruption, or expose token digests. Expired rows remain included until the
+separate `purge_expired()` cleanup operation runs.
+
+The audit requires an idle connection and always rolls back its read
+transaction on success or failure. In WAL mode, concurrent commits from other
+connections do not change the snapshot being audited; a later audit observes
+those commits. This is persistence diagnostics for synthetic server sessions,
+not APK authentication evidence.
