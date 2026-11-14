@@ -118,7 +118,7 @@ def _contains_sensitive_material(value):
     metadata-only publication boundary.
     """
     candidate = value
-    for _ in range(4):
+    for _ in range(3):
         if _contains_sensitive_material_once(candidate):
             return True
         decoded = unquote(candidate)
