@@ -233,11 +233,13 @@ class SqliteMapPositionStore:
             raise MapPositionStoreError("map-position foreign key check failed")
 
         snapshots = {}
-        rows = self.db.execute(
+        snapshot_rows = self.db.execute(
             """SELECT character_id, map_id, x, y, revision
                FROM map_position_snapshots ORDER BY character_id"""
-        ).fetchall()
-        for character_id, map_id, x, y, revision in rows:
+        )
+        # Consume the cursor incrementally; large worlds should not duplicate
+        # the complete snapshot table in memory during an integrity audit.
+        for character_id, map_id, x, y, revision in snapshot_rows:
             character_id = self._character_id(character_id)
             if character_id in snapshots:
                 raise MapPositionStoreError("duplicate character snapshot")
@@ -264,7 +266,9 @@ class SqliteMapPositionStore:
                       result_json, result_revision
                FROM map_position_mutations
                ORDER BY character_id, result_revision, request_id"""
-        ).fetchall()
+        )
+        # Keep the read cursor on the same snapshot and avoid materializing
+        # the full mutation history before replaying it.
         mutation_count = 0
 
         for (request_id, character_id, expected_revision, payload_json,
