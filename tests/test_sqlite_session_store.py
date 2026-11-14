@@ -579,5 +579,31 @@ class SqliteSessionStoreTests(unittest.TestCase):
         audit_store._validated_stored_session_row = original_validate
         self.assertEqual(audit_store.verify_integrity(), {"session_count": 2})
 
+
+    def test_verify_integrity_rejects_duplicate_legacy_token_digests(self):
+        legacy = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(legacy.close)
+        legacy.execute(
+            "CREATE TABLE durable_sessions "
+            "(token_hash, account_id, created_at, expires_at)"
+        )
+        store = SqliteSessionStore(legacy, clock=lambda: self.now)
+        digest = b"d" * 32
+        legacy.executemany(
+            "INSERT INTO durable_sessions VALUES (?, ?, ?, ?)",
+            (
+                (digest, 201, 1_000.0, 1_060.0),
+                (digest, 202, 1_000.0, 1_060.0),
+            ),
+        )
+
+        with self.assertRaisesRegex(SessionError, "invalid session store"):
+            store.verify_integrity()
+        self.assertFalse(legacy.in_transaction)
+        self.assertEqual(
+            legacy.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            2,
+        )
+
 if __name__ == "__main__":
     unittest.main()
