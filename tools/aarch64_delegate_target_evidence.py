@@ -390,6 +390,7 @@ def summarize_delegate_constructor_argument_shape(
 
     words = struct.unpack("<" + "I" * (len(code) // 4), code)
     argument_aliases = {argument_register}
+    receiver_aliases = {receiver_register}
     loaded_from_argument = set()
     dereferenced = False
     retained_argument = False
@@ -415,6 +416,10 @@ def summarize_delegate_constructor_argument_shape(
                     argument_aliases.add(destination)
                 else:
                     argument_aliases.discard(destination)
+                if width_mask == _MASK64 and source in receiver_aliases:
+                    receiver_aliases.add(destination)
+                else:
+                    receiver_aliases.discard(destination)
                 if width_mask == _MASK64 and source in loaded_from_argument:
                     loaded_from_argument.add(destination)
                 else:
@@ -427,6 +432,7 @@ def summarize_delegate_constructor_argument_shape(
             loaded_from_argument_base = base in argument_aliases
             if destination != 31:
                 argument_aliases.discard(destination)
+                receiver_aliases.discard(destination)
                 loaded_from_argument.discard(destination)
                 if loaded_from_argument_base:
                     loaded_from_argument.add(destination)
@@ -437,7 +443,7 @@ def summarize_delegate_constructor_argument_shape(
         store = _decode_str_x_unsigned(word)
         if store is not None:
             source, base, _offset = store
-            if base == receiver_register:
+            if base in receiver_aliases:
                 if source in argument_aliases:
                     retained_argument = True
                 if source in loaded_from_argument:
