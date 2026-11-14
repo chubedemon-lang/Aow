@@ -146,9 +146,9 @@ class ReceiverLengthCandidateTests(unittest.TestCase):
             max_payload_bytes=32, max_buffer_bytes=8,
             http_marker_value=SYNTHETIC_HTTP_MARKER,
         )
-        reader.feed(b"\\x00\\x00\\x00")
+        reader.feed(b"\x00\x00\x00")
         self.assertIsNone(reader.read_frame())
-        reader.feed(b"\\x01A")
+        reader.feed(b"\x01A")
         self.assertEqual(reader.read_frame(), candidate_frame(b"A"))
         self.assertEqual(reader.max_frame_bytes, 8)
 
@@ -157,7 +157,7 @@ class ReceiverLengthCandidateTests(unittest.TestCase):
             max_payload_bytes=32, max_buffer_bytes=6,
             http_marker_value=SYNTHETIC_HTTP_MARKER,
         )
-        reader.feed(b"\\x00\\x00\\x00\\x03")
+        reader.feed(b"\x00\x00\x00\x03")
         with self.assertRaises(ReceiverPayloadTooLarge) as caught:
             reader.read_frame()
         self.assertEqual((caught.exception.requested, caught.exception.limit), (3, 2))
@@ -176,7 +176,7 @@ class ReceiverLengthCandidateTests(unittest.TestCase):
             max_payload_bytes=32, max_buffer_bytes=64,
             http_marker_value=SYNTHETIC_HTTP_MARKER,
         )
-        chunks = iter((b"\\x00", b"\\x00\\x00", b"\\x03ab", b"c"))
+        chunks = iter((b"\x00", b"\x00\x00", b"\x03ab", b"c"))
         requests = []
 
         def recv(size):
@@ -216,7 +216,7 @@ class ReceiverLengthCandidateTests(unittest.TestCase):
             max_payload_bytes=32, max_buffer_bytes=64,
             http_marker_value=SYNTHETIC_HTTP_MARKER,
         )
-        chunks = iter((b"\\x00\\x00\\x00\\x03a", b""))
+        chunks = iter((b"\x00\x00\x00\x03a", b""))
         with self.assertRaises(TruncatedFrame) as caught:
             read_next_frame(reader, lambda _size: next(chunks))
         self.assertEqual((caught.exception.expected, caught.exception.available), (7, 5))
