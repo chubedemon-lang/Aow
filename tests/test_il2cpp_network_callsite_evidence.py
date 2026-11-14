@@ -177,5 +177,45 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
 
 
 
+
+    def test_delegate_constructor_summary_reports_pointer_like_shape_redacted(self):
+        def ldr_x(destination, base, byte_offset):
+            return 0xF9400000 | ((byte_offset // 8) << 10) | (base << 5) | destination
+
+        def mov_x(destination, source):
+            return 0xAA0003E0 | (source << 16) | destination
+
+        def str_x(source, base, byte_offset):
+            return 0xF9000000 | ((byte_offset // 8) << 10) | (base << 5) | source
+
+        code = (
+            0xF81D0FFE,
+            0xA90157F6,
+            0xA9024FF4,
+            ldr_x(8, 2, 8),
+            mov_x(20, 2),
+            mov_x(21, 1),
+            mov_x(19, 0),
+            str_x(2, 0, 0x28),
+            str_x(8, 0, 0x10),
+        )
+        report = inspect_bytes(
+            make_metadata(
+                [".ctor"],
+                type_name="OnMessageReceivedDelegate",
+                namespace="com.geargames.common.network",
+            ),
+            make_elf(1, text_words=code),
+        )
+        summary = report["callsite_summary"][0]["delegate_constructor_argument_shape"]
+        self.assertTrue(summary["argument_pointer_dereferenced"])
+        self.assertTrue(summary["argument_pointer_retained_on_receiver"])
+        self.assertTrue(summary["dereferenced_value_retained_on_receiver"])
+        rendered = json.dumps(summary)
+        self.assertNotIn("0x28", rendered)
+        self.assertNotIn("0x10", rendered)
+        self.assertFalse(report["native_addresses_emitted"])
+        self.assertFalse(report["raw_instructions_emitted"])
+
 if __name__ == "__main__":
     unittest.main()
