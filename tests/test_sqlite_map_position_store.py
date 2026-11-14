@@ -249,7 +249,9 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
 
         self.db.execute("BEGIN")
         self.db.execute("INSERT INTO caller_work VALUES (7)")
-        with self.assertRaisesRegex(sqlite3.IntegrityError, "synthetic receipt failure"):
+        with self.assertRaisesRegex(
+            sqlite3.IntegrityError, "synthetic receipt failure"
+        ):
             self.store.enter("p1", "failed-enter", 0, 4, 10, 20)
 
         self.assertTrue(self.db.in_transaction)
