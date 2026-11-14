@@ -444,5 +444,18 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             summarize_delegate_constructor_argument_shape(words(0xD503201F), argument_register=0)
 
+
+    def test_constructor_argument_shape_tracks_receiver_register_copies(self):
+        code = words(
+            mov_x(19, 0),  # receiver alias
+            ldr_x(8, 2, 8),
+            str_x(2, 19, 0x28),
+            str_x(8, 19, 0x10),
+        )
+        result = summarize_delegate_constructor_argument_shape(code)
+        self.assertTrue(result["argument_pointer_dereferenced"])
+        self.assertTrue(result["argument_pointer_retained_on_receiver"])
+        self.assertTrue(result["dereferenced_value_retained_on_receiver"])
+
 if __name__ == "__main__":
     unittest.main()
