@@ -82,6 +82,9 @@ class EvidenceValidationTests(unittest.TestCase):
         examples = (
             "/home/operator/captures/session.pcap",
             "/mnt/data/private/aow.apk",
+            "~/private/capture.pcap",
+            r"~\\AppData\\Local\\capture.pcap",
+            "//fileserver/private/capture.pcap",
             r"C:\Users\Operator\AppData\Local\capture.pcap",
             r"C:/Users/Operator/AppData/Local/capture.pcap",
             r"\\fileserver\private\capture.pcap",
