@@ -204,6 +204,99 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         self.assertEqual(self.store.get("hero").count("potion"), 1)
         self.assertEqual(self.store.get("hero").revision, 1)
 
+    def test_get_rejects_corrupt_persisted_sqlite_storage_types(self):
+        self.store.create("hero", capacity=3, max_stack=10)
+        self.store.apply("hero", "seed", 0, [("potion", 2)])
+        corruptions = (
+            ("capacity REAL",
+             "UPDATE inventory_snapshots SET capacity=? WHERE character_id=?",
+             (2.5, "hero"),
+             "UPDATE inventory_snapshots SET capacity=3 WHERE character_id=?",
+             ("hero",)),
+            ("max_stack REAL",
+             "UPDATE inventory_snapshots SET max_stack=? WHERE character_id=?",
+             (10.5, "hero"),
+             "UPDATE inventory_snapshots SET max_stack=10 WHERE character_id=?",
+             ("hero",)),
+            ("revision REAL",
+             "UPDATE inventory_snapshots SET revision=? WHERE character_id=?",
+             (1.5, "hero"),
+             "UPDATE inventory_snapshots SET revision=1 WHERE character_id=?",
+             ("hero",)),
+            ("quantity REAL",
+             "UPDATE inventory_items SET quantity=? WHERE character_id=?",
+             (1.5, "hero"),
+             "UPDATE inventory_items SET quantity=2 WHERE character_id=?",
+             ("hero",)),
+            ("item ID BLOB",
+             "UPDATE inventory_items SET item_id=CAST(item_id AS BLOB) WHERE character_id=?",
+             ("hero",),
+             "UPDATE inventory_items SET item_id=CAST(item_id AS TEXT) WHERE character_id=?",
+             ("hero",)),
+        )
+        for label, corrupt_sql, corrupt_args, restore_sql, restore_args in corruptions:
+            with self.subTest(field=label):
+                self.db.execute("PRAGMA ignore_check_constraints=ON")
+                try:
+                    self.db.execute(corrupt_sql, corrupt_args)
+                    with self.assertRaises(InventoryStoreError):
+                        self.store.get("hero")
+                    self.db.execute(restore_sql, restore_args)
+                finally:
+                    self.db.execute("PRAGMA ignore_check_constraints=OFF")
+        self.assertEqual(self.store.get("hero").items, (("potion", 2),))
+
+    def test_apply_rejects_corrupt_persisted_sqlite_storage_types_before_mutation(self):
+        self.store.create("hero", capacity=3, max_stack=10)
+        self.store.apply("hero", "seed", 0, [("potion", 2)])
+        corruptions = (
+            ("capacity REAL",
+             "UPDATE inventory_snapshots SET capacity=? WHERE character_id=?",
+             (2.5, "hero"),
+             "UPDATE inventory_snapshots SET capacity=3 WHERE character_id=?",
+             ("hero",)),
+            ("max_stack REAL",
+             "UPDATE inventory_snapshots SET max_stack=? WHERE character_id=?",
+             (10.5, "hero"),
+             "UPDATE inventory_snapshots SET max_stack=10 WHERE character_id=?",
+             ("hero",)),
+            ("revision REAL",
+             "UPDATE inventory_snapshots SET revision=? WHERE character_id=?",
+             (1.5, "hero"),
+             "UPDATE inventory_snapshots SET revision=1 WHERE character_id=?",
+             ("hero",)),
+            ("quantity REAL",
+             "UPDATE inventory_items SET quantity=? WHERE character_id=?",
+             (1.5, "hero"),
+             "UPDATE inventory_items SET quantity=2 WHERE character_id=?",
+             ("hero",)),
+            ("item ID BLOB",
+             "UPDATE inventory_items SET item_id=CAST(item_id AS BLOB) WHERE character_id=?",
+             ("hero",),
+             "UPDATE inventory_items SET item_id=CAST(item_id AS TEXT) WHERE character_id=?",
+             ("hero",)),
+        )
+        self.db.execute("PRAGMA ignore_check_constraints=ON")
+        try:
+            for index, (
+                label, corrupt_sql, corrupt_args, restore_sql, restore_args
+            ) in enumerate(corruptions):
+                with self.subTest(field=label):
+                    self.db.execute(corrupt_sql, corrupt_args)
+                    with self.assertRaises(InventoryStoreError):
+                        self.store.apply(
+                            "hero", "corrupt-read-" + str(index), 1, [("potion", 1)]
+                        )
+                    self.db.execute(restore_sql, restore_args)
+        finally:
+            self.db.execute("PRAGMA ignore_check_constraints=OFF")
+        self.assertEqual(self.store.get("hero").items, (("potion", 2),))
+        self.assertEqual(self.store.get("hero").revision, 1)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM inventory_mutations").fetchone()[0],
+            1,
+        )
+
     def test_constructor_does_not_commit_callers_transaction(self):
         self.db.execute("CREATE TABLE caller_work (value INTEGER)")
         self.db.commit()

@@ -68,6 +68,9 @@ on:
       - 'server/sqlite_player_state_store.py'
       - 'tests/test_sqlite_player_state_store.py'
       - 'docs/SQLITE_PLAYER_STATE_STORE.md'
+      - 'server/sqlite_inventory_store.py'
+      - 'tests/test_sqlite_inventory_store.py'
+      - 'docs/SQLITE_INVENTORY_STORE.md'
       - 'server/sqlite_map_position_store.py'
       - 'tests/test_sqlite_map_position_store.py'
       - 'docs/SQLITE_MAP_POSITION_STORE.md'
@@ -225,6 +228,21 @@ jobs:
         run: python -m py_compile server/sqlite_map_position_store.py
       - name: Durable map-position integrity tests (synthetic only)
         run: python -m unittest discover -s tests -p 'test_sqlite_map_position_store.py' -v
+  inventory-store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile durable inventory store
+        run: python -m py_compile server/sqlite_inventory_store.py
+      - name: Durable inventory persistence regression tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_sqlite_inventory_store.py' -v
+
   authorized-transaction:
     runs-on: ubuntu-latest
     timeout-minutes: 10

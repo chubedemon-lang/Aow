@@ -16,6 +16,16 @@
 - Rejects underflow, stack overflow, capacity overflow, empty net mutations and oversized batches without changing state.
 - Supports reopening the same private SQLite database file.
 
+## Strict persisted reads
+
+The ordinary `get()` path and the pre-mutation state read now use the same
+strict snapshot decoder as the integrity audit. SQLite REAL values in integer
+columns, BLOB item identifiers, invalid ranges, duplicate/out-of-order item
+rows, and quantities outside the configured stack bound are rejected rather
+than truncated or stringified by Python coercion. A rejected mutation performs
+no item, revision, or receipt write. This is synthetic persistence hardening,
+not an AOW item or packet contract.
+
 ## Integration boundary
 
 This module is not wired into `server/mock.py`, does not authenticate accounts, and does not establish character ownership. A trusted caller must authenticate the account, verify character ownership, and authorize every mutation before invoking the store. Never expose arbitrary item grants or caller-selected character IDs as public routes.
