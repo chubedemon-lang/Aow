@@ -9,8 +9,11 @@ from dataclasses import dataclass
 import sqlite3
 
 from server.sessions import SessionError
-from server.sqlite_authorized_character_service import (
+from server.character_snapshot import (
     CharacterSnapshot,
+    character_snapshot_from_row,
+)
+from server.sqlite_authorized_character_service import (
     require_character_lifecycle_schema,
 )
 from server.sqlite_authorized_transaction import authorized_character_transaction
@@ -92,13 +95,7 @@ class SqliteAuthorizedWorldStateService:
             # write transaction is held; fail closed if data is inconsistent.
             raise SessionError("character not owned by session")
 
-        character = CharacterSnapshot(
-            character_id=int(row[0]),
-            name=str(row[1]),
-            map_id=str(row[2]),
-            x=int(row[3]),
-            y=int(row[4]),
-        )
+        character = character_snapshot_from_row(row)
         return AuthorizedWorldSnapshot(
             character=character,
             player_state=self.players.get(owned_id),
