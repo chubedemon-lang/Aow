@@ -103,11 +103,28 @@ class EvidenceValidationTests(unittest.TestCase):
             "issue:2",
             "docs/PROTOCOL.md#framing",
             "tests/test_offline_evidence_validation.py",
+            "docs%2FPROTOCOL.md%23framing",
         ):
             for field in ("source", "observation"):
                 with self.subTest(field=field, value=value):
                     result = validate_record({**self.valid, field: value})
                     self.assertEqual(getattr(result, field), value)
+
+    def test_rejects_percent_encoded_sensitive_locations(self):
+        examples = (
+            "%2Fmnt%2Fdata%2Fprivate%2Faow.apk",
+            "%2e%2e%2fprivate%2fcapture.pcap",
+            "docs%5c..%5cprivate%5ccapture.pcap",
+            "%252e%252e%255cprivate%255ccapture.pcap",
+            "%25252e%25252e%25255cprivate%25255ccapture.pcap",
+            "https%253A%252F%252Fexample.org%252Ftrace",
+            "token%3Dsample-secret",
+        )
+        for field in ("source", "observation"):
+            for value in examples:
+                with self.subTest(field=field, value=value):
+                    with self.assertRaises(EvidenceError):
+                        validate_record({**self.valid, field: value})
 
     def test_rejects_whitespace_only_even_if_unverified(self):
         for field in ("source", "observation"):
