@@ -141,13 +141,18 @@ class SqliteAccountAuthService:
         hmac.compare_digest(candidate, self._dummy_digest)
 
     def _lookup_credential(self, username):
-        return self.db.execute(
+        """Return one unambiguous username match; reject duplicate identities."""
+        rows = self.db.execute(
             """SELECT a.id, c.iterations, c.salt, c.password_hash
                FROM accounts AS a
                LEFT JOIN account_credentials AS c ON c.account_id = a.id
-               WHERE a.username = ?""",
+               WHERE a.username = ?
+               LIMIT 2""",
             (username,),
-        ).fetchone()
+        ).fetchmany(2)
+        # Legacy schemas may lack a UNIQUE(username) constraint. Never let
+        # fetchone() select an arbitrary account when the identity is ambiguous.
+        return rows[0] if len(rows) == 1 else None
 
     def enroll_password(self, account_id: int, password: str) -> None:
         """Enroll one password for an existing account; never overwrite a credential.

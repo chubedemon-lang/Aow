@@ -89,6 +89,70 @@ class SqliteAccountAuthServiceTests(unittest.TestCase):
             0,
         )
 
+
+    def test_duplicate_usernames_fail_closed_without_issuing_session(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.executescript(
+            """CREATE TABLE accounts (
+                   id INTEGER PRIMARY KEY,
+                   username TEXT NOT NULL
+               );
+               INSERT INTO accounts(id, username)
+               VALUES (1, 'alice'), (2, 'alice');"""
+        )
+        service = SqliteAccountAuthService(
+            connection, iterations=100_000, ttl_seconds=30,
+            clock=lambda: self.now[0],
+        )
+        service.enroll_password(1, PASSWORD)
+
+        with self.assertRaisesRegex(AccountAuthError, "invalid credentials"):
+            service.authenticate_and_issue_session("alice", PASSWORD)
+        self.assertEqual(
+            connection.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            0,
+        )
+
+    def test_duplicate_username_added_after_precheck_is_rejected(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.executescript(
+            """CREATE TABLE accounts (
+                   id INTEGER PRIMARY KEY,
+                   username TEXT NOT NULL
+               );
+               INSERT INTO accounts(id, username)
+               VALUES (1, 'alice'), (2, 'bob');"""
+        )
+        service = SqliteAccountAuthService(
+            connection, iterations=100_000, ttl_seconds=30,
+            clock=lambda: self.now[0],
+        )
+        service.enroll_password(1, PASSWORD)
+        original_lookup = service._lookup_credential
+        calls = [0]
+
+        def add_duplicate_after_first_lookup(username):
+            row = original_lookup(username)
+            calls[0] += 1
+            if calls[0] == 1:
+                connection.execute(
+                    "UPDATE accounts SET username = 'alice' WHERE id = 2"
+                )
+            return row
+
+        service._lookup_credential = add_duplicate_after_first_lookup
+        with self.assertRaisesRegex(AccountAuthError, "invalid credentials"):
+            service.authenticate_and_issue_session("alice", PASSWORD)
+        self.assertEqual(calls[0], 2)
+        self.assertEqual(
+            connection.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            0,
+        )
+
     def test_duplicate_enrollment_is_rejected_without_replacing_hash(self):
         self.service.enroll_password(1, PASSWORD)
         before = self.db.execute(
