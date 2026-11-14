@@ -19,8 +19,8 @@ FIELDS = frozenset({
 })
 
 # Free-text metadata is intended for public provenance, not raw observations.
-# Reject arbitrary URI schemes (not just HTTP), IPv4/IPv6 literals, localhost,
-# and DNS-like hostnames before a caller writes metadata to a public manifest.
+# Reject arbitrary URI schemes (not just HTTP), IP literals, localhost,
+# DNS-like hostnames, credentials, and raw-byte markers before public export.
 # This is a conservative guardrail, not a general-purpose DLP scanner.
 _URI_SCHEME = re.compile(r"\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _IPV4 = re.compile(
@@ -45,6 +45,18 @@ _LOCALHOST = re.compile(
     r"(?<![A-Za-z0-9_.-])localhost(?::[0-9]{1,5})?(?![A-Za-z0-9_.-])",
     re.IGNORECASE,
 )
+# Reject absolute POSIX, shell-home, Windows drive-rooted and UNC paths.
+# The lookbehind keeps repository-relative references such as docs/PROTOCOL.md
+# and tests/test_module.py usable. Parent traversal is rejected separately.
+_ABSOLUTE_PATH = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"~[\\/][^\s]+"
+    r"|/{1,}(?:[^/\s]+/)*[^/\s]+"
+    r"|[A-Za-z]:[\\/][^\s]+"
+    r"|\\\\[^\\/\s]+[\\/][^\s]+"
+    r")"
+)
+_PARENT_PATH = re.compile(r"(?:^|[\\/])\.\.(?:[\\/]|$)")
 # Local source references such as tests/test_module.py and docs/PROTOCOL.md
 # are allowed; these suffixes are not treated as DNS top-level domains.
 _LOCAL_FILE_SUFFIXES = frozenset({
@@ -87,12 +99,14 @@ def _validate_public_text(key, value):
     if not value.isprintable():
         raise EvidenceError("control character in metadata")
     if (_contains_network_locator(value)
+            or _ABSOLUTE_PATH.search(value)
+            or _PARENT_PATH.search(value)
             or _CREDENTIAL_ASSIGNMENT.search(value)
             or _BEARER_VALUE.search(value)
             or _PACKET_BYTES.search(value)
             or _PRIVATE_KEY.search(value)):
         raise EvidenceError(
-            "sensitive endpoint, credential, or raw-byte marker in " + key
+            "sensitive endpoint, path, credential, or raw-byte marker in " + key
         )
     return value.strip()
 
@@ -101,8 +115,9 @@ def validate_record(record):
     """Return sanitized, schema-limited metadata for an offline evidence record.
 
     Hashes are identifiers, not proof of compatibility. Unknown fields and
-    common secret/endpoint/raw-byte forms in free text are rejected to reduce
-    accidental publication of private captures or credentials.
+    common secret, endpoint, absolute/parent path, and raw-byte forms in free
+    text are rejected to reduce accidental publication of private captures
+    or credentials.
     """
     if not isinstance(record, dict) or set(record) != FIELDS:
         raise EvidenceError("record must have exactly the approved metadata fields")

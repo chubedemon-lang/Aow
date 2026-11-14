@@ -30,7 +30,16 @@ web searches, and unapproved method labels must not unlock protocol evidence
 gates. A passing metadata validator is bookkeeping only; it does not establish
 wire compatibility or replace review of the underlying local evidence.
 
+## Public metadata path redaction
 
+The JSON metadata validator (`server/offline_protocol_evidence.py`) rejects
+absolute POSIX paths, shell-home paths, Windows drive-rooted paths, UNC paths,
+and parent-directory traversal in every free-text field. This prevents a
+manifest from exposing private APK/capture workspace locations or using
+relative traversal to point outside the repository. Sanitized repository-local
+references such as `docs/PROTOCOL.md#framing` and
+`tests/test_offline_protocol_evidence.py` remain valid. This is a conservative
+privacy guardrail, not a complete data-loss-prevention scanner.
 
 References are short, sanitized locators, not extracted strings. Keep APK
 bytes, decompiled code, IP addresses, secrets, packet captures, proprietary

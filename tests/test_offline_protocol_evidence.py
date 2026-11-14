@@ -189,6 +189,34 @@ class EvidenceManifestTests(unittest.TestCase):
                 item = validate_record(sample(test_reference=value))
                 self.assertEqual(item["test_reference"], value)
 
+    def test_rejects_absolute_private_paths_in_every_free_text_field(self):
+        examples = (
+            "/home/operator/captures/session.pcap",
+            "/mnt/data/private/aow.apk",
+            "~/private/capture.pcap",
+            r"~\AppData\Local\capture.pcap",
+            "//fileserver/private/capture.pcap",
+            r"C:\Users\Operator\AppData\Local\capture.pcap",
+            r"C:/Users/Operator/AppData/Local/capture.pcap",
+            r"\\fileserver\private\capture.pcap",
+        )
+        for field in ("method", "reproduction", "test_reference", "notes"):
+            for value in examples:
+                with self.subTest(field=field, value=value), self.assertRaises(EvidenceError):
+                    validate_record(sample(**{field: value}))
+
+    def test_rejects_parent_directory_traversal_in_every_free_text_field(self):
+        examples = (
+            "../private/capture.pcap",
+            "docs/../private/capture.pcap",
+            r"..\private\capture.pcap",
+            r"docs\..\private\capture.pcap",
+        )
+        for field in ("method", "reproduction", "test_reference", "notes"):
+            for value in examples:
+                with self.subTest(field=field, value=value), self.assertRaises(EvidenceError):
+                    validate_record(sample(**{field: value}))
+
 
 if __name__ == "__main__":
     unittest.main()
