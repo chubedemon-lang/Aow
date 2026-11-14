@@ -116,6 +116,7 @@ class EvidenceValidationTests(unittest.TestCase):
             "%2e%2e%2fprivate%2fcapture.pcap",
             "docs%5c..%5cprivate%5ccapture.pcap",
             "%252e%252e%255cprivate%255ccapture.pcap",
+            "%25252e%25252e%25255cprivate%25255ccapture.pcap",
             "https%253A%252F%252Fexample.org%252Ftrace",
             "token%3Dsample-secret",
         )
