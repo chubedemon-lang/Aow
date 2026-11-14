@@ -12,6 +12,7 @@
 - Evaluates the clock after acquiring the write lock, so waiting for SQLite does not bypass expiry.
 - Enforces expiry at the exact boundary (`now >= expires_at`).
 - Revocation is idempotent: the first call returns true; later calls return false.
+- `revoke_all_for_account(account_id)` removes every session for one account (logout all devices), returns the deleted row count, and is idempotent when repeated. It uses `BEGIN IMMEDIATE` so it serializes with protected `authorized_transaction()` work on other connections.
 - Concurrent revocation against separate SQLite connections has one winner.
 - Rejects an already-active caller transaction instead of committing work owned by the caller.
 
