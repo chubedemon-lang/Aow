@@ -141,6 +141,86 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
             self.callback_label,
         )
 
+    def test_resolves_encoded_method_usage_from_static_data_cell(self):
+        pointer_slot = 0x9000
+        data_cell = 0xA000
+        encoded_token = 0x60000000 | ((321 << 1) | 1)
+        code = words(
+            adrp(8, self.start, pointer_slot),
+            ldr_x(8, 8, 0x6F0),
+            ldr_x(2, 8),
+            bl(self.start + 12, self.constructor),
+        )
+        result = self.analyze(
+            code,
+            relocations={
+                pointer_slot + 0x6F0: (R_AARCH64_RELATIVE, data_cell),
+            },
+            static_memory_values={data_cell: encoded_token},
+            encoded_method_usage_targets={
+                encoded_token: [self.callback],
+            },
+        )
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {
+                "resolution": "unique_metadata_method",
+                "method": self.callback_label,
+                "via": "encoded_metadata_usage",
+            },
+        )
+
+    def test_non_relative_cell_relocation_blocks_static_memory_fallback(self):
+        pointer_slot = 0x9000
+        data_cell = 0xA000
+        encoded_token = 0x60000000 | ((321 << 1) | 1)
+        code = words(
+            adrp(8, self.start, pointer_slot),
+            ldr_x(8, 8, 0x6F0),
+            ldr_x(2, 8),
+            bl(self.start + 12, self.constructor),
+        )
+        result = self.analyze(
+            code,
+            relocations={
+                pointer_slot + 0x6F0: (R_AARCH64_RELATIVE, data_cell),
+                data_cell: (1025, 0xB000),
+            },
+            static_memory_values={data_cell: encoded_token},
+            encoded_method_usage_targets={
+                encoded_token: [self.callback],
+            },
+        )
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unknown"},
+        )
+
+    def test_ambiguous_encoded_method_usage_is_not_named(self):
+        pointer_slot = 0x9000
+        data_cell = 0xA000
+        encoded_token = 0x60000000 | ((321 << 1) | 1)
+        code = words(
+            adrp(8, self.start, pointer_slot),
+            ldr_x(8, 8, 0x6F0),
+            ldr_x(2, 8),
+            bl(self.start + 12, self.constructor),
+        )
+        result = self.analyze(
+            code,
+            relocations={
+                pointer_slot + 0x6F0: (R_AARCH64_RELATIVE, data_cell),
+            },
+            static_memory_values={data_cell: encoded_token},
+            encoded_method_usage_targets={
+                encoded_token: [self.callback, 0x7000],
+            },
+        )
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "ambiguous_metadata_method"},
+        )
+
     def test_non_relative_or_missing_relocation_is_not_promoted(self):
         code = words(
             adrp(8, self.start, 0x9000),
@@ -419,6 +499,10 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
                 self.analyze(valid, argument_registers=registers)
         with self.assertRaises(ValueError):
             self.analyze(valid, target_prefixes=())
+        with self.assertRaises(ValueError):
+            self.analyze(valid, static_memory_values={True: 1})
+        with self.assertRaises(ValueError):
+            self.analyze(valid, encoded_method_usage_targets={True: [self.callback]})
 
 
     def test_rejects_start_addresses_outside_unsigned_64_bit_space(self):

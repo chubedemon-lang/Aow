@@ -11,6 +11,7 @@ inferred from a callsite alone.
 import argparse
 import hashlib
 import json
+import struct
 import zipfile
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from tools.il2cpp_codegen_inventory import (
     METADATA_MEMBER,
     R_AARCH64_RELATIVE,
     CodegenInventoryError,
+    _contains,
     _metadata_images,
     _slice,
 )
@@ -31,6 +33,10 @@ from tools.aarch64_call_argument_evidence import (
 from tools.aarch64_delegate_target_evidence import (
     summarize_delegate_constructor_argument_shape,
     summarize_delegate_method_pointer_arguments,
+)
+from tools.il2cpp_metadata_usage_evidence import (
+    decode_method_def_usage_index,
+    encode_method_def_usage_index,
 )
 from tools.il2cpp_native_method_evidence import (
     TARGET_METHODS,
@@ -72,6 +78,49 @@ NETWORK_SUPPORT_METHODS = {
     ("com.geargames.common.network", "OnMessageReceivedDelegate"): {".ctor"},
 }
 
+def _metadata_usage_static_values(elf, sections, relocations, metadata_version):
+    """Read only relocation-referenced data cells containing MethodDef usage tokens."""
+    values = {}
+    data_sections = [
+        sections[name]
+        for name in (".data", ".data.rel.ro")
+        if name in sections
+    ]
+    section_bytes = {
+        section["address"]: _slice(
+            elf, section["offset"], section["size"], "metadata-usage data section"
+        )
+        for section in data_sections
+    }
+    for relocation in relocations.values():
+        if (
+            not isinstance(relocation, tuple)
+            or len(relocation) != 2
+            or type(relocation[0]) is not int
+            or relocation[0] != R_AARCH64_RELATIVE
+            or type(relocation[1]) is not int
+            or relocation[1] < 0
+        ):
+            continue
+        target = relocation[1]
+        # A cell with its own relocation is not a stable file-backed word.
+        if target in relocations:
+            continue
+        for section in data_sections:
+            if not _contains(section, target, 8):
+                continue
+            offset = target - section["address"]
+            encoded = struct.unpack_from(
+                "<Q", section_bytes[section["address"]], offset
+            )[0]
+            if encoded >> 32:
+                break
+            if decode_method_def_usage_index(encoded, metadata_version) is not None:
+                values[target] = encoded
+            break
+    return values
+
+
 CALLSITE_ARGUMENT_TARGET_PREFIXES = (
     "ClientNetworkStreamBuffer::SetDataAvailable",
     "AbstractClientBuffer::Write",
@@ -94,6 +143,15 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
     # registrations observed in the original APK. Keep the root exact and
     # narrow; do not sweep every compiler-generated MoveNext method.
     allowlist[("", "<StartConnectToServer>d__12")] = {"MoveNext"}
+    # Keep the two startup message callbacks explicit; their numeric registration
+    # constants remain redacted from public reports.
+    loading_presenter_key = (
+        "com.geargames.aow.gui.loadingwindow",
+        "GUILoadingPvpStartPresenter",
+    )
+    allowlist[loading_presenter_key] = set(
+        allowlist.get(loading_presenter_key, ())
+    ) | {"OnProgressAnswer", "OnProgressNotification"}
     methods = [
         method for method in _network_methods(metadata, info, allowlist)
         if method["category"] != "login_session_serializer"
@@ -143,6 +201,27 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         indirect_targets.update(
             _relocated_indirect_call_targets(code, target, relocations)
         )
+
+    static_memory_values = _metadata_usage_static_values(
+        elf, sections, relocations, info["version"]
+    )
+    encoded_values = set(static_memory_values.values())
+    image_starts = {
+        image["name"]: image["method_start"]
+        for image in info["images"]
+        if image["method_start"] is not None
+    }
+    encoded_method_usage_targets = {}
+    for method, target, _section_name, _window_bytes, _truncated, _code in resolved:
+        image_start = image_starts.get(method["image"])
+        if image_start is None:
+            continue
+        method_index = image_start + method["slot_index"]
+        encoded_token = encode_method_def_usage_index(
+            method_index, info["version"]
+        )
+        if encoded_token in encoded_values:
+            encoded_method_usage_targets.setdefault(encoded_token, []).append(target)
 
     method_targets = _all_method_targets(
         metadata,
@@ -198,6 +277,8 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
                     relocations,
                     target_prefixes=("OnMessageReceivedDelegate::.ctor",),
                     argument_registers=(2,),
+                    static_memory_values=static_memory_values,
+                    encoded_method_usage_targets=encoded_method_usage_targets,
                 )
             ),
         }

@@ -131,6 +131,8 @@ def summarize_delegate_method_pointer_arguments(
     target_prefixes=("OnMessageReceivedDelegate::.ctor",),
     argument_registers=(2,),
     descriptor_method_targets=None,
+    static_memory_values=None,
+    encoded_method_usage_targets=None,
 ):
     """Summarize candidate method-pointer arguments at delegate constructors.
 
@@ -179,6 +181,37 @@ def summarize_delegate_method_pointer_arguments(
             raise ValueError(
                 f"{mapping_name} keys must be unsigned 64-bit addresses"
             )
+    if static_memory_values is not None:
+        if not isinstance(static_memory_values, dict):
+            raise ValueError("static_memory_values must be a mapping")
+        if any(
+            type(address) is not int or not 0 <= address <= _MASK64
+            or type(value) is not int or not 0 <= value <= _MASK64
+            for address, value in static_memory_values.items()
+        ):
+            raise ValueError(
+                "static_memory_values must map unsigned 64-bit addresses to words"
+            )
+    if encoded_method_usage_targets is not None:
+        if not isinstance(encoded_method_usage_targets, dict):
+            raise ValueError("encoded_method_usage_targets must be a mapping")
+        for token, targets in encoded_method_usage_targets.items():
+            if type(token) is not int or not 0 <= token <= 0xFFFFFFFF:
+                raise ValueError(
+                    "encoded_method_usage_targets keys must be unsigned 32-bit tokens"
+                )
+            candidates = (targets,) if type(targets) is int else targets
+            if (
+                not isinstance(candidates, (tuple, list))
+                or not candidates
+                or any(
+                    type(target) is not int or not 0 <= target <= _MASK64
+                    for target in candidates
+                )
+            ):
+                raise ValueError(
+                    "encoded_method_usage_targets values must be executable address candidates"
+                )
     if (
         not isinstance(target_prefixes, (tuple, list, set, frozenset))
         or not target_prefixes
@@ -272,9 +305,11 @@ def summarize_delegate_method_pointer_arguments(
             if load is not None:
                 destination, base_register, offset = load
                 base = registers.get(base_register)
+                effective_address = None
                 relocation = None
                 if base is not None and base <= _MASK64 - offset:
-                    relocation = relocations.get(base + offset)
+                    effective_address = base + offset
+                    relocation = relocations.get(effective_address)
                 if (
                     isinstance(relocation, tuple)
                     and len(relocation) == 2
@@ -284,6 +319,13 @@ def summarize_delegate_method_pointer_arguments(
                     and 0 <= relocation[1] <= _MASK64
                 ):
                     registers[destination] = relocation[1]
+                elif (
+                    relocation is None
+                    and effective_address is not None
+                    and static_memory_values is not None
+                    and effective_address in static_memory_values
+                ):
+                    registers[destination] = static_memory_values[effective_address]
                 else:
                     registers.pop(destination, None)
                 continue
@@ -354,6 +396,35 @@ def summarize_delegate_method_pointer_arguments(
                                         "via": "descriptor_metadata",
                                     }
                                 elif len(descriptor_labels) > 1:
+                                    pointer_arguments[name] = {
+                                        "resolution": "ambiguous_metadata_method"
+                                    }
+                                else:
+                                    pointer_arguments[name] = {
+                                        "resolution": "unresolved_metadata_method"
+                                    }
+                        elif (
+                            encoded_method_usage_targets is not None
+                            and candidate_value in encoded_method_usage_targets
+                        ):
+                            encoded_targets = encoded_method_usage_targets[candidate_value]
+                            if type(encoded_targets) is int:
+                                encoded_targets = (encoded_targets,)
+                            if len(encoded_targets) != 1:
+                                pointer_arguments[name] = {
+                                    "resolution": "ambiguous_metadata_method"
+                                }
+                            else:
+                                encoded_labels = _method_labels(
+                                    method_targets.get(encoded_targets[0], ())
+                                )
+                                if len(encoded_labels) == 1:
+                                    pointer_arguments[name] = {
+                                        "resolution": "unique_metadata_method",
+                                        "method": encoded_labels[0],
+                                        "via": "encoded_metadata_usage",
+                                    }
+                                elif len(encoded_labels) > 1:
                                     pointer_arguments[name] = {
                                         "resolution": "ambiguous_metadata_method"
                                     }
