@@ -28,7 +28,7 @@ class CharacterSnapshot:
 
 def _valid_name(value) -> bool:
     if (type(value) is not str or not value or value != value.strip()
-            or "\\x00" in value or len(value) > 64):
+            or "\x00" in value or len(value) > 64):
         return False
     try:
         return len(value.encode("utf-8", "strict")) <= 256
