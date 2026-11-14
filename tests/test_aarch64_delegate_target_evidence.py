@@ -468,5 +468,89 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
         self.assertFalse(result["argument_pointer_dereferenced"])
         self.assertFalse(result["dereferenced_value_retained_on_receiver"])
 
+    def test_descriptor_pointer_resolves_only_through_supplied_metadata_mapping(self):
+        descriptor = 0x7000
+        code = words(
+            adr(2, self.start, descriptor),
+            bl(self.start + 4, self.constructor),
+        )
+        result = self.analyze(
+            code,
+            descriptor_method_targets={descriptor: self.callback},
+        )
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {
+                "resolution": "unique_metadata_method",
+                "method": self.callback_label,
+                "via": "descriptor_metadata",
+            },
+        )
+        rendered = repr(result)
+        self.assertNotIn(hex(descriptor), rendered)
+        self.assertNotIn(hex(self.callback), rendered)
+
+    def test_descriptor_mapping_preserves_duplicate_target_ambiguity(self):
+        descriptor = 0x7000
+        code = words(
+            adr(2, self.start, descriptor),
+            bl(self.start + 4, self.constructor),
+        )
+        result = self.analyze(
+            code,
+            descriptor_method_targets={descriptor: (self.callback, self.callback)},
+        )
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "ambiguous_metadata_method"},
+        )
+
+    def test_descriptor_mapping_does_not_filter_malformed_targets(self):
+        descriptor = 0x7000
+        code = words(
+            adr(2, self.start, descriptor),
+            bl(self.start + 4, self.constructor),
+        )
+        for targets in (
+            (self.callback, "invalid"),
+            (self.callback, -1),
+            (),
+            {self.callback},
+        ):
+            with self.subTest(targets=targets):
+                result = self.analyze(
+                    code,
+                    descriptor_method_targets={descriptor: targets},
+                )
+                self.assertEqual(
+                    result[0]["candidate_method_pointer_arguments"]["x2"],
+                    {"resolution": "unresolved_metadata_method"},
+                )
+
+    def test_descriptor_mapping_takes_precedence_over_direct_entry_match(self):
+        # Even if an address appears in both maps, an explicit descriptor
+        # association is authoritative and must not be bypassed on failure.
+        descriptor = self.callback
+        code = words(
+            adr(2, self.start, descriptor),
+            bl(self.start + 4, self.constructor),
+        )
+        result = self.analyze(
+            code,
+            descriptor_method_targets={descriptor: "invalid"},
+        )
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unresolved_metadata_method"},
+        )
+
+    def test_descriptor_mapping_must_be_a_mapping(self):
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        with self.assertRaises(ValueError):
+            self.analyze(code, descriptor_method_targets=[])
+
 if __name__ == "__main__":
     unittest.main()
