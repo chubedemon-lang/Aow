@@ -46,3 +46,9 @@ The repository-wide GitHub Actions suites also run on pull requests.
 ## Explicit non-goals
 
 This store does not establish AOW map identifiers, coordinate units, spawn rules, movement speed, collision/bounds, map transfer semantics, wire serialization, packet framing, or APK compatibility. It must not be treated as evidence for the original game's protocol. A future verified adapter must authenticate and authorize character ownership before invoking this domain store.
+
+## Large-history audit behavior
+
+The integrity audit iterates the snapshot and mutation query cursors directly. It does not call `fetchall()` on either potentially large map-position table, avoiding a second in-memory copy of the full serialized receipt history. Both scans remain inside the same deferred read transaction. The audit still retains per-character state required to replay revision chains, so memory usage grows with the number of characters rather than with the complete receipt payload history.
+
+A regression test uses a SQLite connection/cursor guard that raises if either map-position table query is materialized with `fetchall()`. All data in that test is synthetic and does not establish AOW wire compatibility.

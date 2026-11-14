@@ -66,6 +66,9 @@ on:
       - 'server/sqlite_player_state_store.py'
       - 'tests/test_sqlite_player_state_store.py'
       - 'docs/SQLITE_PLAYER_STATE_STORE.md'
+      - 'server/sqlite_map_position_store.py'
+      - 'tests/test_sqlite_map_position_store.py'
+      - 'docs/SQLITE_MAP_POSITION_STORE.md'
       - 'server/sqlite_authorized_transaction.py'
       - 'tests/test_sqlite_authorized_player_state_service.py'
       - 'docs/AUTHORIZED_PLAYER_STATE_SERVICE.md'
@@ -191,6 +194,20 @@ jobs:
         run: python -m py_compile server/sqlite_player_state_store.py
       - name: Durable player state integrity tests (synthetic only)
         run: python -m unittest discover -s tests -p 'test_sqlite_player_state_store.py' -v
+  map-position-store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile durable map-position store
+        run: python -m py_compile server/sqlite_map_position_store.py
+      - name: Durable map-position integrity tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_sqlite_map_position_store.py' -v
   authorized-transaction:
     runs-on: ubuntu-latest
     timeout-minutes: 10
