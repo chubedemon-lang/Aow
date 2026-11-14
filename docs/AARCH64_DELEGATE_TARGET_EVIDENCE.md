@@ -74,6 +74,13 @@ than being silently ignored. Each value is one candidate executable method
 pointer, or an ordered tuple/list of candidates; malformed values remain
 unresolved and repeated candidates remain ambiguous.
 
+The `method_targets` and `relocations` inputs are also address-keyed maps:
+every key must be an exact, non-boolean unsigned 64-bit integer. A relocation
+is followed only when its type is an exact integer equal to
+`R_AARCH64_RELATIVE` and its addend is an exact unsigned 64-bit integer.
+Malformed mapping keys are rejected before instruction analysis; malformed
+relocation records never become pointer evidence.
+
 The mapping, descriptor addresses, and executable pointers are inputs only;
 none are emitted in the redacted report. The method label is still static
 metadata evidence, not proof of runtime callback execution. Synthetic tests
