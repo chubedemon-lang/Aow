@@ -552,7 +552,7 @@ class SqliteInventoryStore:
                 raise InventoryNotFound("inventory not found")
             current_rows = self.db.execute(
                 "SELECT item_id, quantity FROM inventory_items "
-                "WHERE character_id=?", (character_id,)
+                "WHERE character_id=? ORDER BY item_id", (character_id,)
             ).fetchall()
             current_snapshot = self._snapshot(
                 character_id, *header, current_rows
