@@ -158,22 +158,84 @@ class SqliteAuthorizedCombatService:
         return value
 
     @staticmethod
-    def _battle_from_row(row):
-        return Battle(
-            first=Fighter(int(row[2]), int(row[3]), int(row[4]), int(row[5])),
-            second=Fighter(int(row[6]), int(row[7]), int(row[8]), int(row[9])),
-            next_actor=int(row[10]),
-            turn=int(row[11]),
+    def _stored_int(value, name, *, minimum, maximum):
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise CombatStoreError(f"invalid persisted combat {name}")
+        return value
+
+    @classmethod
+    def _battle_from_row(cls, row):
+        if len(row) != 14:
+            raise CombatStoreError("invalid persisted combat row")
+        first = Fighter(
+            cls._stored_int(row[2], "first fighter id", minimum=1, maximum=1_000_000),
+            cls._stored_int(row[3], "first fighter hp", minimum=0, maximum=1_000_000),
+            cls._stored_int(row[4], "first fighter attack", minimum=0, maximum=1_000_000),
+            cls._stored_int(row[5], "first fighter defense", minimum=0, maximum=1_000_000),
         )
+        second = Fighter(
+            cls._stored_int(row[6], "second fighter id", minimum=1, maximum=1_000_000),
+            cls._stored_int(row[7], "second fighter hp", minimum=0, maximum=1_000_000),
+            cls._stored_int(row[8], "second fighter attack", minimum=0, maximum=1_000_000),
+            cls._stored_int(row[9], "second fighter defense", minimum=0, maximum=1_000_000),
+        )
+        next_actor = cls._stored_int(
+            row[10], "next actor", minimum=1, maximum=1_000_000
+        )
+        turn = cls._stored_int(row[11], "turn", minimum=0, maximum=1_000_000)
+        return Battle(first, second, next_actor, turn)
 
     @classmethod
     def _snapshot_from_row(cls, row):
-        return CombatSnapshot(
-            battle_id=str(row[0]),
-            owner_character_id=str(row[1]),
-            battle=cls._battle_from_row(row),
-            revision=int(row[12]),
-        )
+        try:
+            if len(row) != 14:
+                raise CombatStoreError("invalid persisted combat row")
+            battle_id = cls._identifier(row[0], "battle identifier")
+            owner_character_id = cls._identifier(
+                row[1], "owner character identifier"
+            )
+            battle = cls._battle_from_row(row)
+            revision = cls._stored_int(
+                row[12], "revision", minimum=0, maximum=_MAX_REVISION
+            )
+            winner_id = row[13]
+
+            if revision != battle.turn:
+                raise CombatStoreError("persisted combat revision/turn mismatch")
+
+            if winner_id is None:
+                if battle.first.hp == 0 or battle.second.hp == 0:
+                    raise CombatStoreError(
+                        "persisted non-terminal combat has a defeated fighter"
+                    )
+            else:
+                winner_id = cls._stored_int(
+                    winner_id, "winner id", minimum=1, maximum=1_000_000
+                )
+                fighters = {
+                    battle.first.fighter_id: battle.first,
+                    battle.second.fighter_id: battle.second,
+                }
+                loser_ids = set(fighters) - {winner_id}
+                if (
+                    winner_id not in fighters
+                    or battle.turn < 1
+                    or fighters[winner_id].hp <= 0
+                    or len(loser_ids) != 1
+                    or fighters[next(iter(loser_ids))].hp != 0
+                    or battle.next_actor != winner_id
+                ):
+                    raise CombatStoreError(
+                        "persisted combat winner does not match battle state"
+                    )
+
+            return CombatSnapshot(
+                battle_id, owner_character_id, battle, revision
+            )
+        except CombatStoreError:
+            raise
+        except (IndexError, TypeError, ValueError, OverflowError) as exc:
+            raise CombatStoreError("invalid persisted combat snapshot") from exc
 
     @staticmethod
     def _battle_json(battle):
