@@ -160,6 +160,45 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
                     {"resolution": "unknown"},
                 )
 
+    def test_rejects_malformed_method_target_address_keys(self):
+        code = words(0xD503201F)
+        for address in (True, -1, 1 << 64, "0x4000"):
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                self.analyze(
+                    code,
+                    targets={address: [self.constructor_label]},
+                )
+
+    def test_rejects_malformed_relocation_address_keys(self):
+        code = words(0xD503201F)
+        for address in (True, -1, 1 << 64, "0x9000"):
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                self.analyze(
+                    code,
+                    relocations={
+                        address: (R_AARCH64_RELATIVE, self.callback),
+                    },
+                )
+
+    def test_non_integer_relative_relocation_kind_is_not_accepted(self):
+        pointer_slot = 0x9000
+        code = words(
+            adrp(8, self.start, pointer_slot),
+            ldr_x(9, 8),
+            mov_x(2, 9),
+            bl(self.start + 12, self.constructor),
+        )
+        result = self.analyze(
+            code,
+            relocations={
+                pointer_slot: (float(R_AARCH64_RELATIVE), self.callback),
+            },
+        )
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unknown"},
+        )
+
     def test_unknown_instruction_clears_pointer_state(self):
         code = words(
             adr(2, self.start, self.callback),

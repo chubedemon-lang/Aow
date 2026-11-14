@@ -161,15 +161,23 @@ def summarize_delegate_method_pointer_arguments(
         )
     if not isinstance(method_targets, dict) or not isinstance(relocations, dict):
         raise ValueError("method_targets and relocations must be mappings")
+    address_mappings = [
+        ("method_targets", method_targets),
+        ("relocations", relocations),
+    ]
     if descriptor_method_targets is not None:
         if not isinstance(descriptor_method_targets, dict):
             raise ValueError("descriptor_method_targets must be a mapping")
+        address_mappings.append(
+            ("descriptor_method_targets", descriptor_method_targets)
+        )
+    for mapping_name, mapping in address_mappings:
         if any(
-            type(descriptor) is not int or not 0 <= descriptor <= _MASK64
-            for descriptor in descriptor_method_targets
+            type(address) is not int or not 0 <= address <= _MASK64
+            for address in mapping
         ):
             raise ValueError(
-                "descriptor_method_targets keys must be unsigned 64-bit addresses"
+                f"{mapping_name} keys must be unsigned 64-bit addresses"
             )
     if (
         not isinstance(target_prefixes, (tuple, list, set, frozenset))
@@ -270,6 +278,7 @@ def summarize_delegate_method_pointer_arguments(
                 if (
                     isinstance(relocation, tuple)
                     and len(relocation) == 2
+                    and type(relocation[0]) is int
                     and relocation[0] == R_AARCH64_RELATIVE
                     and type(relocation[1]) is int
                     and 0 <= relocation[1] <= _MASK64
