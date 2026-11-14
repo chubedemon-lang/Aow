@@ -25,8 +25,19 @@ _LOCAL_REFERENCE = re.compile(
     r"^(?:issue:[1-9][0-9]*|(?:docs|tests|server|tools)/[A-Za-z0-9_./#-]{1,150})$"
 )
 _REPRODUCTION = re.compile(r"^[A-Za-z0-9_./:# -]{1,512}$")
-_ABSOLUTE_PATH = re.compile(r"(?<!\S)/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+")
-_PARENT_PATH = re.compile(r"(?:^|[\s/])\.\.(?:/|$)")
+# Public evidence prose and reproduction commands must not disclose local
+# artifact locations. Cover POSIX, shell-home, Windows drive-rooted, UNC and
+# single-rooted Windows paths; reject traversal using either separator.
+_ABSOLUTE_PATH = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"~[\\/][^\s]+"
+    r"|/{1,}(?:[^/\s]+/)*[^/\s]+"
+    r"|[A-Za-z]:[\\/][^\s]+"
+    r"|\\\\[^\\/\s]+[\\/][^\s]+"
+    r"|\\(?!\\)[^\\/\s]+(?:\\[^\\/\s]+)*"
+    r")"
+)
+_PARENT_PATH = re.compile(r"(?:^|[\\/])\.\.(?:[\\/]|$)")
 _URI_SCHEME = re.compile(r"\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _IPV4 = re.compile(
     r"(?<![A-Za-z0-9_.])"
@@ -76,6 +87,8 @@ def _contains_sensitive_material(value):
         or _IPV4.search(value)
         or _IPV6.search(value)
         or _LOCALHOST.search(value)
+        or _ABSOLUTE_PATH.search(value)
+        or _PARENT_PATH.search(value)
         or _SECRET.search(value)
         or _RAW_BYTES.search(value)
         or _PRIVATE_KEY.search(value)

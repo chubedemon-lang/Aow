@@ -32,14 +32,17 @@ wire compatibility or replace review of the underlying local evidence.
 
 ## Public metadata path redaction
 
-The JSON metadata validator (`server/offline_protocol_evidence.py`) rejects
-absolute POSIX paths, shell-home paths, Windows drive-rooted paths, UNC paths,
-and parent-directory traversal in every free-text field. This prevents a
-manifest from exposing private APK/capture workspace locations or using
-relative traversal to point outside the repository. Sanitized repository-local
-references such as `docs/PROTOCOL.md#framing` and
-`tests/test_offline_protocol_evidence.py` remain valid. This is a conservative
-privacy guardrail, not a complete data-loss-prevention scanner.
+The JSON metadata validator (`server/offline_protocol_evidence.py`) and the
+in-memory registry (`server/protocol_evidence_registry.py`) reject absolute
+POSIX paths, shell-home paths, Windows drive-rooted and single-rooted paths,
+UNC paths, and parent-directory traversal using either slash convention in
+public free-text fields and reproduction commands. The legacy
+`server/evidence_ledger.py` also rejects absolute and traversing paths in
+evidence references. This prevents public provenance records from exposing
+private APK/capture workspace locations or pointing outside the repository.
+Sanitized repository-local references such as `docs/PROTOCOL.md#framing`,
+`tests/test_offline_protocol_evidence.py`, and `issue:2` remain valid. These
+are conservative privacy guardrails, not complete data-loss-prevention scans.
 
 References are short, sanitized locators, not extracted strings. Keep APK
 bytes, decompiled code, IP addresses, secrets, packet captures, proprietary

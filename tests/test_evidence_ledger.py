@@ -46,6 +46,18 @@ class EvidenceLedgerTests(unittest.TestCase):
                                    "authorized_local_test", apk_sha256="a" * 64))
         self.assertTrue(protocol_ready(records))
 
+    def test_rejects_absolute_and_traversing_evidence_references(self):
+        invalid = (
+            "/mnt/data/private/aow.apk",
+            "//fileserver/private/capture.pcap",
+            "C:/Users/Operator/capture.pcap",
+            "../private/capture.pcap",
+            "docs/../private/capture.pcap",
+        )
+        for reference in invalid:
+            with self.subTest(reference=reference), self.assertRaises(ValueError):
+                self.record(reference=reference)
+
     def test_reject_raw_endpoint_or_secret_like_reference(self):
         for ref in ("https://official.example/path", "token=secret", "raw packet 00 01"):
             with self.subTest(ref=ref), self.assertRaises(ValueError):

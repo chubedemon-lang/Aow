@@ -33,6 +33,17 @@ _LOCALHOST = re.compile(
     r"(?<![A-Za-z0-9_.-])localhost(?::[0-9]{1,5})?(?![A-Za-z0-9_.-])",
     re.IGNORECASE,
 )
+# References are repository-local locators, never absolute artifact paths.
+_ABSOLUTE_PATH = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"~[\\/][^\s]+"
+    r"|/{1,}(?:[^/\s]+/)*[^/\s]+"
+    r"|[A-Za-z]:[\\/][^\s]+"
+    r"|\\\\[^\\/\s]+[\\/][^\s]+"
+    r"|\\(?!\\)[^\\/\s]+(?:\\[^\\/\s]+)*"
+    r")"
+)
+_PARENT_PATH = re.compile(r"(?:^|[\\/])\.\.(?:[\\/]|$)")
 _HOST_PORT = re.compile(
     r"(?<![A-Za-z0-9_./-])([A-Za-z][A-Za-z0-9.-]*):([0-9]{1,5})(?![0-9])"
 )
@@ -91,6 +102,9 @@ class EvidenceRecord:
             raise TypeError("status must be EvidenceStatus")
         if (not isinstance(self.reference, str)
                 or not _REFERENCE.fullmatch(self.reference)
+                or self.reference.startswith(("/", "\\"))
+                or _ABSOLUTE_PATH.search(self.reference)
+                or _PARENT_PATH.search(self.reference)
                 or _contains_network_locator(self.reference)
                 or re.search(r"(?i)(?:token|secret|password|apikey|api_key|credential)",
                              self.reference)):
