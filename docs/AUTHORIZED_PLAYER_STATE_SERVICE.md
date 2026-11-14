@@ -17,6 +17,9 @@ compatibility. It adds no HTTP route and does not verify passwords.
   token through `service.sessions.issue(account_id)`.
 - Only a SHA-256 token digest is persisted by the session store.
 - Every create/read/apply operation resolves the session and checks ownership.
+- The shared transaction helper verifies that both the authorizer and its
+  durable session store use the exact same SQLite connection before acquiring
+  the write lock. This preserves the revocation/mutation serialization boundary.
 - Unknown and foreign character IDs return the same authorization error.
 - Expired and revoked sessions cannot read or mutate snapshots.
 - The facade accepts the synthetic integer character ID and maps it to the
