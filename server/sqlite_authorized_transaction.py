@@ -2,8 +2,9 @@
 
 Use this helper around protected SQLite domain operations. BEGIN IMMEDIATE
 serializes session revocation with the authorization check and the state
-operation that follows it. The callback/store must use the same connection.
-This is a synthetic server-domain primitive, not an AOW login or wire protocol.
+operation that follows it. The authorizer and its session store must both use
+the exact supplied connection. This is a synthetic server-domain primitive,
+not an AOW login or wire protocol.
 """
 from contextlib import contextmanager
 import sqlite3
@@ -23,6 +24,11 @@ def authorized_character_transaction(connection, authorizer, token,
         raise TypeError("sqlite connection required")
     if getattr(authorizer, "db", None) is not connection:
         raise ValueError("authorizer must use the same SQLite connection")
+    session_store = getattr(authorizer, "sessions", None)
+    if getattr(session_store, "db", None) is not connection:
+        raise ValueError("session store must use the same SQLite connection")
+    if not callable(getattr(authorizer, "require_in_transaction", None)):
+        raise TypeError("authorizer must support transactional authorization")
     if connection.in_transaction:
         raise ValueError("connection must not have an active transaction")
 
