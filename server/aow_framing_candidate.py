@@ -10,6 +10,9 @@ Do not connect this helper to a listener or original APK without a redacted,
 authorized wire fixture for the exact client build.
 """
 
+from server.frame_reader import CallbackFrameReader
+
+
 # Static constant recovered from the authorized APK's Receiver.Cycle branch.
 # It does not prove that the HTTP branch is active for gameplay.
 OBSERVED_HTTP_MARKER_VALUE = 0x48545450
@@ -89,3 +92,39 @@ def make_four_byte_length_candidate_probe(
         return 4 + value
 
     return probe
+
+
+
+def make_four_byte_length_candidate_reader(
+    *, max_payload_bytes, max_buffer_bytes,
+    http_marker_value=OBSERVED_HTTP_MARKER_VALUE
+):
+    """Create a bounded generic reader for the isolated receive-length candidate.
+
+    This is only a composition of the candidate probe and generic frame reader.
+    It does not open a socket or enable an AOW listener. The effective payload
+    limit is the smaller of the caller's limit and the available buffer space
+    after the four-byte prefix.
+    """
+    if type(max_buffer_bytes) is not int or max_buffer_bytes < 4:
+        raise ValueError("max_buffer_bytes must be an integer of at least four")
+
+    # Validate caller-supplied marker and payload limits before deriving the
+    # tighter buffer-dependent limit.
+    probe = make_four_byte_length_candidate_probe(
+        max_payload_bytes=max_payload_bytes,
+        http_marker_value=http_marker_value,
+    )
+    effective_payload_limit = min(max_payload_bytes, max_buffer_bytes - 4)
+    if effective_payload_limit != max_payload_bytes:
+        probe = make_four_byte_length_candidate_probe(
+            max_payload_bytes=effective_payload_limit,
+            http_marker_value=http_marker_value,
+        )
+
+    return CallbackFrameReader(
+        probe,
+        max_frame_bytes=4 + effective_payload_limit,
+        max_buffer_bytes=max_buffer_bytes,
+        max_probe_bytes=4,
+    )
