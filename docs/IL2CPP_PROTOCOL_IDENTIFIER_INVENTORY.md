@@ -151,3 +151,27 @@ The public tool emits only the targeted message/network type records and the exi
 The v31 inventory also exposes the raw field-default table association for each allowlisted field: the default-value type index and byte offset into the metadata default-data blob. These are metadata references only; the public inventory does not decode or publish constant values. The default-data byte offset is validated against the bounded data section, and duplicate/out-of-range field-default records are rejected.
 
 A separate authorized local analysis resolved the inspected arm64 IL2CPP native type-registration table and found the `MessageTypes` field and default-value type references both use IL2CPP type code `I4`. This establishes their metadata storage type as 32-bit integer, not their on-wire encoding or runtime use. Numeric constants are intentionally kept out of this public repository; they remain candidates until the active message-dispatch/serialization path is independently confirmed.
+
+
+## Offline integrity and identifier re-verification — 2026-11-15
+
+The original Library APK was re-materialized to a private workspace and read
+successfully. The current offline check reproduced the established artifact
+fingerprint and archive integrity results:
+
+- APK size: `256468647` bytes.
+- SHA-256: `c00bd00d30f625b85dfcc0159b3b058ca459c10f9917844a5301163480c7624e`.
+- ZIP entries: `7368`; duplicate names: `0`; `ZipFile.testzip()`: no failing member.
+- Metadata member: `26021348` bytes; metadata version: `31`.
+- String heap: `3349996` bytes.
+- Unique bounded printable-ASCII strings in the string heap: `177548`.
+- Serializer suffix identifiers: `1336`; deserializer suffix identifiers: `1336`;
+  matching base identifiers: `1336`.
+
+The allowlisted network and login/session identifier tokens listed above were
+present in this re-read. This confirms the metadata inventory is reproducible
+against the unchanged artifact. It is not a new native disassembly or runtime
+observation: no new call path, numeric message ID, field serialization order,
+packet fixture, framing contract, handshake, or login exchange was established
+in this re-verification. The APK and all extracted assets remain outside this
+public repository.
