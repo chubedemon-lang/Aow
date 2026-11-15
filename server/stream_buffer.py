@@ -89,10 +89,12 @@ class BoundedStreamBuffer:
         """
         if self._closed:
             raise StreamClosedError("cannot feed a closed stream buffer")
-        if not isinstance(data, (bytes, bytearray, memoryview)):
-            raise TypeError("stream chunk must be bytes-like")
+        # Exact built-in buffer types avoid invoking custom __len__/__bytes__
+        # hooks while sizing or snapshotting untrusted subclasses.
+        if type(data) not in (bytes, bytearray, memoryview):
+            raise TypeError("stream chunk must be bytes, bytearray, or memoryview")
 
-        chunk_size = data.nbytes if isinstance(data, memoryview) else len(data)
+        chunk_size = data.nbytes if type(data) is memoryview else len(data)
         available = len(self._buffer)
         if chunk_size > self._max_buffer_bytes - available:
             raise BufferLimitExceeded(

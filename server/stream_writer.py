@@ -57,10 +57,12 @@ class PartialWriteError(StreamWriteError):
 def _snapshot_payload(data, max_bytes):
     if type(max_bytes) is not int or max_bytes < 0:
         raise ValueError("max_bytes must be a non-negative integer")
-    if not isinstance(data, (bytes, bytearray, memoryview)):
-        raise TypeError("payload must be bytes-like")
+    # Exact built-in types prevent custom __len__/__bytes__ hooks from running
+    # while the writer measures and snapshots an untrusted payload.
+    if type(data) not in (bytes, bytearray, memoryview):
+        raise TypeError("payload must be bytes, bytearray, or memoryview")
 
-    size = data.nbytes if isinstance(data, memoryview) else len(data)
+    size = data.nbytes if type(data) is memoryview else len(data)
     if size > max_bytes:
         raise WritePayloadTooLarge(size, max_bytes)
 
