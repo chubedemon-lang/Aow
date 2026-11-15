@@ -70,7 +70,9 @@ class SqliteSessionStore:
 
     def _now(self):
         value = self.clock()
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        # Accept only exact built-in numeric values. Numeric subclasses can
+        # override __float__ and execute caller code during expiry validation.
+        if type(value) not in (int, float):
             raise ValueError("clock must return a finite non-negative epoch time")
         try:
             numeric = float(value)

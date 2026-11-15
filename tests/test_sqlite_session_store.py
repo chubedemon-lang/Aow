@@ -244,6 +244,29 @@ class SqliteSessionStoreTests(unittest.TestCase):
             0,
         )
 
+    def test_clock_rejects_numeric_subclasses_before_float_hooks(self):
+        class HostileInt(int):
+            def __float__(self):
+                raise AssertionError("custom int __float__ must not run")
+
+        class HostileFloat(float):
+            def __float__(self):
+                raise AssertionError("custom float __float__ must not run")
+
+        for value in (HostileInt(1000), HostileFloat(1000.0)):
+            store = SqliteSessionStore(self.db, clock=lambda value=value: value)
+            with self.subTest(value_type=type(value).__name__):
+                with self.assertRaisesRegex(
+                    ValueError, "finite non-negative epoch time"
+                ):
+                    store.issue(1)
+                self.assertFalse(self.db.in_transaction)
+
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            0,
+        )
+
     def test_issue_rejects_finite_clock_values_that_cannot_represent_expiry(self):
         for value in (1e20, float.fromhex("0x1.fffffffffffffp+1023")):
             store = SqliteSessionStore(self.db, clock=lambda value=value: value)
