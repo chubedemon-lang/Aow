@@ -103,6 +103,8 @@ on:
       - 'server/sqlite_authorized_player_bootstrap_service.py'
       - 'tests/test_character_snapshot_validation.py'
       - 'docs/CHARACTER_LIFECYCLE.md'
+      - 'server/combat.py'
+      - 'tests/test_combat.py'
       - 'server/sqlite_authorized_combat_service.py'
       - 'server/sqlite_shop_store.py'
       - 'tests/test_sqlite_shop_store.py'
@@ -382,6 +384,21 @@ jobs:
         run: python -m py_compile server/sqlite_authorized_combat_service.py
       - name: Strict persisted combat snapshot tests (synthetic only)
         run: python -m unittest discover -s tests -p 'test_sqlite_authorized_combat_service.py' -v
+
+  combat-rules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile synthetic combat rules
+        run: python -m py_compile server/combat.py
+      - name: Canonical combat turn-state tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_combat.py' -v
 
   sqlite-domain-audit:
     runs-on: ubuntu-latest
