@@ -372,3 +372,48 @@ property getter feeds each primitive helper, optionality, message IDs,
 authentication semantics, handshake order, compression/encryption placement,
 or APK/server compatibility. No raw addresses, instruction words, APK bytes,
 packet captures, endpoints, or proprietary assets are included.
+
+
+## Receiver zipped-message membership lookup — 2026-11-15
+
+A fresh authorized, read-only pass was run against the unchanged APK fingerprint
+at the top of this document. The private ARM64 ELF and metadata remained outside
+the repository. A new .eh_frame_hdr index resolved the receiver's direct-call
+lookup helper to an exact FDE initial-PC entry; its analysis window ends at the
+next FDE start in the same executable section and is 480 bytes. The index
+emits no addresses or instructions. This window is a bounded native-analysis
+window, not a claim about runtime execution.
+
+The second SimpleDeserializer.deserializeInt result in Receiver.Cycle is
+passed as the integer key to that helper. Its body has the structural shape of
+a HashSet-style membership lookup: it obtains a bucket array and count,
+computes a bucket index, traverses 12-byte entries with hash/next/value
+components, and invokes a comparer indirectly. This is materially different
+from treating the call as an unresolved generic dictionary lookup.
+
+The owner is now strongly attributed to NetworkSettings static state. The
+same class-reference cell is used by Receiver.Cycle and NetworkSettings::.cctor.
+The initializer stores a newly constructed collection into the first static
+field slot; the metadata field inventory places m_zippetMessageTypes as the
+first non-scalar collection field on NetworkSettings. Receiver.Cycle reads
+that same static slot before a branch leading into later receive processing.
+The best-supported interpretation is that the second integer is used as a
+membership key in NetworkSettings.m_zippetMessageTypes, a set named for zipped
+message types.
+
+This resolves the static collection owner and narrows the integer's role, but
+it does not establish a stable numeric wire-message-ID mapping. The branch's
+runtime outcome, exact compression range/placement, encryption, complete
+frame boundaries, sender/receiver symmetry, handshake order, LoginRequest
+field order, and APK/server compatibility remain unverified. The four-byte
+receive-length candidate remains a static candidate; the effective runtime
+value and direct field-access relationship of NetworkSettings.HeaderLength
+are still unresolved.
+
+The earlier note that the second integer's static collection owner was
+unresolved is superseded by this stronger static attribution. No packet bytes,
+native addresses, raw instructions, APK/native assets, endpoints, or proprietary
+resources were committed, and no official server was contacted.
+
+The helper-boundary parser is documented in AARCH64_EH_FRAME_INDEX.md and is
+covered by synthetic-only tests.
