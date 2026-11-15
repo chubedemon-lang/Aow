@@ -108,5 +108,53 @@ class BatchTests(unittest.TestCase):
                 validate([fixture(b"x")], max_total_bytes=value)
 
 
+    def test_rejects_list_subclasses_before_iteration(self):
+        class ExplosiveList(list):
+            def __iter__(self):
+                raise AssertionError("custom list iteration must not run")
+
+        record = fixture(b"x")
+        with self.assertRaises(FixtureValidationError):
+            validate_fixture_batch(
+                ExplosiveList([record]),
+                expected_source_sha256s={record["source_sha256"]},
+            )
+
+    def test_rejects_set_subclasses_before_iteration(self):
+        class ExplosiveSet(set):
+            def __iter__(self):
+                raise AssertionError("custom set iteration must not run")
+
+        record = fixture(b"x")
+        with self.assertRaises(FixtureValidationError):
+            validate_fixture_batch(
+                [record],
+                expected_source_sha256s=ExplosiveSet({record["source_sha256"]}),
+            )
+
+    def test_rejects_dict_subclasses_before_access(self):
+        class ExplosiveDict(dict):
+            def get(self, key, default=None):
+                raise AssertionError("custom dict access must not run")
+
+        record = fixture(b"x")
+        with self.assertRaises(FixtureValidationError):
+            validate_fixture_batch(
+                [ExplosiveDict(record)],
+                expected_source_sha256s={record["source_sha256"]},
+            )
+
+    def test_rejects_tuple_subclasses(self):
+        class DerivedTuple(tuple):
+            pass
+
+        record = fixture(b"x")
+        with self.assertRaises(FixtureValidationError):
+            validate_fixture_batch(
+                DerivedTuple([record]),
+                expected_source_sha256s={record["source_sha256"]},
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
