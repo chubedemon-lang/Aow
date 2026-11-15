@@ -31,7 +31,7 @@ class SessionManager:
             return token
 
     def resolve(self, token):
-        if not isinstance(token, str) or not token:
+        if type(token) is not str or not token:
             raise SessionError("invalid session")
         with self._lock:
             record = self._sessions.get(token)
@@ -63,6 +63,9 @@ class SessionManager:
         return character_id
 
     def revoke(self, token):
+        # Do not invoke attacker-controlled __hash__/__eq__ hooks on str subclasses.
+        if type(token) is not str or not token:
+            return
         with self._lock:
             self._sessions.pop(token, None)
 
