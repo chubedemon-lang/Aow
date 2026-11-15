@@ -48,7 +48,9 @@ class AowPrimitiveWriter:
     def write_string(self, value):
         if value is None:
             return self.write_char(0xFFFF)
-        if not isinstance(value, str):
+        # Exact built-in strings keep encoding deterministic and avoid invoking
+        # an overridden encode() method on a user-defined str subclass.
+        if type(value) is not str:
             raise TypeError("string value must be str or None")
         encoded = value.encode("utf-16-be", errors="surrogatepass")
         code_units = len(encoded) // 2
@@ -64,8 +66,10 @@ class AowPrimitiveWriter:
 
 class AowPrimitiveReader:
     def __init__(self, data):
-        if not isinstance(data, (bytes, bytearray, memoryview)):
-            raise TypeError("reader data must be bytes-like")
+        # Only exact built-in buffer types are accepted. Subclasses may override
+        # __bytes__ and execute caller code while the reader snapshots input.
+        if type(data) not in (bytes, bytearray, memoryview):
+            raise TypeError("reader data must be bytes, bytearray, or memoryview")
         # Preserve immutable bytes without copying; snapshot mutable and strided inputs.
         raw = data if type(data) is bytes else bytes(data)
         self._data = memoryview(raw)
