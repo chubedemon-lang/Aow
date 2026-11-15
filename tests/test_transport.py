@@ -4,6 +4,17 @@ import unittest
 from server.transport import ProtocolEvidence, TransportAdapter, UnverifiedProtocolError
 
 
+class HostileBytes(bytes):
+    """A bytes subclass whose length hook must never run at the boundary."""
+
+    def __len__(self):
+        raise AssertionError("custom bytes __len__ hook executed")
+
+
+def synthetic_evidence():
+    return ProtocolEvidence("a" * 64, "synthetic unit test", "tests/test_transport.py")
+
+
 class TransportTests(unittest.TestCase):
     def test_fail_closed_without_evidence(self):
         adapter = TransportAdapter()
@@ -13,7 +24,7 @@ class TransportTests(unittest.TestCase):
             adapter.send({"hello": 1})
 
     def test_reject_incomplete_codec(self):
-        evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "tests/test_transport.py")
+        evidence = synthetic_evidence()
         with self.assertRaises(ValueError):
             TransportAdapter(evidence, decode=lambda value: value)
         with self.assertRaises(TypeError):
@@ -22,7 +33,7 @@ class TransportTests(unittest.TestCase):
             ProtocolEvidence("bad", "test", "review")
 
     def test_injected_synthetic_codec(self):
-        evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "tests/test_transport.py")
+        evidence = synthetic_evidence()
         adapter = TransportAdapter(evidence, decode=lambda raw: raw.decode("ascii"),
                                    encode=lambda msg: msg.encode("ascii"))
         self.assertTrue(adapter.configured)
@@ -32,7 +43,7 @@ class TransportTests(unittest.TestCase):
             adapter.receive("not bytes")
 
     def test_payload_size_boundaries(self):
-        evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "tests/test_transport.py")
+        evidence = synthetic_evidence()
         adapter = TransportAdapter(evidence, decode=lambda raw: raw, encode=lambda msg: msg)
         from server.transport import MAX_SYNTHETIC_PAYLOAD_BYTES
         valid = b"x" * MAX_SYNTHETIC_PAYLOAD_BYTES
@@ -49,7 +60,7 @@ class TransportTests(unittest.TestCase):
         self.assertFalse(TransportAdapter(evidence).configured)
 
     def test_reject_non_bytes_encoded_output(self):
-        evidence = ProtocolEvidence("a" * 64, "synthetic unit test", "tests/test_transport.py")
+        evidence = synthetic_evidence()
         adapter = TransportAdapter(evidence, decode=lambda raw: raw,
                                    encode=lambda msg: "not bytes")
         with self.assertRaises(TypeError):
@@ -105,6 +116,28 @@ class TransportTests(unittest.TestCase):
     def test_reject_unbounded_observation(self):
         with self.assertRaises(ValueError):
             ProtocolEvidence("a" * 64, "x" * 2001, "issue:2")
+
+    def test_reject_hostile_bytes_subclass_before_decode(self):
+        evidence = synthetic_evidence()
+        calls = []
+        adapter = TransportAdapter(
+            evidence,
+            decode=lambda raw: calls.append(raw),
+            encode=lambda message: message,
+        )
+        with self.assertRaises(TypeError):
+            adapter.receive(HostileBytes(b"payload"))
+        self.assertEqual(calls, [])
+
+    def test_reject_hostile_bytes_subclass_from_encoder_before_length_check(self):
+        evidence = synthetic_evidence()
+        adapter = TransportAdapter(
+            evidence,
+            decode=lambda raw: raw,
+            encode=lambda message: HostileBytes(b"payload"),
+        )
+        with self.assertRaises(TypeError):
+            adapter.send("message")
 
 
 if __name__ == "__main__":
