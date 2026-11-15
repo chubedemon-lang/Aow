@@ -11,6 +11,7 @@ Map IDs and coordinate values are supplied by the caller. The module does not au
 SqliteMapPositionStore supports:
 
 - create(character_id): create an unplaced snapshot at revision 0.
+- Character IDs, request IDs and stored receipt JSON inputs must be exact built-in strings; subclasses are rejected before invoking custom string hooks.
 - enter(character_id, request_id, expected_revision, map_id, x, y): enter one synthetic map from the unplaced state.
 - move(character_id, request_id, expected_revision, map_id, x, y): update a position only when the current map matches the supplied map ID.
 - leave(character_id, request_id, expected_revision, map_id): leave only the currently occupied map.
