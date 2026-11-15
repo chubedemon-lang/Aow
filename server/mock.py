@@ -101,7 +101,15 @@ class Domain:
             result = db.execute("UPDATE characters SET x=?, y=? WHERE id=?", (x, y, character_id))
             if result.rowcount == 0:
                 raise KeyError("character not found")
-        return self.get_character(character_id)
+            # Read the response snapshot before committing this mutation. A
+            # separate get_character() call could observe a later concurrent move.
+            row = db.execute(
+                "SELECT id,name,map_id,x,y FROM characters WHERE id=?",
+                (character_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError("character not found")
+            return dict(row)
 
 
     def list_inventory(self, character_id):

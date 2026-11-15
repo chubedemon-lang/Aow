@@ -4,6 +4,7 @@ import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 import tempfile
+from contextlib import contextmanager
 import threading
 import unittest
 from http.server import ThreadingHTTPServer
@@ -55,6 +56,36 @@ class DomainTests(unittest.TestCase):
     def test_missing_character(self):
         with self.assertRaises(KeyError):
             self.domain.get_character(999)
+
+    def test_move_returns_its_own_transaction_snapshot(self):
+        character_id = self.domain.create_character("alice", "hero")["id"]
+        original_connection = self.domain.connection
+        interleaved = False
+
+        @contextmanager
+        def connection_with_competing_move():
+            nonlocal interleaved
+            with original_connection() as db:
+                yield db
+            if not interleaved:
+                interleaved = True
+                with original_connection() as competing:
+                    competing.execute(
+                        "UPDATE characters SET x=?, y=? WHERE id=?",
+                        (99, 99, character_id),
+                    )
+
+        self.domain.connection = connection_with_competing_move
+        response = self.domain.move(character_id, 7, -8)
+
+        self.assertTrue(interleaved)
+        self.assertEqual((response["x"], response["y"]), (7, -8))
+        with original_connection() as db:
+            persisted = db.execute(
+                "SELECT x, y FROM characters WHERE id=?",
+                (character_id,),
+            ).fetchone()
+        self.assertEqual(tuple(persisted), (99, 99))
 
     def test_reject_invalid_input(self):
         with self.assertRaises(ValueError):
