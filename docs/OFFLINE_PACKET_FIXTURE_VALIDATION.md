@@ -17,6 +17,11 @@ independently obtained digests from the same trusted inventory. Every record
 must match one of those digests before its payload is decoded. Do not build this
 allowlist from untrusted fixture records in production code.
 
+The validators accept only exact built-in container types for records and
+batches (plain dictionaries, lists/tuples and sets/frozensets) and exact
+strings for hexadecimal payloads. Subclasses are rejected so caller-defined
+mapping access or iteration hooks cannot run inside the validation boundary.
+
 The validators also require:
 
 - an explicit boolean verified: true;
