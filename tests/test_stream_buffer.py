@@ -140,6 +140,28 @@ class BoundedStreamBufferTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             buffer.feed("not bytes")
 
+    def test_rejects_bytes_subclasses_before_running_snapshot_hooks(self):
+        class HostileBytearray(bytearray):
+            def __len__(self):
+                raise AssertionError("custom length hook must not run")
+
+            def __bytes__(self):
+                raise AssertionError("custom bytes hook must not run")
+
+        class HostileBytes(bytes):
+            def __len__(self):
+                raise AssertionError("custom length hook must not run")
+
+            def __bytes__(self):
+                raise AssertionError("custom bytes hook must not run")
+
+        for payload in (HostileBytearray(b"abc"), HostileBytes(b"abc")):
+            with self.subTest(payload_type=type(payload).__name__):
+                buffer = BoundedStreamBuffer()
+                with self.assertRaises(TypeError):
+                    buffer.feed(payload)
+                self.assertEqual(buffer.available, 0)
+
     def test_read_exact_underflow_does_not_partially_consume(self):
         buffer = BoundedStreamBuffer()
         buffer.feed(b"abc")
