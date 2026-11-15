@@ -37,6 +37,10 @@ Counts above are illustrative, not data from a production database.
 
 The tool emits aggregate counts only. It does not print character IDs, item IDs, mutation payloads, tokens or database contents.
 
+## CI coverage
+
+The Protocol Discovery workflow runs a dedicated `sqlite-domain-audit` job for this tool, its tests, and its documentation. The job compiles the auditor and runs the focused read-only regression suite independently of the broader server test suite.
+
 ## Scope
 
 These stores are synthetic persistence primitives. A successful audit does not establish AOW item IDs, map IDs, movement rules, packet framing, login semantics or APK compatibility. The audit is a consistency check, not cryptographic tamper evidence, and never repairs data.
