@@ -8,7 +8,9 @@ import argparse
 from bisect import bisect_left
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
+import stat
 import struct
 
 _MAX_ELF = 512 * 1024 * 1024
@@ -190,6 +192,71 @@ def inspect_elf_targets(elf, targets):
     }
 
 
+def _same_file_snapshot(before, after):
+    """Compare identity and mutation-sensitive metadata for one open file."""
+    return all(
+        getattr(before, name, None) == getattr(after, name, None)
+        for name in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    )
+
+
+def _read_regular_elf(path):
+    """Read one stable regular file without following a symlink.
+
+    O_NOFOLLOW is used where available. The lstat/fstat identity comparison
+    provides a second check, and the bounded descriptor read detects growth,
+    truncation, or metadata changes during the read.
+    """
+    path = Path(path)
+    try:
+        path_info = os.lstat(path)
+    except OSError as exc:
+        raise EhFrameIndexError("invalid or unsafe ELF path") from exc
+    if not stat.S_ISREG(path_info.st_mode):
+        raise EhFrameIndexError("ELF path must be a regular non-symlink file")
+
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise EhFrameIndexError("unable to open ELF without following links") from exc
+
+    try:
+        opened = os.fstat(descriptor)
+        if (not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino)
+                != (path_info.st_dev, path_info.st_ino)):
+            raise EhFrameIndexError("ELF path changed before open")
+        if not 0 < opened.st_size <= _MAX_ELF:
+            raise EhFrameIndexError("invalid or oversized ELF file")
+
+        chunks = []
+        remaining = opened.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                raise EhFrameIndexError("ELF file was truncated while reading")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+
+        if os.read(descriptor, 1):
+            raise EhFrameIndexError("ELF file grew while reading")
+        after = os.fstat(descriptor)
+        if not _same_file_snapshot(opened, after):
+            raise EhFrameIndexError("ELF file changed while reading")
+        data = b"".join(chunks)
+        if len(data) != opened.st_size:
+            raise EhFrameIndexError("ELF file size changed while reading")
+        return data
+    except OSError as exc:
+        raise EhFrameIndexError("unable to read stable ELF file") from exc
+    finally:
+        os.close(descriptor)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Redacted offline AArch64 ELF FDE-entry index"
@@ -200,15 +267,12 @@ def main(argv=None):
         help="private target address (decimal or 0x-prefixed); never emitted",
     )
     args = parser.parse_args(argv)
-    path = Path(args.elf)
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > _MAX_ELF:
-        raise SystemExit("invalid or oversized ELF path")
     try:
         targets = tuple(int(value, 0) for value in args.target)
     except ValueError as exc:
         raise SystemExit("invalid target address") from exc
     report = json.dumps(
-        inspect_elf_targets(path.read_bytes(), targets),
+        inspect_elf_targets(_read_regular_elf(args.elf), targets),
         indent=2, sort_keys=True,
     )
     print(report)

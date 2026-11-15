@@ -1,6 +1,10 @@
 """Synthetic tests for the redacted AArch64 FDE-entry index."""
+import os
 import struct
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from tools.aarch64_eh_frame_index import (
     EhFrameIndexError,
@@ -139,6 +143,67 @@ class Aarch64EhFrameIndexTests(unittest.TestCase):
             parse_eh_frame_header(
                 bytes(data), HEADER_ADDRESS, FRAME_RANGE, EXECUTABLE_RANGES
             )
+
+
+class Aarch64ElfPathReadTests(unittest.TestCase):
+    def test_reads_regular_file_through_bounded_descriptor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sample.so"
+            path.write_bytes(b"ELF fixture")
+            from tools.aarch64_eh_frame_index import _read_regular_elf
+            self.assertEqual(_read_regular_elf(path), b"ELF fixture")
+
+    def test_rejects_symlink_and_non_regular_path(self):
+        from tools.aarch64_eh_frame_index import _read_regular_elf
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target.so"
+            target.write_bytes(b"ELF fixture")
+            link = root / "link.so"
+            try:
+                link.symlink_to(target)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlink creation is unavailable")
+            with self.assertRaises(EhFrameIndexError):
+                _read_regular_elf(link)
+            with self.assertRaises(EhFrameIndexError):
+                _read_regular_elf(root)
+
+    def test_rejects_empty_and_oversized_files_before_reading(self):
+        from tools.aarch64_eh_frame_index import _read_regular_elf
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            empty = root / "empty.so"
+            empty.write_bytes(b"")
+            with self.assertRaisesRegex(EhFrameIndexError, "oversized"):
+                _read_regular_elf(empty)
+            oversized = root / "oversized.so"
+            oversized.write_bytes(b"1234")
+            with patch("tools.aarch64_eh_frame_index._MAX_ELF", 3):
+                with self.assertRaisesRegex(EhFrameIndexError, "oversized"):
+                    _read_regular_elf(oversized)
+
+    def test_rejects_file_growth_during_read(self):
+        from tools.aarch64_eh_frame_index import _read_regular_elf
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "changing.so"
+            path.write_bytes(b"ELF")
+            real_read = os.read
+            appended = False
+
+            def read_and_append(descriptor, size):
+                nonlocal appended
+                result = real_read(descriptor, size)
+                if not appended:
+                    with path.open("ab") as stream:
+                        stream.write(b"x")
+                    appended = True
+                return result
+
+            with patch("tools.aarch64_eh_frame_index.os.read",
+                       side_effect=read_and_append):
+                with self.assertRaisesRegex(EhFrameIndexError, "grew"):
+                    _read_regular_elf(path)
 
 
 if __name__ == "__main__":
