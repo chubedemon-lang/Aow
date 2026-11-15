@@ -11,6 +11,8 @@ inferred from a callsite alone.
 import argparse
 import hashlib
 import json
+import os
+import stat
 import struct
 import zipfile
 from pathlib import Path
@@ -319,33 +321,120 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
     }
 
 
-def inspect_apk(apk_path):
-    """Read only bounded metadata and arm64 libil2cpp members from an APK."""
+def _same_file_snapshot(before, after):
+    """Compare identity and mutation-sensitive metadata for one open file."""
+    return all(
+        getattr(before, name, None) == getattr(after, name, None)
+        for name in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    )
+
+
+def _read_apk_members(apk_path):
+    """Read the bounded APK members through one stable, no-follow descriptor.
+
+    Hashing and ZIP parsing share the same descriptor. This prevents a path
+    replacement between the digest pass and member extraction from mixing
+    evidence from two different APK files.
+    """
     path = Path(apk_path)
-    if path.is_symlink() or not path.is_file():
-        raise CodegenInventoryError("expected a regular local APK")
-    if not 0 < path.stat().st_size <= MAX_APK:
-        raise CodegenInventoryError("APK size outside safety bounds")
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
     try:
-        with zipfile.ZipFile(path) as archive:
-            metadata_info = archive.getinfo(METADATA_MEMBER)
-            elf_info = archive.getinfo(ARM64_IL2CPP_MEMBER)
-            if (metadata_info.file_size > MAX_METADATA
-                    or elf_info.file_size > MAX_ELF):
+        path_info = os.lstat(path)
+    except OSError as exc:
+        raise CodegenInventoryError("invalid or unsafe APK path") from exc
+    if not stat.S_ISREG(path_info.st_mode):
+        raise CodegenInventoryError("APK path must be a regular non-symlink file")
+
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise CodegenInventoryError("unable to open APK without following links") from exc
+
+    try:
+        opened = os.fstat(descriptor)
+        if (not stat.S_ISREG(opened.st_mode)
+                or not _same_file_snapshot(path_info, opened)):
+            raise CodegenInventoryError("APK path changed before open")
+        if not 0 < opened.st_size <= MAX_APK:
+            raise CodegenInventoryError("invalid or oversized APK file")
+
+        try:
+            stream = os.fdopen(descriptor, "rb")
+        except OSError as exc:
+            raise CodegenInventoryError("unable to wrap stable APK descriptor") from exc
+        descriptor = None
+        with stream:
+            digest = hashlib.sha256()
+            remaining = opened.st_size
+            while remaining:
+                chunk = stream.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise CodegenInventoryError("APK was truncated while reading")
+                digest.update(chunk)
+                remaining -= len(chunk)
+            if stream.read(1):
+                raise CodegenInventoryError("APK grew while reading")
+
+            stream.seek(0)
+            try:
+                with zipfile.ZipFile(stream) as archive:
+                    members = {}
+                    for member_name in (METADATA_MEMBER, ARM64_IL2CPP_MEMBER):
+                        matches = [
+                            item for item in archive.infolist()
+                            if item.filename == member_name
+                        ]
+                        if len(matches) != 1:
+                            raise CodegenInventoryError(
+                                "APK analysis members must exist exactly once"
+                            )
+                        members[member_name] = matches[0]
+
+                    metadata_info = members[METADATA_MEMBER]
+                    elf_info = members[ARM64_IL2CPP_MEMBER]
+                    if (metadata_info.file_size > MAX_METADATA
+                            or elf_info.file_size > MAX_ELF):
+                        raise CodegenInventoryError(
+                            "analysis member exceeds size limit"
+                        )
+                    with archive.open(metadata_info) as member:
+                        metadata = member.read(MAX_METADATA + 1)
+                    with archive.open(elf_info) as member:
+                        elf = member.read(MAX_ELF + 1)
+            except (KeyError, zipfile.BadZipFile, OSError, RuntimeError) as exc:
+                raise CodegenInventoryError(
+                    "APK is missing valid IL2CPP members"
+                ) from exc
+
+            if len(metadata) > MAX_METADATA or len(elf) > MAX_ELF:
                 raise CodegenInventoryError("analysis member exceeds size limit")
-            with archive.open(metadata_info) as member:
-                metadata = member.read(MAX_METADATA + 1)
-            with archive.open(elf_info) as member:
-                elf = member.read(MAX_ELF + 1)
-    except (KeyError, zipfile.BadZipFile, OSError) as exc:
-        raise CodegenInventoryError("APK is missing valid IL2CPP members") from exc
-    if len(metadata) > MAX_METADATA or len(elf) > MAX_ELF:
-        raise CodegenInventoryError("analysis member exceeds size limit")
-    return inspect_bytes(metadata, elf, digest.hexdigest())
+
+            after = os.fstat(stream.fileno())
+            if not _same_file_snapshot(opened, after):
+                raise CodegenInventoryError("APK changed while reading")
+            try:
+                path_after = os.lstat(path)
+            except OSError as exc:
+                raise CodegenInventoryError("APK path changed while reading") from exc
+            if (not stat.S_ISREG(path_after.st_mode)
+                    or not _same_file_snapshot(opened, path_after)):
+                raise CodegenInventoryError("APK path changed while reading")
+
+            return digest.hexdigest(), metadata, elf
+    except OSError as exc:
+        raise CodegenInventoryError("unable to read stable APK file") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def inspect_apk(apk_path):
+    """Read only bounded metadata and arm64 libil2cpp members from one stable APK."""
+    digest, metadata, elf = _read_apk_members(apk_path)
+    return inspect_bytes(metadata, elf, digest)
 
 
 def main(argv=None):
