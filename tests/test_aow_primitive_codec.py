@@ -69,6 +69,20 @@ class AowPrimitiveCodecTests(unittest.TestCase):
         self.assertEqual(len(encoded), 2 + 0x7FFF * 2)
         self.assertEqual(AowPrimitiveReader(encoded).read_string(), value)
 
+    def test_astral_string_utf16_code_unit_boundary(self):
+        # Each astral code point occupies two UTF-16 code units. This exact
+        # boundary is valid even though Python len(value) is only half as large.
+        value = "😀" * 16383 + "A"
+        writer = AowPrimitiveWriter().write_string(value)
+        encoded = writer.to_bytes()
+        self.assertEqual(encoded[:2], bytes.fromhex("7fff"))
+        self.assertEqual(len(encoded), 2 + 0x7FFF * 2)
+        self.assertEqual(AowPrimitiveReader(encoded).read_string(), value)
+
+        # One more UTF-16 code unit must be rejected before encoding the body.
+        with self.assertRaises(ValueError):
+            AowPrimitiveWriter().write_string("😀" * 16384)
+
     def test_string_length_above_native_limit_is_rejected(self):
         with self.assertRaises(ValueError):
             AowPrimitiveWriter().write_string("a" * 0x8000)
@@ -166,7 +180,6 @@ class AowPrimitiveCodecTests(unittest.TestCase):
         reader = AowPrimitiveReader(bytes.fromhex("01020304"))
         self.assertEqual(reader.read_int(), 0x01020304)
         self.assertIs(reader.require_consumed(), reader)
-
 
     def test_reader_snapshots_mutable_bytearray_input(self):
         source = bytearray.fromhex("01020304")
