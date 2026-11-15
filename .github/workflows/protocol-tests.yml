@@ -70,6 +70,12 @@ on:
       - 'server/sqlite_session_store.py'
       - 'tests/test_sqlite_session_store.py'
       - 'docs/SQLITE_SESSION_STORE.md'
+      - 'server/sqlite_account_auth_service.py'
+      - 'tests/test_sqlite_account_auth_service.py'
+      - 'server/sqlite_auth_rate_limiter.py'
+      - 'tests/test_sqlite_auth_rate_limiter.py'
+      - 'tests/test_sqlite_account_auth_rate_limiter.py'
+      - 'docs/SQLITE_ACCOUNT_AUTH_SERVICE.md'
       - 'server/sqlite_player_state_store.py'
       - 'tests/test_sqlite_player_state_store.py'
       - 'docs/SQLITE_PLAYER_STATE_STORE.md'
@@ -185,6 +191,23 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_offline_fixture_privacy_boundaries.py' -v
       - name: Offline evidence validation tests (metadata only)
         run: python -m unittest discover -s tests -p 'test_offline_evidence_validation.py' -v
+  auth-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile synthetic authentication modules
+        run: python -m py_compile server/sqlite_account_auth_service.py server/sqlite_auth_rate_limiter.py
+      - name: Synthetic authentication input security tests
+        run: |
+          python -m unittest discover -s tests -p 'test_sqlite_account_auth_service.py' -v
+          python -m unittest discover -s tests -p 'test_sqlite_auth_rate_limiter.py' -v
+          python -m unittest discover -s tests -p 'test_sqlite_account_auth_rate_limiter.py' -v
   session-store:
     runs-on: ubuntu-latest
     timeout-minutes: 10

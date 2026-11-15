@@ -110,7 +110,9 @@ class SqliteAccountAuthService:
 
     @staticmethod
     def _username_is_valid(username):
-        if (not isinstance(username, str) or not username
+        # Reject subclasses before len(), strip(), or encode() can dispatch
+        # caller-defined Python hooks at the authentication boundary.
+        if (type(username) is not str or not username
                 or len(username) > _MAX_USERNAME_CHARS
                 or username != username.strip() or "\x00" in username):
             return False
@@ -121,7 +123,9 @@ class SqliteAccountAuthService:
 
     @staticmethod
     def _password_material(password):
-        if not isinstance(password, str) or len(password) > _MAX_PASSWORD_CHARS:
+        # Password input is deliberately an exact built-in str; subclasses
+        # can override special methods used during validation and encoding.
+        if type(password) is not str or len(password) > _MAX_PASSWORD_CHARS:
             return b"", False
         try:
             raw = password.encode("utf-8", "strict")

@@ -92,7 +92,9 @@ class SqliteAuthRateLimiter:
 
     def _principal_digest(self, principal) -> bytes:
         """Return a bounded, keyed identifier; never persist the supplied name."""
-        if isinstance(principal, str):
+        # Do not dispatch encode()/strip()/len() on caller-defined str subclasses.
+        # Non-exact strings share the bounded invalid-principal bucket.
+        if type(principal) is str:
             try:
                 raw = principal.encode("utf-8", "strict")
             except UnicodeEncodeError:
