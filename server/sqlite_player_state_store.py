@@ -280,24 +280,15 @@ class SqlitePlayerStateStore:
         snapshots = {}
         baseline_versions = {}
         for row in rows:
-            character_id, level, experience, currency, revision = row[:5]
+            snapshot = self._snapshot(row)
+            character_id = snapshot.character_id
             baseline_version = row[5] if has_baseline_version else 0
-            character_id = self._character_id(character_id)
             if character_id in snapshots:
                 raise PlayerStoreError("duplicate player snapshot")
-            if (type(level) is not int or not 1 <= level <= _MAX_LEVEL
-                    or type(experience) is not int
-                    or not 0 <= experience <= _MAX_EXPERIENCE
-                    or type(currency) is not int
-                    or not 0 <= currency <= _MAX_CURRENCY
-                    or type(revision) is not int
-                    or not 0 <= revision <= _MAX_REVISION
-                    or type(baseline_version) is not int
+            if (type(baseline_version) is not int
                     or baseline_version not in (0, 1)):
                 raise PlayerStoreError("invalid stored player snapshot")
-            snapshots[character_id] = PlayerSnapshot(
-                character_id, level, experience, currency, revision
-            )
+            snapshots[character_id] = snapshot
             baseline_versions[character_id] = baseline_version
 
         tables = {
