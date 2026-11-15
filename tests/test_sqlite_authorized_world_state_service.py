@@ -387,5 +387,58 @@ class SqliteAuthorizedWorldStateServiceTests(unittest.TestCase):
         )
 
 
+    def test_constructor_rejects_missing_lifecycle_schema_without_side_effects(self):
+        db = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(db.close)
+        with self.assertRaisesRegex(
+            ValueError,
+            "initialized accounts, characters and wallets schema required",
+        ):
+            SqliteAuthorizedWorldStateService(db)
+        self.assertEqual(
+            db.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table'"
+            ).fetchone()[0],
+            0,
+        )
+        self.assertFalse(db.in_transaction)
+
+    def test_constructor_rejects_active_transaction_before_creating_auxiliary_tables(self):
+        db = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(db.close)
+        db.execute("PRAGMA foreign_keys = ON")
+        db.executescript(
+            """CREATE TABLE accounts (
+                   id INTEGER PRIMARY KEY,
+                   username TEXT NOT NULL UNIQUE
+               );
+               CREATE TABLE characters (
+                   id INTEGER PRIMARY KEY,
+                   account_id INTEGER NOT NULL UNIQUE,
+                   name TEXT NOT NULL,
+                   map_id TEXT NOT NULL,
+                   x INTEGER NOT NULL,
+                   y INTEGER NOT NULL,
+                   FOREIGN KEY(account_id) REFERENCES accounts(id)
+               );
+               CREATE TABLE wallets (
+                   character_id INTEGER PRIMARY KEY,
+                   balance INTEGER NOT NULL CHECK(balance >= 0),
+                   FOREIGN KEY(character_id) REFERENCES characters(id)
+               );"""
+        )
+        db.execute("BEGIN")
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            SqliteAuthorizedWorldStateService(db)
+        self.assertTrue(db.in_transaction)
+        tables = {
+            row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        self.assertEqual(tables, {"accounts", "characters", "wallets"})
+        db.rollback()
+
+
 if __name__ == "__main__":
     unittest.main()
