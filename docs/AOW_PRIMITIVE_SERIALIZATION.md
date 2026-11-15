@@ -71,3 +71,15 @@ if the body is truncated, the cursor returns to the start of that string.
 Earlier successfully consumed fields remain consumed. This makes a failed
 parse deterministic for callers that report or discard malformed payloads,
 without changing any encoded bytes or inferring a packet boundary.
+
+
+## UTF-16 length preflight
+
+The writer counts UTF-16 code units before allocating the encoded body. This
+is important because Python string length counts Unicode code points, while
+one astral code point occupies two UTF-16 code units. Inputs at or above the
+32768-code-unit wire limit are rejected before encoding; valid inputs still
+use UTF-16BE with `surrogatepass`. Regression coverage includes the exact
+32767-unit boundary and the first astral-only value that exceeds it. This is
+a local resource-bound improvement and does not change the observed wire
+representation.
