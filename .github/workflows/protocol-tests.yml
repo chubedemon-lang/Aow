@@ -71,6 +71,9 @@ on:
       - 'server/sqlite_inventory_store.py'
       - 'tests/test_sqlite_inventory_store.py'
       - 'docs/SQLITE_INVENTORY_STORE.md'
+      - 'tools/sqlite_domain_audit.py'
+      - 'tests/test_sqlite_domain_audit.py'
+      - 'docs/SQLITE_DOMAIN_AUDIT.md'
       - 'server/sqlite_map_position_store.py'
       - 'tests/test_sqlite_map_position_store.py'
       - 'docs/SQLITE_MAP_POSITION_STORE.md'
@@ -302,3 +305,18 @@ jobs:
         run: python -m py_compile server/sqlite_authorized_combat_service.py
       - name: Strict persisted combat snapshot tests (synthetic only)
         run: python -m unittest discover -s tests -p 'test_sqlite_authorized_combat_service.py' -v
+
+  sqlite-domain-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile read-only SQLite domain audit
+        run: python -m py_compile tools/sqlite_domain_audit.py
+      - name: Read-only domain audit regression tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_sqlite_domain_audit.py' -v
