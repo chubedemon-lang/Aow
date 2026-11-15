@@ -217,7 +217,7 @@ class SqliteAuthRateLimiterTests(unittest.TestCase):
         self.assertEqual(self.limiter.record_failure(HostilePrincipal("bob")), 3)
 
         with self.assertRaises(AuthenticationRateLimited):
-            self.limiter.check_allowed("another-invalid-principal")
+            self.limiter.check_allowed(HostilePrincipal("another-invalid-principal"))
 
 
 if __name__ == "__main__":
