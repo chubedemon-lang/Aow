@@ -52,10 +52,19 @@ class AowPrimitiveWriter:
         # an overridden encode() method on a user-defined str subclass.
         if type(value) is not str:
             raise TypeError("string value must be str or None")
-        encoded = value.encode("utf-16-be", errors="surrogatepass")
-        code_units = len(encoded) // 2
-        if code_units >= 0x8000:
+
+        # Preflight the UTF-16 code-unit limit before allocating the encoded
+        # body. Python len() counts Unicode code points, so astral characters
+        # need two UTF-16 units and require the bounded scan below.
+        if len(value) >= 0x8000:
             raise ValueError("AOW string length must be below 32768 UTF-16 code units")
+        code_units = 0
+        for character in value:
+            code_units += 2 if ord(character) > 0xFFFF else 1
+            if code_units >= 0x8000:
+                raise ValueError("AOW string length must be below 32768 UTF-16 code units")
+
+        encoded = value.encode("utf-16-be", errors="surrogatepass")
         self.write_char(code_units)
         self._buffer.extend(encoded)
         return self
