@@ -342,13 +342,13 @@ def _validate_expected_sha256(expected_sha256):
 
 
 def _read_apk_members(apk_path, expected_sha256=None):
-    _validate_expected_sha256(expected_sha256)
     """Read the bounded APK members through one stable, no-follow descriptor.
 
     Hashing and ZIP parsing share the same descriptor. This prevents a path
     replacement between the digest pass and member extraction from mixing
     evidence from two different APK files.
     """
+    _validate_expected_sha256(expected_sha256)
     path = Path(apk_path)
     try:
         path_info = os.lstat(path)
