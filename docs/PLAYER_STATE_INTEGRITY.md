@@ -20,3 +20,16 @@ New snapshots are written with a `baseline_version=1` marker and a matching row 
 Existing databases are migrated additively: the new marker is added with value `0`, and old snapshots remain readable as `legacy_unanchored_snapshots`. Their mutation deltas and later revision chain are still checked, but their original level cannot be independently reconstructed. New snapshots created after migration are anchored.
 
 The marker and receipts improve consistency detection; they are not cryptographic tamper evidence. An attacker able to rewrite the snapshot, marker, creation receipt and all mutation receipts can rewrite them together. Protect the database file and backups with operating-system access controls.
+
+## Runtime snapshot reads fail closed on malformed storage classes
+
+The normal `get()` path validates the SQLite storage classes and the same
+numeric ranges used by the integrity audit. It does not coerce REAL, TEXT or
+BLOB values into integers. This matters because SQLite INTEGER-affinity columns
+can still hold fractional REAL values that satisfy broad range CHECK clauses;
+calling `int()` would silently truncate those values and return a different
+player state from the one stored.
+
+The regression suite writes fractional REAL values into each numeric snapshot
+column and verifies that reads reject the row. This is synthetic persistence
+integrity only and does not define AOW player fields or progression rules.
