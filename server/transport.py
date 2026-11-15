@@ -25,9 +25,11 @@ class ProtocolEvidence:
 
     def __post_init__(self):
         # A digest is an identifier, not a license to publish original APK data.
-        if not isinstance(self.source_digest, str) or len(self.source_digest) != 64 or any(
-            c not in "0123456789abcdef" for c in self.source_digest
-        ):
+        # Require the exact built-in type before len()/iteration so a str
+        # subclass cannot execute custom hooks during evidence validation.
+        if (type(self.source_digest) is not str
+                or len(self.source_digest) != 64
+                or any(c not in "0123456789abcdef" for c in self.source_digest)):
             raise ValueError("source_digest must be lowercase SHA-256 hex")
         try:
             validate_public_evidence_text(
@@ -45,7 +47,7 @@ class TransportAdapter:
     """Dependency-injected codec boundary, not an APK-compatible implementation."""
 
     def __init__(self, evidence=None, decode: Callable = None, encode: Callable = None):
-        if evidence is not None and not isinstance(evidence, ProtocolEvidence):
+        if evidence is not None and type(evidence) is not ProtocolEvidence:
             raise TypeError("invalid evidence")
         if (decode is None) != (encode is None):
             raise ValueError("encode and decode must be provided together")

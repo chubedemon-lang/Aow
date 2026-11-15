@@ -11,6 +11,20 @@ class HostileBytes(bytes):
         raise AssertionError("custom bytes __len__ hook executed")
 
 
+class HostileString(str):
+    """A string subclass whose hooks must not run during digest validation."""
+
+    def __len__(self):
+        raise AssertionError("custom str __len__ hook executed")
+
+    def __iter__(self):
+        raise AssertionError("custom str __iter__ hook executed")
+
+
+class DerivedProtocolEvidence(ProtocolEvidence):
+    """A subclass used to verify the evidence boundary accepts one exact type."""
+
+
 def synthetic_evidence():
     return ProtocolEvidence("a" * 64, "synthetic unit test", "tests/test_transport.py")
 
@@ -138,6 +152,23 @@ class TransportTests(unittest.TestCase):
         )
         with self.assertRaises(TypeError):
             adapter.send("message")
+
+    def test_reject_hostile_string_digest_before_custom_hooks(self):
+        with self.assertRaisesRegex(ValueError, "source_digest"):
+            ProtocolEvidence(
+                HostileString("a" * 64),
+                "synthetic unit test",
+                "tests/test_transport.py",
+            )
+
+    def test_reject_protocol_evidence_subclass(self):
+        evidence = DerivedProtocolEvidence(
+            "a" * 64, "synthetic unit test", "tests/test_transport.py"
+        )
+        with self.assertRaisesRegex(TypeError, "invalid evidence"):
+            TransportAdapter(
+                evidence, decode=lambda raw: raw, encode=lambda message: message
+            )
 
 
 if __name__ == "__main__":
