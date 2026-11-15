@@ -43,6 +43,28 @@ class EvidenceValidationTests(unittest.TestCase):
         with self.assertRaises(EvidenceError):
             validate_record(ExplosiveDict(self.valid))
 
+    def test_rejects_string_subclass_keys_before_hash_or_equality_hooks(self):
+        class GuardedKey(str):
+            armed = False
+
+            def __hash__(self):
+                if self.armed:
+                    raise AssertionError("custom hash hook must not run")
+                return super().__hash__()
+
+            def __eq__(self, other):
+                if self.armed:
+                    raise AssertionError("custom equality hook must not run")
+                return super().__eq__(other)
+
+        record = dict(self.valid)
+        value = record.pop("kind")
+        key = GuardedKey("kind")
+        record[key] = value
+        key.armed = True
+        with self.assertRaises(EvidenceError):
+            validate_record(record)
+
     def test_rejects_invalid_hash(self):
         for digest in ("A" * 64, "a" * 63, "g" * 64, 12, "a" * 65):
             with self.subTest(digest=digest), self.assertRaises(EvidenceError):
