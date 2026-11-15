@@ -220,6 +220,41 @@ class EvidenceRegistryTests(unittest.TestCase):
                 registry.summary(artifact_sha256=digest)
 
 
+    def test_artifact_digest_rejects_string_subclass(self):
+        class Digest(str):
+            pass
+
+        with self.assertRaisesRegex(EvidenceError, "invalid sha256"):
+            Evidence(
+                "transport", Digest(self.sha), "offline observation", "il2cpp_offline"
+            )
+
+    def test_digest_rejects_bytes_subclass(self):
+        class Payload(bytes):
+            pass
+
+        with self.assertRaisesRegex(EvidenceError, "bytes required"):
+            EvidenceRegistry.digest(Payload(b"offline fixture"))
+
+    def test_registry_rejects_evidence_subclass_before_custom_access(self):
+        class HostileEvidence(Evidence):
+            def __post_init__(self):
+                # Deliberately bypass base validation to exercise the registry
+                # boundary, which must reject the subtype before reading fields.
+                pass
+
+            def __getattribute__(self, name):
+                if name in {"topic", "artifact_sha256", "verified"}:
+                    raise AssertionError("custom evidence accessor must not run")
+                return super().__getattribute__(name)
+
+        record = HostileEvidence(
+            "transport", self.sha, "offline observation", "il2cpp_offline"
+        )
+        with self.assertRaisesRegex(EvidenceError, "invalid record"):
+            EvidenceRegistry().add(record)
+
+
 
 if __name__ == "__main__":
     unittest.main()
