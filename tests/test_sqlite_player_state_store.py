@@ -33,7 +33,7 @@ class SqlitePlayerStateStoreTests(unittest.TestCase):
         self.assertEqual(self.store.get("hero"), created)
 
     def test_get_rejects_non_integer_storage_classes_without_coercion(self):
-        self.store.create("hero", level=4, experience=25, currency=90)
+        expected = self.store.create("hero", level=4, experience=25, currency=90)
         cases = (
             ("level", 4.5, 4),
             ("experience", 25.5, 25),
@@ -56,10 +56,8 @@ class SqlitePlayerStateStoreTests(unittest.TestCase):
                     "WHERE character_id=?",
                     (original_value, "hero"),
                 )
-        self.assertEqual(
-            self.store.get("hero"),
-            self.store.get("hero"),
-        )
+        self.assertEqual(self.store.get("hero"), expected)
+        self.assertTrue(self.store.verify_integrity()["snapshots"] == 1)
 
     def test_duplicate_character_is_rejected(self):
         self.store.create("hero")
