@@ -37,7 +37,11 @@ def validate_packet_fixture(
         raise FixtureValidationError("invalid expected source SHA-256")
     if type(max_bytes) is not int or not 1 <= max_bytes <= 1048576:
         raise FixtureValidationError("max_bytes out of range")
-    if not isinstance(record, dict) or set(record) != {
+    if type(record) is not dict:
+        raise FixtureValidationError("invalid fixture fields")
+    if any(type(key) is not str for key in record):
+        raise FixtureValidationError("invalid fixture fields")
+    if set(record) != {
         "source_sha256", "payload_hex", "payload_sha256", "verified"
     }:
         raise FixtureValidationError("invalid fixture fields")
@@ -52,7 +56,7 @@ def validate_packet_fixture(
         raise FixtureValidationError("fixture source digest does not match expected artifact")
 
     value = record["payload_hex"]
-    if not isinstance(value, str) or len(value) > 2 * max_bytes:
+    if type(value) is not str or len(value) > 2 * max_bytes:
         raise FixtureValidationError("invalid fixture size")
     if not _HEX.fullmatch(value):
         raise FixtureValidationError("invalid payload hex")
