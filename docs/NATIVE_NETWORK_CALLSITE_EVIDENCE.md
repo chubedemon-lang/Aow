@@ -17,8 +17,15 @@ Run the redacted callsite inventory against an authorized local copy:
 
 ```sh
 python -m tools.il2cpp_network_callsite_evidence /private/local/aow.apk \
+  --expected-sha256 <expected-lowercase-sha256> \
   --output /private/local/network-callsite-evidence.json
 ```
+
+The optional `--expected-sha256` guard requires an exact 64-character
+lowercase SHA-256. The tool hashes the opened APK through its stable descriptor
+and rejects a mismatch before parsing ZIP members, preventing an analyst from
+accidentally producing a report for a different build. Omitting the option
+preserves the existing behavior.
 
 The command is offline and emits method labels, bounded entry-window sizes and
 aggregate call counts only. It does not emit APK bytes, native addresses, raw

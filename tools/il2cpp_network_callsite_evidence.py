@@ -329,13 +329,26 @@ def _same_file_snapshot(before, after):
     )
 
 
-def _read_apk_members(apk_path):
+def _validate_expected_sha256(expected_sha256):
+    """Validate an optional exact-build fingerprint before touching the APK."""
+    if expected_sha256 is None:
+        return
+    if (type(expected_sha256) is not str
+            or len(expected_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in expected_sha256)):
+        raise CodegenInventoryError(
+            "expected SHA-256 must be 64 lowercase hexadecimal characters"
+        )
+
+
+def _read_apk_members(apk_path, expected_sha256=None):
     """Read the bounded APK members through one stable, no-follow descriptor.
 
     Hashing and ZIP parsing share the same descriptor. This prevents a path
     replacement between the digest pass and member extraction from mixing
     evidence from two different APK files.
     """
+    _validate_expected_sha256(expected_sha256)
     path = Path(apk_path)
     try:
         path_info = os.lstat(path)
@@ -377,6 +390,12 @@ def _read_apk_members(apk_path):
                 remaining -= len(chunk)
             if stream.read(1):
                 raise CodegenInventoryError("APK grew while reading")
+
+            actual_digest = digest.hexdigest()
+            if expected_sha256 is not None and actual_digest != expected_sha256:
+                raise CodegenInventoryError(
+                    "APK SHA-256 does not match expected fingerprint"
+                )
 
             stream.seek(0)
             try:
@@ -423,7 +442,7 @@ def _read_apk_members(apk_path):
                     or not _same_file_snapshot(opened, path_after)):
                 raise CodegenInventoryError("APK path changed while reading")
 
-            return digest.hexdigest(), metadata, elf
+            return actual_digest, metadata, elf
     except OSError as exc:
         raise CodegenInventoryError("unable to read stable APK file") from exc
     finally:
@@ -431,9 +450,9 @@ def _read_apk_members(apk_path):
             os.close(descriptor)
 
 
-def inspect_apk(apk_path):
-    """Read only bounded metadata and arm64 libil2cpp members from one stable APK."""
-    digest, metadata, elf = _read_apk_members(apk_path)
+def inspect_apk(apk_path, expected_sha256=None):
+    """Read bounded IL2CPP members, optionally requiring an exact APK fingerprint."""
+    digest, metadata, elf = _read_apk_members(apk_path, expected_sha256)
     return inspect_bytes(metadata, elf, digest)
 
 
@@ -443,8 +462,16 @@ def main(argv=None):
     )
     parser.add_argument("apk", help="path to an authorized local APK")
     parser.add_argument("--output", help="write aggregate JSON to a local file")
+    parser.add_argument(
+        "--expected-sha256",
+        help="require this exact lowercase SHA-256 before parsing APK members",
+    )
     args = parser.parse_args(argv)
-    report = json.dumps(inspect_apk(args.apk), indent=2, sort_keys=True) + "\n"
+    report = json.dumps(
+        inspect_apk(args.apk, expected_sha256=args.expected_sha256),
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
     if args.output:
         Path(args.output).write_text(report, encoding="utf-8")
     else:
