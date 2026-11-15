@@ -34,6 +34,12 @@ SQLite transaction. Internal ledger request IDs are namespaced by a SHA-256
 digest of the shop request ID so the raw caller ID is not reused in either
 underlying ledger.
 
+Before a new purchase mutates state, the live player row and inventory header
+and item rows are decoded with the same strict snapshot validators used by the
+standalone stores. REAL values are not truncated to integers and BLOB item IDs
+are not converted to Python string representations. Corrupt persisted state
+fails closed without a debit, item grant, revision change, or receipt.
+
 ## Boundaries and deployment
 
 - Offer IDs, item IDs, prices, currency limits and purchase quantity limits
@@ -53,7 +59,8 @@ underlying ledger.
 Focused regression tests cover atomic debit/grant, stale revisions,
 insufficient funds, stack and slot limits, idempotent retries, catalog changes,
 reopen persistence, rollback on receipt-write failure, request conflicts,
-player isolation and concurrent identical requests.
+player isolation, concurrent identical requests, and rejection of corrupted
+REAL/BLOB player or inventory storage values before any purchase mutation.
 
 Run:
 

@@ -102,6 +102,9 @@ on:
       - 'tests/test_character_snapshot_validation.py'
       - 'docs/CHARACTER_LIFECYCLE.md'
       - 'server/sqlite_authorized_combat_service.py'
+      - 'server/sqlite_shop_store.py'
+      - 'tests/test_sqlite_shop_store.py'
+      - 'docs/SQLITE_SHOP_STORE.md'
       - 'tests/test_sqlite_authorized_combat_service.py'
       - 'docs/COMBAT_PERSISTENCE.md'
       - 'server/sqlite_authorized_transaction.py'
@@ -285,6 +288,23 @@ jobs:
         run: python -m py_compile server/sqlite_inventory_store.py
       - name: Durable inventory persistence regression tests (synthetic only)
         run: python -m unittest discover -s tests -p 'test_sqlite_inventory_store.py' -v
+
+  shop-store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile durable shop store and authorization facade
+        run: python -m py_compile server/sqlite_shop_store.py server/sqlite_authorized_shop_service.py
+      - name: Durable shop persistence regression tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_sqlite_shop_store.py' -v
+      - name: Session-authorized shop integration tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_sqlite_authorized_shop_service.py' -v
 
   authorized-transaction:
     runs-on: ubuntu-latest
