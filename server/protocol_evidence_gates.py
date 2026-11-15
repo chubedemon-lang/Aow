@@ -38,10 +38,10 @@ def evaluate_evidence(
     The order is intentional: a downstream stage cannot be marked ready until
     the prior stages have verified evidence from the same artifact.
     """
-    if not isinstance(records, (list, tuple)):
-        raise EvidenceError("records must be a list or tuple")
-    if any(not isinstance(record, Evidence) for record in records):
-        raise EvidenceError("all records must be Evidence instances")
+    if type(records) not in (list, tuple):
+        raise EvidenceError("records must be a built-in list or tuple")
+    if any(type(record) is not Evidence for record in records):
+        raise EvidenceError("all records must be exact Evidence instances")
 
     fingerprints = {record.artifact_sha256 for record in records}
     if artifact_sha256 is None:
@@ -51,7 +51,7 @@ def evaluate_evidence(
             )
         selected_fingerprint = next(iter(fingerprints), None)
     else:
-        if not isinstance(artifact_sha256, str) or not _SHA256.fullmatch(artifact_sha256):
+        if type(artifact_sha256) is not str or not _SHA256.fullmatch(artifact_sha256):
             raise EvidenceError("artifact_sha256 must be lowercase SHA-256")
         if artifact_sha256 not in fingerprints:
             raise EvidenceError("no evidence records match artifact_sha256")
