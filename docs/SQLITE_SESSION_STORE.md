@@ -6,6 +6,7 @@
 
 - Issues 256-bit random URL-safe bearer tokens.
 - Persists only the SHA-256 token digest, account id, creation time and expiry time.
+- Token entry points accept only an exact built-in `str`; string subclasses are rejected before regular-expression matching, encoding, or dictionary/database lookup. This prevents custom `encode()` or `__hash__()` hooks from running while validating an opaque bearer token.
 - Uses epoch time so expiry survives process restarts; tests inject a deterministic clock.
 - Rejects finite clock values when adding the requested TTL cannot produce a strictly later, finite expiry timestamp; this avoids leaking a SQLite constraint error for unrepresentable epochs.
 - Uses `BEGIN IMMEDIATE` for issue, resolve/expiry cleanup, revocation and purge operations.
