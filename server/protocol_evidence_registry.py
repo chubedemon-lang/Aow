@@ -193,7 +193,7 @@ class Evidence:
         if type(self.topic) is not str or self.topic not in ALLOWED_TOPICS:
             raise EvidenceError("unknown topic")
         if (
-            not isinstance(self.artifact_sha256, str)
+            type(self.artifact_sha256) is not str
             or not _SHA.fullmatch(self.artifact_sha256)
         ):
             raise EvidenceError("invalid sha256")
@@ -220,7 +220,7 @@ class EvidenceRegistry:
         self._records = []
 
     def add(self, record):
-        if not isinstance(record, Evidence):
+        if type(record) is not Evidence:
             raise EvidenceError("invalid record")
         if record in self._records:
             raise EvidenceError("duplicate evidence")
@@ -262,6 +262,6 @@ class EvidenceRegistry:
 
     @staticmethod
     def digest(data):
-        if not isinstance(data, bytes):
+        if type(data) is not bytes:
             raise EvidenceError("bytes required")
         return hashlib.sha256(data).hexdigest()

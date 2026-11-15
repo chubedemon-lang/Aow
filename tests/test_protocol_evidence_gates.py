@@ -129,5 +129,40 @@ class EvidenceGateTests(unittest.TestCase):
             evaluate_evidence(records, artifact_sha256="b" * 64)
 
 
+    def test_rejects_list_subclass_before_iteration(self):
+        class HostileList(list):
+            def __iter__(self):
+                raise AssertionError("custom collection iterator must not run")
+
+        with self.assertRaisesRegex(EvidenceError, "built-in list or tuple"):
+            evaluate_evidence(HostileList())
+
+    def test_rejects_evidence_subclass_before_field_access(self):
+        class HostileEvidence(Evidence):
+            def __post_init__(self):
+                # Deliberately bypass base validation to exercise the gate.
+                pass
+
+            def __getattribute__(self, name):
+                if name in {"topic", "artifact_sha256", "verified"}:
+                    raise AssertionError("custom evidence accessor must not run")
+                return super().__getattribute__(name)
+
+        record = HostileEvidence(
+            "transport", "a" * 64, "offline observation", "il2cpp_offline"
+        )
+        with self.assertRaisesRegex(EvidenceError, "exact Evidence"):
+            evaluate_evidence([record])
+
+    def test_artifact_selector_rejects_string_subclass(self):
+        class Digest(str):
+            pass
+
+        with self.assertRaisesRegex(EvidenceError, "lowercase SHA-256"):
+            evaluate_evidence(
+                [evidence("transport")], artifact_sha256=Digest("a" * 64)
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
