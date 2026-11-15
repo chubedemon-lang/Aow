@@ -83,3 +83,18 @@ Regression tests cover fractional numeric values, a BLOB in a numeric field,
 revision/turn mismatch, a valid terminal snapshot, and mismatched winner
 metadata. This is synthetic persistence validation only; it does not define
 AOW combat fields, damage rules, message schemas, or wire compatibility.
+
+
+## Canonical in-memory turn-state validation — 2026-11-16
+
+The synthetic `Battle` value object now validates the turn counter as an
+exact built-in integer before any terminal-state comparison, and validates
+`next_actor` as an exact built-in integer before membership/equality checks.
+Boolean values, floats and integer subclasses are rejected. This prevents a
+non-canonical snapshot such as `next_actor=True` from comparing equal to
+fighter ID `1`, being accepted by the pure combat model, and then changing
+type when SQLite persists it.
+
+Regression tests exercise boolean, float and hostile integer-subclass actor
+values, plus a hostile integer-subclass turn counter. This is synthetic domain
+validation only; it does not define AOW combat rules or packet fields.

@@ -35,6 +35,11 @@ class Battle:
     turn: int = 0
 
     def __post_init__(self):
+        # Validate exact built-in integer types before equality checks. bool,
+        # float and int subclasses are not canonical persisted turn values.
+        _stat(self.turn, "turn")
+        if type(self.next_actor) is not int:
+            raise ValueError("invalid next actor")
         if self.first.fighter_id == self.second.fighter_id:
             raise ValueError("fighters must be distinct")
         if self.turn == 0 and (self.first.hp == 0 or self.second.hp == 0):
@@ -43,7 +48,6 @@ class Battle:
             raise ValueError("both fighters cannot be defeated")
         if self.next_actor not in (self.first.fighter_id, self.second.fighter_id):
             raise ValueError("invalid next actor")
-        _stat(self.turn, "turn")
 
     def attack(self, actor_id):
         """Return a new battle snapshot and synthetic event; never mutate state."""
