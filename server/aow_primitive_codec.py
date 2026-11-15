@@ -114,19 +114,27 @@ class AowPrimitiveReader:
         return value - 0x10000 if value & 0x8000 else value
 
     def read_int(self):
-        value = (self._read_u16() << 16) | self._read_u16()
-        return value - 0x100000000 if value & 0x80000000 else value
+        # _take validates the full primitive before advancing the cursor.
+        return int.from_bytes(self._take(4), "big", signed=True)
 
     def read_long(self):
-        value = (self._read_u32() << 32) | self._read_u32()
-        return value - 0x10000000000000000 if value & 0x8000000000000000 else value
+        # A truncated fixed-width value must not consume a partial prefix.
+        return int.from_bytes(self._take(8), "big", signed=True)
 
     def read_string(self):
-        code_units = self._read_u16()
-        if code_units & 0x8000:
-            return None
-        raw = self._take(code_units * 2)
-        return raw.decode("utf-16-be", errors="surrogatepass")
+        # The length prefix and its body form one logical primitive. If the
+        # body is truncated, restore the cursor to the start of the string so
+        # callers never observe a half-consumed value.
+        start = self._offset
+        try:
+            code_units = self._read_u16()
+            if code_units & 0x8000:
+                return None
+            raw = self._take(code_units * 2)
+            return raw.decode("utf-16-be", errors="surrogatepass")
+        except EOFError:
+            self._offset = start
+            raise
 
     def require_consumed(self):
         """Reject trailing bytes after a caller-defined primitive payload."""
