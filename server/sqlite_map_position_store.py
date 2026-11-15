@@ -57,7 +57,7 @@ def _reject_json_constant(value):
 
 
 def _load_json_object(raw, label, max_chars):
-    if not isinstance(raw, str) or len(raw) > max_chars:
+    if type(raw) is not str or len(raw) > max_chars:
         raise MapPositionStoreError("invalid " + label)
     try:
         value = json.loads(
@@ -130,14 +130,14 @@ class SqliteMapPositionStore:
 
     @staticmethod
     def _character_id(value):
-        if (not isinstance(value, str) or not value
+        if (type(value) is not str or not value
                 or len(value) > 128 or value != value.strip()):
             raise MapPositionStoreError("invalid character identifier")
         return value
 
     @staticmethod
     def _request_id(value):
-        if (not isinstance(value, str) or not value
+        if (type(value) is not str or not value
                 or len(value) > 128 or value != value.strip()):
             raise MapPositionStoreError("invalid request identifier")
         return value
