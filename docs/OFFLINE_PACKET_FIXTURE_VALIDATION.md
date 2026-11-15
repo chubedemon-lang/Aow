@@ -22,6 +22,12 @@ batches (plain dictionaries, lists/tuples and sets/frozensets) and exact
 strings for hexadecimal payloads. Subclasses are rejected so caller-defined
 mapping access or iteration hooks cannot run inside the validation boundary.
 
+The batch validator performs its encoded-length preflight only when
+`payload_hex` is an exact built-in string. A string subclass is passed to the
+single-fixture validator and rejected there before its custom `__len__` hook
+can run. The public evidence metadata validator likewise requires an exact
+built-in dictionary before iterating keys or indexing fields.
+
 The validators also require:
 
 - an explicit boolean verified: true;

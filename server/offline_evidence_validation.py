@@ -135,7 +135,9 @@ def validate_record(record):
     No bytes, endpoints, tokens, absolute file paths, or proprietary material
     are accepted here.
     """
-    if not isinstance(record, dict) or set(record) != {
+    # Require a plain dict before iteration or indexing: a subclass can
+    # override __iter__ / __getitem__ and execute caller code in this boundary.
+    if type(record) is not dict or set(record) != {
         "kind", "sha256", "source", "observation", "verified"
     }:
         raise EvidenceError("invalid evidence schema")

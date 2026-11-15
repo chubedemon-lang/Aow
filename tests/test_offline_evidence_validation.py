@@ -32,6 +32,17 @@ class EvidenceValidationTests(unittest.TestCase):
         with self.assertRaises(EvidenceError):
             validate_record(record)
 
+    def test_rejects_dict_subclass_before_mapping_hooks(self):
+        class ExplosiveDict(dict):
+            def __iter__(self):
+                raise AssertionError("custom iteration hook must not run")
+
+            def __getitem__(self, key):
+                raise AssertionError("custom item hook must not run")
+
+        with self.assertRaises(EvidenceError):
+            validate_record(ExplosiveDict(self.valid))
+
     def test_rejects_invalid_hash(self):
         for digest in ("A" * 64, "a" * 63, "g" * 64, 12, "a" * 65):
             with self.subTest(digest=digest), self.assertRaises(EvidenceError):

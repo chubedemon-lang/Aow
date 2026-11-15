@@ -82,6 +82,16 @@ class OfflineFixturePrivacyBoundaryTests(unittest.TestCase):
         with self.assertRaises(FixtureValidationError):
             validate([item])
 
+    def test_rejects_payload_string_subclass_before_length_hook(self):
+        class ExplosiveString(str):
+            def __len__(self):
+                raise AssertionError("custom length hook must not run")
+
+        item = fixture(b"x")
+        item["payload_hex"] = ExplosiveString(item["payload_hex"])
+        with self.assertRaises(FixtureValidationError):
+            validate([item])
+
 
 if __name__ == "__main__":
     unittest.main()
