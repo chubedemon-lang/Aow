@@ -340,3 +340,35 @@ message IDs.
 This is static delegate-to-method association at the registration sites, not
 proof of runtime execution, server semantics, a complete message schema,
 handshake order, or APK/server compatibility.
+
+
+## LoginToBattleRequest serializer helper callsites — 2026-11-15
+
+A fresh private, read-only pass against the unchanged APK re-materialized the
+same SHA-256 fingerprint and re-associated all 165 metadata image names with
+the ARM64 codegen module records. The bounded registration pass counted
+164,023 relocation-backed executable method-pointer slots. This is static
+registration evidence, not proof that any path executes at runtime.
+
+The bounded entry-window scan reproduced the previously documented direct
+primitive-helper counts for LoginRequest and SessionRestoreRequest and added
+the following LoginToBattleRequest observations:
+
+| Entry method | Direct primitive helper | Call sites |
+|---|---|---:|
+| LoginToBattleRequest serializer | SimpleSerializer.serializeInt | 5 |
+| LoginToBattleRequest serializer | SimpleSerializer.serializeString | 2 |
+| LoginToBattleRequest deserializer | SimpleDeserializer.deserializeInt | 4 |
+| LoginToBattleRequest deserializer | SimpleDeserializer.deserializeString | 2 |
+
+The serializer and deserializer entry windows were 1,432 and 2,156 bytes,
+respectively, bounded by the next distinct relocation-backed executable
+entry in the same section and subject to the analyzer's 64 KiB maximum.
+
+These are direct AArch64 `BL` callsite counts inside bounded entry windows.
+They are **not** field counts, runtime execution counts, field order, or a
+reconstructed LoginToBattleRequest schema. They do not identify which
+property getter feeds each primitive helper, optionality, message IDs,
+authentication semantics, handshake order, compression/encryption placement,
+or APK/server compatibility. No raw addresses, instruction words, APK bytes,
+packet captures, endpoints, or proprietary assets are included.
