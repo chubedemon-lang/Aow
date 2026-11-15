@@ -15,6 +15,8 @@ import struct
 
 _MAX_ELF = 512 * 1024 * 1024
 _MAX_FDE_COUNT = 1_000_000
+_MAX_ADDRESS = (1 << 64) - 1
+_ADDRESS_SPACE_END = 1 << 64
 _EXPECTED_ENCODINGS = (1, 0x1B, 0x03, 0x3B)
 
 
@@ -44,9 +46,22 @@ class EhFrameEntryWindow:
 def _range(value, name):
     if (type(value) not in (tuple, list) or len(value) != 2
             or type(value[0]) is not int or type(value[1]) is not int
-            or value[0] < 0 or value[1] <= value[0]):
+            or value[0] < 0 or value[0] > _MAX_ADDRESS
+            or value[1] <= value[0] or value[1] > _ADDRESS_SPACE_END):
         raise EhFrameIndexError(f"invalid {name} range")
     return value[0], value[1]
+
+
+def _add_sdata4(base, displacement, name):
+    """Apply one signed DW_EH_PE_sdata4 displacement in the ELF64 address space."""
+    if type(base) is not int or not 0 <= base <= _MAX_ADDRESS:
+        raise EhFrameIndexError(f"invalid {name} base")
+    if type(displacement) is not int or not -(1 << 31) <= displacement < (1 << 31):
+        raise EhFrameIndexError(f"invalid {name} displacement")
+    result = base + displacement
+    if not 0 <= result <= _MAX_ADDRESS:
+        raise EhFrameIndexError(f"{name} address overflows ELF64")
+    return result
 
 
 def parse_eh_frame_header(data, header_address, eh_frame_range,
@@ -60,19 +75,26 @@ def parse_eh_frame_header(data, header_address, eh_frame_range,
     """
     if type(data) is not bytes:
         raise EhFrameIndexError("header must be exact bytes")
-    if type(header_address) is not int or header_address < 0:
+    if (type(header_address) is not int
+            or not 0 <= header_address <= _MAX_ADDRESS - 4):
         raise EhFrameIndexError("invalid header address")
     frame_start, frame_end = _range(eh_frame_range, ".eh_frame")
     if type(executable_ranges) not in (tuple, list) or not executable_ranges:
         raise EhFrameIndexError("executable ranges are required")
-    ranges = tuple(_range(item, "executable section") for item in executable_ranges)
+    ranges = tuple(sorted(
+        _range(item, "executable section") for item in executable_ranges
+    ))
+    if any(right[0] < left[1] for left, right in zip(ranges, ranges[1:])):
+        raise EhFrameIndexError("executable section ranges overlap")
     if len(data) < 12:
         raise EhFrameIndexError(".eh_frame_hdr is truncated")
     if tuple(data[:4]) != _EXPECTED_ENCODINGS:
         raise EhFrameIndexError("unsupported .eh_frame_hdr encodings")
 
     frame_displacement = struct.unpack_from("<i", data, 4)[0]
-    frame_pointer = header_address + 4 + frame_displacement
+    frame_pointer = _add_sdata4(
+        header_address + 4, frame_displacement, "header .eh_frame pointer"
+    )
     if not frame_start <= frame_pointer < frame_end:
         raise EhFrameIndexError("header .eh_frame pointer is out of range")
 
@@ -93,8 +115,8 @@ def parse_eh_frame_header(data, header_address, eh_frame_range,
         start_displacement, fde_displacement = struct.unpack_from(
             "<ii", data, offset
         )
-        start = header_address + start_displacement
-        fde = header_address + fde_displacement
+        start = _add_sdata4(header_address, start_displacement, "FDE initial PC")
+        fde = _add_sdata4(header_address, fde_displacement, "FDE pointer")
         if start <= previous_start or start % 4:
             raise EhFrameIndexError("FDE initial PCs are not strictly sorted")
         if fde % 4 or not frame_start <= fde < frame_end:
