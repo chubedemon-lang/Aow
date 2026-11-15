@@ -32,6 +32,35 @@ class SqlitePlayerStateStoreTests(unittest.TestCase):
                           created.revision), (4, 25, 90, 0))
         self.assertEqual(self.store.get("hero"), created)
 
+    def test_get_rejects_non_integer_storage_classes_without_coercion(self):
+        self.store.create("hero", level=4, experience=25, currency=90)
+        cases = (
+            ("level", 4.5, 4),
+            ("experience", 25.5, 25),
+            ("currency", 90.5, 90),
+            ("revision", 0.5, 0),
+        )
+        for column, invalid_value, original_value in cases:
+            with self.subTest(column=column):
+                self.db.execute(
+                    f"UPDATE player_state_snapshots SET {column}=? "
+                    "WHERE character_id=?",
+                    (invalid_value, "hero"),
+                )
+                with self.assertRaisesRegex(
+                    PlayerStoreError, "invalid stored player snapshot"
+                ):
+                    self.store.get("hero")
+                self.db.execute(
+                    f"UPDATE player_state_snapshots SET {column}=? "
+                    "WHERE character_id=?",
+                    (original_value, "hero"),
+                )
+        self.assertEqual(
+            self.store.get("hero"),
+            self.store.get("hero"),
+        )
+
     def test_duplicate_character_is_rejected(self):
         self.store.create("hero")
         with self.assertRaises(PlayerAlreadyExists):
