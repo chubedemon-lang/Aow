@@ -10,7 +10,7 @@
 | Primitive serialization | Native helper bodies indicate big-endian 16/32/64-bit values, UTF-16 code-unit strings and one-byte boolean/byte operations; isolated codec and synthetic vectors exist | Primitive payload layer only |
 | Message schema | Message type registry and paired serializer/deserializer type definitions | Field order, optionality and wire IDs unknown |
 | Handshake | Login/registration/session type names | Application handshake sequence unknown |
-| Compression/encryption | Zipped/encrypted/decrypted buffer and crypto-provider identifiers | Algorithms and activation rules unknown |
+| Compression/encryption | Zipped/encrypted/decrypted buffer and crypto-provider identifiers; Receiver.Cycle's second decoded integer is passed to a HashSet-style membership helper strongly attributed to NetworkSettings.m_zippetMessageTypes | Membership-set owner is strongly attributed statically; branch outcome, compression range/placement and encryption rules remain unverified |
 | Login/session | Login, registration, and session-restore fields/methods identified | Wire semantics unknown |
 | Player initialization | Not established | Unknown |
 | World synchronization | Battle, lobby, map, and movement message names identified | Wire semantics unknown |
@@ -228,3 +228,20 @@ The `NetworkSettings.HeaderLength` metadata field exists, but its effective
 runtime value and use remain unresolved. No authorized client-side byte
 fixture or end-to-end exchange is available, so the AOW adapter remains
 disabled.
+
+
+## Receiver zipped-message membership — 2026-11-15
+
+A fresh bounded native pass, documented in
+[NATIVE_NETWORK_CALLSITE_EVIDENCE.md](NATIVE_NETWORK_CALLSITE_EVIDENCE.md),
+strongly attributes the collection read by Receiver.Cycle to
+NetworkSettings.m_zippetMessageTypes. The second decoded integer is passed as
+the key to a HashSet-style membership helper. This is a static attribution of
+the collection owner and the lookup shape, not a runtime trace.
+
+This narrows the receiver's zipped-message classification path. It does **not**
+establish that the integer is a stable wire message ID, which branch executes
+for a particular message, what byte range is decompressed, where compression
+sits in the complete frame, or whether Sender.Cycle is symmetric. The adapter
+remains disabled pending an authorized redacted client-side byte fixture or
+local runtime trace.
