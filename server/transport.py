@@ -64,7 +64,9 @@ class TransportAdapter:
     def receive(self, payload):
         if not self.configured:
             raise UnverifiedProtocolError("no reviewed protocol codec configured")
-        if not isinstance(payload, bytes):
+        # Require the exact built-in type before invoking len() or the codec.
+        # A bytes subclass can override __len__ and execute arbitrary code.
+        if type(payload) is not bytes:
             raise TypeError("payload must be bytes")
         if len(payload) > MAX_SYNTHETIC_PAYLOAD_BYTES:
             raise ValueError("payload exceeds local safety limit")
@@ -74,7 +76,9 @@ class TransportAdapter:
         if not self.configured:
             raise UnverifiedProtocolError("no reviewed protocol codec configured")
         payload = self._encode(message)
-        if not isinstance(payload, bytes):
+        # Validate the codec result before invoking len() on caller-controlled
+        # subclasses. Only an exact immutable bytes object crosses this boundary.
+        if type(payload) is not bytes:
             raise TypeError("codec must return bytes")
         if len(payload) > MAX_SYNTHETIC_PAYLOAD_BYTES:
             raise ValueError("encoded payload exceeds local safety limit")
