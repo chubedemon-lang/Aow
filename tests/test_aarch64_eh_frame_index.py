@@ -131,6 +131,43 @@ class Aarch64EhFrameIndexTests(unittest.TestCase):
                 data, HEADER_ADDRESS, FRAME_RANGE, EXECUTABLE_RANGES
             )
 
+    def test_rejects_executable_ranges_that_overlap(self):
+        data = make_header(((0x4100, 0x2100),))
+        with self.assertRaisesRegex(EhFrameIndexError, "ranges overlap"):
+            parse_eh_frame_header(
+                data, HEADER_ADDRESS, FRAME_RANGE,
+                ((0x4000, 0x4200), (0x4100, 0x5000)),
+            )
+
+    def test_rejects_ranges_outside_elf64_address_space(self):
+        data = make_header(((0x4100, 0x2100),))
+        with self.assertRaisesRegex(EhFrameIndexError, "range"):
+            parse_eh_frame_header(
+                data, HEADER_ADDRESS, (0x2000, (1 << 64) + 1),
+                EXECUTABLE_RANGES,
+            )
+
+    def test_rejects_header_pcrel_base_overflow(self):
+        data = bytes((1, 0x1B, 0x03, 0x3B)) + struct.pack("<iI", 0, 0)
+        with self.assertRaisesRegex(EhFrameIndexError, "header address"):
+            parse_eh_frame_header(
+                data, (1 << 64) - 2, ((1 << 64) - 8, 1 << 64),
+                EXECUTABLE_RANGES,
+            )
+
+    def test_rejects_datarel_entry_address_overflow(self):
+        data = bytearray(20)
+        data[:4] = bytes((1, 0x1B, 0x03, 0x3B))
+        struct.pack_into("<iI", data, 4, -8, 1)
+        struct.pack_into("<ii", data, 12, 32, -32)
+        header_address = (1 << 64) - 16
+        with self.assertRaisesRegex(EhFrameIndexError, "overflows ELF64"):
+            parse_eh_frame_header(
+                bytes(data), header_address,
+                ((1 << 64) - 64, (1 << 64) - 10),
+                (((1 << 64) - 8, 1 << 64),),
+            )
+
     def test_rejects_invalid_ranges_and_header_pointer(self):
         with self.assertRaises(EhFrameIndexError):
             parse_eh_frame_header(
