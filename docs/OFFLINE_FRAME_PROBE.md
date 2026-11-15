@@ -18,6 +18,10 @@ These are synthetic parser safety limits, not AOW protocol limits.
 
 An oversized feed is rejected and poisons the decoder before the chunk is copied into its internal buffer. Fragmented frames may span multiple feed calls.
 
+## Input type boundary
+
+The decoder accepts only an exact `FrameSpec`, an exact built-in `str` for `byteorder`, and exact built-in `bytes` chunks. Subclasses are rejected before equality, length, or byte-conversion hooks can execute. This keeps the parser's resource and validation checks deterministic; it does not imply anything about the APK's runtime input types or wire contract.
+
 ## End-of-stream semantics
 
 `finish()` is terminal. After a clean EOF, later `feed()` calls are rejected so bytes cannot be appended to a closed stream. If EOF arrives with a partial header or body, the decoder clears the pending bytes, poisons itself and rejects subsequent input. Construct a new decoder for a new connection. These are generic stream-lifecycle rules only; they do not describe the AOW client's transport.

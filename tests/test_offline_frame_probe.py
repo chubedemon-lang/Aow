@@ -183,6 +183,34 @@ class OfflineFrameProbeTests(unittest.TestCase):
             65536,
         )
 
+    def test_rejects_bytes_subclass_before_length_or_bytes_hooks(self):
+        class HostileBytes(bytes):
+            def __len__(self):
+                raise AssertionError("custom __len__ must not run")
+
+            def __bytes__(self):
+                raise AssertionError("custom __bytes__ must not run")
+
+        decoder = LengthFrameDecoder(FrameSpec(1, "big"))
+        with self.assertRaisesRegex(TypeError, "exact built-in bytes"):
+            decoder.feed(HostileBytes(b"\x01x"))
+        self.assertEqual(decoder.pending_bytes, 0)
+
+    def test_rejects_string_subclass_for_byteorder_before_comparison(self):
+        class HostileByteorder(str):
+            def __eq__(self, other):
+                raise AssertionError("custom __eq__ must not run")
+
+        with self.assertRaisesRegex(ValueError, "exact string"):
+            FrameSpec(1, HostileByteorder("big"))
+
+    def test_rejects_frame_spec_subclasses(self):
+        class ExtendedFrameSpec(FrameSpec):
+            pass
+
+        with self.assertRaisesRegex(TypeError, "exact FrameSpec"):
+            ExtendedFrameSpec(1, "big")
+
 
 if __name__ == "__main__":
     unittest.main()
