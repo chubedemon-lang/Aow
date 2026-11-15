@@ -133,12 +133,30 @@ class SqlitePlayerStateStore:
 
     @staticmethod
     def _snapshot(row):
+        """Decode one persisted row without coercing SQLite storage classes."""
+        character_id, level, experience, currency, revision = (
+            row[0], row[1], row[2], row[3], row[4]
+        )
+        if (
+            type(character_id) is not str
+            or not character_id.strip()
+            or len(character_id) > 128
+            or type(level) is not int
+            or not 1 <= level <= _MAX_LEVEL
+            or type(experience) is not int
+            or not 0 <= experience <= _MAX_EXPERIENCE
+            or type(currency) is not int
+            or not 0 <= currency <= _MAX_CURRENCY
+            or type(revision) is not int
+            or not 0 <= revision <= _MAX_REVISION
+        ):
+            raise PlayerStoreError("invalid stored player snapshot")
         return PlayerSnapshot(
-            character_id=row[0],
-            level=int(row[1]),
-            experience=int(row[2]),
-            currency=int(row[3]),
-            revision=int(row[4]),
+            character_id=character_id,
+            level=level,
+            experience=experience,
+            currency=currency,
+            revision=revision,
         )
 
     @contextmanager
