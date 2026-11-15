@@ -25,6 +25,7 @@ on:
       - 'docs/AARCH64_DELEGATE_TARGET_EVIDENCE.md'
       - 'tests/test_il2cpp_network_callsite_evidence.py'
       - 'docs/IL2CPP_NATIVE_METHOD_EVIDENCE.md'
+      - 'docs/OFFLINE_APK_INPUT_SAFETY.md'
       - 'docs/NATIVE_NETWORK_CALLSITE_EVIDENCE.md'
       - 'server/aow_primitive_codec.py'
       - 'tests/test_aow_primitive_codec.py'
