@@ -1,7 +1,13 @@
 """Synthetic tests for the redacted native network callsite inventory."""
+import hashlib
 import json
+import os
 import struct
+import tempfile
 import unittest
+import zipfile
+from pathlib import Path
+from unittest.mock import patch
 
 from test_il2cpp_native_method_evidence import make_elf, make_metadata
 from tools.aarch64_call_argument_evidence import summarize_small_argument_constants
@@ -9,9 +15,16 @@ from tools.il2cpp_network_callsite_evidence import (
     CALLSITE_ARGUMENT_TARGET_PREFIXES,
     _metadata_usage_static_values,
     inspect_bytes,
+    inspect_apk,
+    _read_apk_members,
     NETWORK_SUPPORT_METHODS,
 )
-from tools.il2cpp_codegen_inventory import R_AARCH64_RELATIVE
+from tools.il2cpp_codegen_inventory import (
+    ARM64_IL2CPP_MEMBER,
+    METADATA_MEMBER,
+    CodegenInventoryError,
+    R_AARCH64_RELATIVE,
+)
 from tools.il2cpp_metadata_usage_evidence import encode_method_def_usage_index
 
 
@@ -292,6 +305,116 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         self.assertNotIn("0x10", rendered)
         self.assertFalse(report["native_addresses_emitted"])
         self.assertFalse(report["raw_instructions_emitted"])
+
+
+class OfflineApkPathReadTests(unittest.TestCase):
+    @staticmethod
+    def write_apk(path, metadata=b"metadata-fixture", elf=b"elf-fixture"):
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(METADATA_MEMBER, metadata)
+            archive.writestr(ARM64_IL2CPP_MEMBER, elf)
+
+    def test_inspect_apk_hashes_and_parses_members_from_one_descriptor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sample.apk"
+            self.write_apk(path, b"metadata", b"elf")
+            expected_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            with patch(
+                "tools.il2cpp_network_callsite_evidence.inspect_bytes",
+                return_value={"synthetic": True},
+            ) as inspect:
+                self.assertEqual(inspect_apk(path), {"synthetic": True})
+            inspect.assert_called_once_with(b"metadata", b"elf", expected_digest)
+
+    def test_rejects_symlinks_and_non_regular_apk_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target.apk"
+            self.write_apk(target)
+            link = root / "link.apk"
+            try:
+                link.symlink_to(target)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlink creation is unavailable")
+            with self.assertRaisesRegex(CodegenInventoryError, "regular non-symlink"):
+                _read_apk_members(link)
+            with self.assertRaisesRegex(CodegenInventoryError, "regular non-symlink"):
+                _read_apk_members(root)
+
+    def test_rejects_empty_and_oversized_apks_before_zip_parsing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            empty = root / "empty.apk"
+            empty.write_bytes(b"")
+            with self.assertRaisesRegex(CodegenInventoryError, "size"):
+                _read_apk_members(empty)
+
+            oversized = root / "oversized.apk"
+            oversized.write_bytes(b"1234")
+            with patch("tools.il2cpp_network_callsite_evidence.MAX_APK", 3):
+                with self.assertRaisesRegex(CodegenInventoryError, "size"):
+                    _read_apk_members(oversized)
+
+    def test_rejects_path_replacement_between_lstat_and_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "sample.apk"
+            replacement = root / "replacement.apk"
+            self.write_apk(path)
+            self.write_apk(replacement)
+            real_open = os.open
+
+            def replace_then_open(candidate, flags):
+                if Path(candidate) == path:
+                    path.unlink()
+                    path.symlink_to(replacement)
+                return real_open(candidate, flags)
+
+            with patch(
+                "tools.il2cpp_network_callsite_evidence.os.open",
+                side_effect=replace_then_open,
+            ):
+                with self.assertRaises(CodegenInventoryError):
+                    _read_apk_members(path)
+
+    def test_detects_in_place_mutation_during_zip_member_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sample.apk"
+            self.write_apk(path)
+            real_zip_file = zipfile.ZipFile
+
+            class MutatingZipFile:
+                def __init__(self, stream):
+                    self.inner = real_zip_file(stream)
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc_value, traceback):
+                    result = self.inner.__exit__(exc_type, exc_value, traceback)
+                    if exc_type is None:
+                        with path.open("r+b") as changed:
+                            changed.seek(0)
+                            changed.write(b"X")
+                            changed.flush()
+                    return result
+
+                def getinfo(self, name):
+                    return self.inner.getinfo(name)
+
+                def infolist(self):
+                    return self.inner.infolist()
+
+                def open(self, *args, **kwargs):
+                    return self.inner.open(*args, **kwargs)
+
+            with patch(
+                "tools.il2cpp_network_callsite_evidence.zipfile.ZipFile",
+                MutatingZipFile,
+            ):
+                with self.assertRaisesRegex(CodegenInventoryError, "changed while reading"):
+                    _read_apk_members(path)
+
 
 if __name__ == "__main__":
     unittest.main()
