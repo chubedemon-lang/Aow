@@ -94,5 +94,29 @@ class OfflinePacketFixtureTests(unittest.TestCase):
             validate({**fixture(), "source_sha256": "A" * 64})
 
 
+    def test_rejects_dict_subclasses_before_invoking_overrides(self):
+        class ExplosiveDict(dict):
+            def __getitem__(self, key):
+                raise AssertionError("custom mapping access must not run")
+
+        with self.assertRaises(FixtureValidationError):
+            validate(ExplosiveDict(fixture()))
+
+    def test_rejects_non_string_record_keys(self):
+        record = fixture()
+        record[object()] = "unexpected"
+        with self.assertRaises(FixtureValidationError):
+            validate(record)
+
+    def test_rejects_string_subclass_for_payload_hex(self):
+        class DerivedString(str):
+            pass
+
+        record = fixture()
+        record["payload_hex"] = DerivedString(record["payload_hex"])
+        with self.assertRaises(FixtureValidationError):
+            validate(record)
+
+
 if __name__ == "__main__":
     unittest.main()
