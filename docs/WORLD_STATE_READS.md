@@ -44,3 +44,22 @@ Run:
 ```sh
 python -m unittest discover -s tests -p 'test_sqlite_authorized_world_state_service.py' -v
 ```
+
+
+## Focused regression coverage
+
+The Protocol Discovery workflow runs
+`test_sqlite_authorized_world_state_service.py` in the dedicated
+`authorized-world-state` job. The suite covers:
+
+- one coherent character/player/map snapshot;
+- enter, move and leave transitions with the returned snapshot from the same
+  authorization transaction;
+- idempotent replay semantics (original receipt versus current world view);
+- rollback when a post-mutation snapshot read fails;
+- foreign/unknown character indistinguishability and session expiry/revocation;
+- revocation serialization with an in-flight movement snapshot;
+- constructor schema and active-transaction preconditions.
+
+All cases use temporary SQLite databases and synthetic values. They do not
+exercise AOW packets, APK compatibility or any official endpoint.
