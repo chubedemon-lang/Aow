@@ -129,6 +129,30 @@ class StreamWriterTests(unittest.TestCase):
         self.assertEqual(write_all(send, payload, max_bytes=3), 3)
         self.assertEqual(observed, [b"abc"])
 
+    def test_rejects_bytes_subclasses_before_running_snapshot_hooks(self):
+        class HostileBytearray(bytearray):
+            def __len__(self):
+                raise AssertionError("custom length hook must not run")
+
+            def __bytes__(self):
+                raise AssertionError("custom bytes hook must not run")
+
+        class HostileBytes(bytes):
+            def __len__(self):
+                raise AssertionError("custom length hook must not run")
+
+            def __bytes__(self):
+                raise AssertionError("custom bytes hook must not run")
+
+        for payload in (HostileBytearray(b"abc"), HostileBytes(b"abc")):
+            with self.subTest(payload_type=type(payload).__name__):
+                with self.assertRaises(TypeError):
+                    write_all(
+                        lambda _view: self.fail("sink must not be called"),
+                        payload,
+                        max_bytes=3,
+                    )
+
     def test_empty_payload_does_not_call_sink(self):
         called = []
         self.assertEqual(write_all(lambda _view: called.append(True), b"", max_bytes=0), 0)
