@@ -49,7 +49,7 @@ _ABSOLUTE_PATH = re.compile(
     r"~[\\/][^\s]+"
     r"|/{1,}(?:[^/\s]+/)*[^/\s]+"
     r"|[A-Za-z]:[\\/][^\s]+"
-    r"|\\\\[^\\/\s]+[\\/][^\s]+"
+    r"|\\\\[^\\/\s]+[\\/][^\\/\s]+"
     r"|\\(?!\\)[^\\/\s]+(?:\\[^\\/\s]+)*"
     r")"
 )
@@ -135,11 +135,15 @@ def validate_record(record):
     No bytes, endpoints, tokens, absolute file paths, or proprietary material
     are accepted here.
     """
-    # Require a plain dict before iteration or indexing: a subclass can
-    # override __iter__ / __getitem__ and execute caller code in this boundary.
-    if type(record) is not dict or set(record) != {
-        "kind", "sha256", "source", "observation", "verified"
-    }:
+    # Require plain dictionaries and plain string keys before iteration/hash
+    # operations: key subclasses can override __hash__ or __eq__.
+    if (
+        type(record) is not dict
+        or any(type(key) is not str for key in record)
+        or set(record) != {
+            "kind", "sha256", "source", "observation", "verified"
+        }
+    ):
         raise EvidenceError("invalid evidence schema")
     kind, digest = record["kind"], record["sha256"]
     if type(kind) is not str or kind not in _ALLOWED:

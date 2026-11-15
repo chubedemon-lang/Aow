@@ -42,7 +42,7 @@ def validate_fixture_batch(
     total = 0
     digests = []
     for record in records:
-        if type(record) is not dict:
+        if type(record) is not dict or any(type(key) is not str for key in record):
             raise FixtureValidationError("invalid fixture fields")
         source_digest = record.get("source_sha256")
         if (type(source_digest) is not str
