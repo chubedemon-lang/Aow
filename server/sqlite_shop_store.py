@@ -15,9 +15,12 @@ from dataclasses import dataclass
 from server.synthetic_player_state import PlayerSnapshot
 from server.sqlite_inventory_store import InventorySnapshot, InventoryStoreError
 from server.sqlite_inventory_store import _MAX_REVISION as _MAX_INVENTORY_REVISION
-from server.sqlite_player_state_store import _MAX_REVISION as _MAX_PLAYER_REVISION
+from server.sqlite_player_state_store import (
+    PlayerStoreError,
+    _MAX_REVISION as _MAX_PLAYER_REVISION,
+    SqlitePlayerStateStore,
+)
 from server.sqlite_inventory_store import SqliteInventoryStore
-from server.sqlite_player_state_store import SqlitePlayerStateStore
 
 
 _MAX_CURRENCY = 2**31 - 1
@@ -381,10 +384,12 @@ class SqliteShopStore:
             ).fetchone()
             if player_row is None:
                 raise ShopPlayerNotFound("player snapshot not found")
-            player = PlayerSnapshot(
-                player_row[0], int(player_row[1]), int(player_row[2]),
-                int(player_row[3]), int(player_row[4]),
-            )
+            try:
+                player = SqlitePlayerStateStore._snapshot(player_row)
+            except PlayerStoreError as exc:
+                raise ShopStoreError(
+                    "invalid stored player snapshot"
+                ) from exc
             if player.revision != expected_player_revision:
                 raise ShopRevisionConflict("stale player revision")
 
@@ -395,8 +400,21 @@ class SqliteShopStore:
             ).fetchone()
             if inventory_header is None:
                 raise ShopInventoryNotFound("inventory snapshot not found")
-            capacity, max_stack, inventory_revision = map(int, inventory_header)
-            if inventory_revision != expected_inventory_revision:
+            rows = self.db.execute(
+                """SELECT item_id, quantity FROM inventory_items
+                   WHERE character_id=? ORDER BY item_id""",
+                (character_id,),
+            ).fetchall()
+            capacity, max_stack, inventory_revision = inventory_header
+            try:
+                inventory = SqliteInventoryStore._snapshot(
+                    character_id, capacity, max_stack, inventory_revision, rows
+                )
+            except InventoryStoreError as exc:
+                raise ShopStoreError(
+                    "invalid stored inventory snapshot"
+                ) from exc
+            if inventory.revision != expected_inventory_revision:
                 raise ShopRevisionConflict("stale inventory revision")
             if (player.revision >= _MAX_PLAYER_REVISION
                     or inventory_revision >= _MAX_INVENTORY_REVISION):
@@ -404,12 +422,7 @@ class SqliteShopStore:
             if player.currency < total:
                 raise ShopInsufficientFunds("insufficient balance")
 
-            rows = self.db.execute(
-                """SELECT item_id, quantity FROM inventory_items
-                   WHERE character_id=? ORDER BY item_id""",
-                (character_id,),
-            ).fetchall()
-            candidate = {str(item_id): int(amount) for item_id, amount in rows}
+            candidate = dict(inventory.items)
             new_quantity = candidate.get(offer.item_id, 0) + quantity
             if new_quantity > min(max_stack, _MAX_STACK):
                 raise ShopStoreError("inventory stack limit exceeded")
