@@ -16,10 +16,12 @@ class FrameSpec:
     max_frames_per_feed: int = 4096
 
     def __post_init__(self):
+        if type(self) is not FrameSpec:
+            raise TypeError("spec must be the exact FrameSpec type")
         if type(self.length_bytes) is not int or self.length_bytes not in (1, 2, 4):
             raise ValueError("length_bytes must be 1, 2, or 4")
-        if self.byteorder not in ("big", "little"):
-            raise ValueError("byteorder must be big or little")
+        if type(self.byteorder) is not str or self.byteorder not in ("big", "little"):
+            raise ValueError("byteorder must be the exact string big or little")
         if type(self.includes_header) is not bool:
             raise ValueError("includes_header must be bool")
         max_declared = (1 << (8 * self.length_bytes)) - 1
@@ -52,8 +54,8 @@ class LengthFrameDecoder:
     """Incremental decoder: handles fragmentation and multiple frames per feed."""
 
     def __init__(self, spec: FrameSpec):
-        if not isinstance(spec, FrameSpec):
-            raise TypeError("spec must be FrameSpec")
+        if type(spec) is not FrameSpec:
+            raise TypeError("spec must be the exact FrameSpec type")
         self.spec = spec
         self._pending = bytearray()
         self._failed = False
@@ -68,8 +70,8 @@ class LengthFrameDecoder:
             raise FrameDecodeError("decoder failed; create a new instance")
         if self._finished:
             raise FrameDecodeError("decoder already finished; create a new instance")
-        if not isinstance(chunk, bytes):
-            raise TypeError("chunk must be bytes")
+        if type(chunk) is not bytes:
+            raise TypeError("chunk must be the exact built-in bytes type")
         # Bound the amount copied into the decoder on any one call. A frame
         # larger than this limit may still arrive over multiple feed calls.
         if len(chunk) > self.spec.max_chunk_bytes:
