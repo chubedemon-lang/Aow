@@ -33,6 +33,11 @@ on:
       - 'tests/test_frame_reader.py'
       - 'server/stream_reader.py'
       - 'tests/test_stream_reader.py'
+      - 'server/stream_buffer.py'
+      - 'tests/test_stream_buffer.py'
+      - 'server/stream_writer.py'
+      - 'tests/test_stream_writer.py'
+      - 'docs/STREAM_IO.md'
       - 'server/aow_framing_candidate.py'
       - 'tests/test_aow_framing_candidate.py'
       - 'docs/STREAM_READER.md'
@@ -123,6 +128,8 @@ jobs:
             server/aow_primitive_codec.py \
             server/frame_reader.py \
             server/stream_reader.py \
+            server/stream_buffer.py \
+            server/stream_writer.py \
             server/aow_framing_candidate.py \
             server/offline_frame_probe.py \
             server/offline_protocol_evidence.py \
@@ -153,6 +160,11 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_frame_reader.py' -v
           python -m unittest discover -s tests -p 'test_stream_reader.py' -v
+      - name: Generic bounded stream I/O tests (synthetic bytes only)
+        run: |
+          python -m py_compile server/stream_buffer.py server/stream_writer.py
+          python -m unittest discover -s tests -p 'test_stream_buffer.py' -v
+          python -m unittest discover -s tests -p 'test_stream_writer.py' -v
       - name: Isolated AOW receive-length candidate tests (synthetic stream only)
         run: python -m unittest discover -s tests -p 'test_aow_framing_candidate.py' -v
       - name: Transport evidence boundary tests (synthetic codec only)
