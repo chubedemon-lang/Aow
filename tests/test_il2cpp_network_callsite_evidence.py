@@ -416,5 +416,43 @@ class OfflineApkPathReadTests(unittest.TestCase):
                     _read_apk_members(path)
 
 
+    def test_rejects_malformed_expected_fingerprint_before_path_access(self):
+        for candidate in ("", "A" * 64, "g" * 64, 123):
+            with self.subTest(candidate=repr(candidate)):
+                with self.assertRaisesRegex(
+                    CodegenInventoryError, "expected SHA-256"
+                ):
+                    _read_apk_members("/path/that/does/not/exist.apk", candidate)
+
+    def test_expected_fingerprint_mismatch_fails_before_zip_parsing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sample.apk"
+            self.write_apk(path)
+            with patch(
+                "tools.il2cpp_network_callsite_evidence.zipfile.ZipFile"
+            ) as zip_file:
+                with self.assertRaisesRegex(
+                    CodegenInventoryError, "does not match expected fingerprint"
+                ):
+                    _read_apk_members(path, "0" * 64)
+                zip_file.assert_not_called()
+
+    def test_inspect_apk_accepts_matching_expected_fingerprint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sample.apk"
+            self.write_apk(path, b"metadata", b"elf")
+            expected_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            with patch(
+                "tools.il2cpp_network_callsite_evidence.inspect_bytes",
+                return_value={"synthetic": True},
+            ) as inspect:
+                self.assertEqual(
+                    inspect_apk(path, expected_sha256=expected_digest),
+                    {"synthetic": True},
+                )
+            inspect.assert_called_once_with(b"metadata", b"elf", expected_digest)
+
+
+
 if __name__ == "__main__":
     unittest.main()
