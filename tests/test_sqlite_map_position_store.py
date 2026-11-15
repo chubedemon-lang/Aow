@@ -39,7 +39,47 @@ class _NoMaterializedMapAuditConnection(sqlite3.Connection):
         return cursor
 
 
+class _HostileMapPositionString(str):
+    def __len__(self):
+        raise AssertionError("custom string length hook must not execute")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("custom string strip hook must not execute")
+
+
 class SqliteMapPositionStoreTests(unittest.TestCase):
+    def test_character_id_rejects_string_subclass_before_hooks(self):
+        with self.assertRaises(MapPositionStoreError):
+            self.store.create(_HostileMapPositionString("hero"))
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_snapshots"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_request_id_rejects_string_subclass_before_hooks(self):
+        self.store.create("hero")
+        with self.assertRaises(MapPositionStoreError):
+            self.store.enter(
+                "hero", _HostileMapPositionString("request"), 0, 1, 2, 3
+            )
+        self.assertEqual(self.store.get("hero"), MapPosition())
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_mutations"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_receipt_json_rejects_string_subclass_before_hooks(self):
+        raw = _HostileMapPositionString(
+            '{"map_id":null,"x":null,"y":null,"revision":0}'
+        )
+        with self.assertRaises(MapPositionStoreError):
+            self.store._decode_snapshot(raw)
+
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
