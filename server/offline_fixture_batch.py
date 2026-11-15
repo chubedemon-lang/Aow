@@ -26,9 +26,9 @@ def validate_fixture_batch(
         raise FixtureValidationError("invalid max_records")
     if type(max_total_bytes) is not int or not 1 <= max_total_bytes <= 16777216:
         raise FixtureValidationError("invalid max_total_bytes")
-    if not isinstance(records, (list, tuple)) or not 1 <= len(records) <= max_records:
+    if type(records) not in (list, tuple) or not 1 <= len(records) <= max_records:
         raise FixtureValidationError("invalid fixture count")
-    if (not isinstance(expected_source_sha256s, (set, frozenset, list, tuple))
+    if (type(expected_source_sha256s) not in (set, frozenset, list, tuple)
             or not 1 <= len(expected_source_sha256s) <= 1024):
         raise FixtureValidationError("invalid expected source digest set")
 
@@ -42,7 +42,7 @@ def validate_fixture_batch(
     total = 0
     digests = []
     for record in records:
-        if not isinstance(record, dict):
+        if type(record) is not dict:
             raise FixtureValidationError("invalid fixture fields")
         source_digest = record.get("source_sha256")
         if (type(source_digest) is not str
