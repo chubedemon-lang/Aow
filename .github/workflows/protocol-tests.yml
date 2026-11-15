@@ -18,6 +18,9 @@ on:
       - 'tools/aarch64_call_argument_evidence.py'
       - 'tests/test_aarch64_call_argument_evidence.py'
       - 'tools/aarch64_delegate_target_evidence.py'
+      - 'tools/aarch64_eh_frame_index.py'
+      - 'tests/test_aarch64_eh_frame_index.py'
+      - 'docs/AARCH64_EH_FRAME_INDEX.md'
       - 'tests/test_aarch64_delegate_target_evidence.py'
       - 'docs/AARCH64_DELEGATE_TARGET_EVIDENCE.md'
       - 'tests/test_il2cpp_network_callsite_evidence.py'
@@ -131,6 +134,7 @@ jobs:
             tools/il2cpp_metadata_usage_evidence.py \
             tools/aarch64_call_argument_evidence.py \
             tools/aarch64_delegate_target_evidence.py \
+            tools/aarch64_eh_frame_index.py \
             server/aow_primitive_codec.py \
             server/frame_reader.py \
             server/stream_reader.py \
@@ -355,3 +359,18 @@ jobs:
         run: python -m py_compile tools/sqlite_domain_audit.py
       - name: Read-only domain audit regression tests (synthetic only)
         run: python -m unittest discover -s tests -p 'test_sqlite_domain_audit.py' -v
+
+  aarch64-eh-frame-index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile offline AArch64 FDE index
+        run: python -m py_compile tools/aarch64_eh_frame_index.py
+      - name: AArch64 FDE index tests (synthetic headers only)
+        run: python -m unittest discover -s tests -p 'test_aarch64_eh_frame_index.py' -v
