@@ -93,6 +93,28 @@ class AowPrimitiveCodecTests(unittest.TestCase):
         with self.assertRaises(EOFError):
             AowPrimitiveReader(bytes.fromhex("0002abcd")).read_string()
 
+    def test_truncated_fixed_width_reads_preserve_offset(self):
+        cases = (
+            (bytes.fromhex("aabbcc"), "read_int"),
+            (bytes.fromhex("aabbccddeeff00"), "read_long"),
+        )
+        for payload, method_name in cases:
+            with self.subTest(method=method_name):
+                reader = AowPrimitiveReader(payload)
+                with self.assertRaises(EOFError):
+                    getattr(reader, method_name)()
+                self.assertEqual(reader.offset, 0)
+                self.assertEqual(reader.remaining, len(payload))
+
+    def test_truncated_string_body_restores_its_start_offset(self):
+        reader = AowPrimitiveReader(bytes.fromhex("aa0002abcd"))
+        self.assertEqual(reader.read_byte(), 0xAA)
+        before = reader.offset
+        with self.assertRaises(EOFError):
+            reader.read_string()
+        self.assertEqual(reader.offset, before)
+        self.assertEqual(reader.remaining, 4)
+
     def test_writer_validates_primitive_ranges_and_types(self):
         with self.assertRaises(ValueError):
             AowPrimitiveWriter().write_byte(256)

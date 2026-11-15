@@ -60,3 +60,14 @@ string values. The reader accepts only exact built-in `bytes`, `bytearray`, or
 `encode()` or `__bytes__()` hooks, keeping primitive serialization and input
 snapshotting deterministic. Ordinary mutable bytearrays and memoryviews are
 still copied into an immutable snapshot before decoding.
+
+
+## Atomic cursor behavior on truncated values
+
+A primitive read is atomic with respect to the reader cursor. Fixed-width
+integer reads validate the complete byte width before advancing. A string
+read treats its two-byte length prefix and UTF-16 body as one logical value;
+if the body is truncated, the cursor returns to the start of that string.
+Earlier successfully consumed fields remain consumed. This makes a failed
+parse deterministic for callers that report or discard malformed payloads,
+without changing any encoded bytes or inferring a packet boundary.
