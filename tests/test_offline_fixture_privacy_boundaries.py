@@ -92,6 +92,30 @@ class OfflineFixturePrivacyBoundaryTests(unittest.TestCase):
         with self.assertRaises(FixtureValidationError):
             validate([item])
 
+    def test_rejects_string_subclass_keys_before_hash_or_equality_hooks(self):
+        class GuardedKey(str):
+            armed = False
+
+            def __hash__(self):
+                if self.armed:
+                    raise AssertionError("custom hash hook must not run")
+                return super().__hash__()
+
+            def __eq__(self, other):
+                if self.armed:
+                    raise AssertionError("custom equality hook must not run")
+                return super().__eq__(other)
+
+        item = fixture(b"x")
+        source_digest = item.pop("source_sha256")
+        key = GuardedKey("source_sha256")
+        item[key] = source_digest
+        key.armed = True
+        with self.assertRaises(FixtureValidationError):
+            validate_fixture_batch(
+                [item], expected_source_sha256s={source_digest}
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
