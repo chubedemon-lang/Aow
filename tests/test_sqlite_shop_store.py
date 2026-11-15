@@ -36,6 +36,84 @@ class SqliteShopStoreTests(unittest.TestCase):
         }
         self.shop = SqliteShopStore(self.db, self.offers, max_purchase_quantity=5)
 
+    def _assert_corrupt_purchase_rejected_without_mutation(
+        self, request_id, expected_inventory_revision=0
+    ):
+        before_player = self.db.execute(
+            """SELECT level, experience, currency, revision
+               FROM player_state_snapshots WHERE character_id='hero'"""
+        ).fetchone()
+        before_inventory = self.db.execute(
+            """SELECT capacity, max_stack, revision
+               FROM inventory_snapshots WHERE character_id='hero'"""
+        ).fetchone()
+        before_items = self.db.execute(
+            """SELECT item_id, quantity FROM inventory_items
+               WHERE character_id='hero' ORDER BY item_id"""
+        ).fetchall()
+        with self.assertRaises(ShopStoreError):
+            self.shop.purchase(
+                "hero", request_id, 0, expected_inventory_revision,
+                "potion-pack", 1,
+            )
+        self.assertEqual(
+            self.db.execute(
+                """SELECT level, experience, currency, revision
+                   FROM player_state_snapshots WHERE character_id='hero'"""
+            ).fetchone(),
+            before_player,
+        )
+        self.assertEqual(
+            self.db.execute(
+                """SELECT capacity, max_stack, revision
+                   FROM inventory_snapshots WHERE character_id='hero'"""
+            ).fetchone(),
+            before_inventory,
+        )
+        self.assertEqual(
+            self.db.execute(
+                """SELECT item_id, quantity FROM inventory_items
+                   WHERE character_id='hero' ORDER BY item_id"""
+            ).fetchall(),
+            before_items,
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM shop_purchase_receipts"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_purchase_rejects_real_player_snapshot_without_coercion(self):
+        self.db.execute(
+            "UPDATE player_state_snapshots SET level=3.5 WHERE character_id='hero'"
+        )
+        self._assert_corrupt_purchase_rejected_without_mutation("bad-player-real")
+
+    def test_purchase_rejects_real_inventory_header_without_coercion(self):
+        self.db.execute(
+            "UPDATE inventory_snapshots SET capacity=1.5 WHERE character_id='hero'"
+        )
+        self._assert_corrupt_purchase_rejected_without_mutation("bad-inventory-real")
+
+    def test_purchase_rejects_real_inventory_quantity_without_coercion(self):
+        self.inventory.apply("hero", "seed-corrupt-item", 0, [("herb", 1)])
+        self.db.execute(
+            "UPDATE inventory_items SET quantity=1.5 "
+            "WHERE character_id='hero' AND item_id='herb'"
+        )
+        self._assert_corrupt_purchase_rejected_without_mutation(
+            "bad-item-real", expected_inventory_revision=1
+        )
+
+    def test_purchase_rejects_blob_inventory_item_id_without_string_coercion(self):
+        self.db.execute(
+            "INSERT INTO inventory_items(character_id, item_id, quantity) "
+            "VALUES (?, ?, ?)",
+            ("hero", sqlite3.Binary(b"herb"), 1),
+        )
+        self._assert_corrupt_purchase_rejected_without_mutation("bad-item-blob")
+
     def test_purchase_debits_and_grants_in_one_revision_step(self):
         result = self.shop.purchase("hero", "buy-1", 0, 0, "potion-pack", 2)
         self.assertFalse(result.replayed)
