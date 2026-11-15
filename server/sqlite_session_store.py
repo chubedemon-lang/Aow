@@ -82,7 +82,7 @@ class SqliteSessionStore:
 
     @staticmethod
     def _digest(token):
-        if not isinstance(token, str) or not _TOKEN_PATTERN.fullmatch(token):
+        if type(token) is not str or not _TOKEN_PATTERN.fullmatch(token):
             raise SessionError("invalid session")
         return hashlib.sha256(token.encode("ascii")).digest()
 

@@ -11,6 +11,14 @@ from server.sessions import SessionError
 from server.sqlite_session_store import SqliteSessionStore
 
 
+class HostileToken(str):
+    def __hash__(self):
+        raise AssertionError("custom token hash must not run")
+
+    def encode(self, *args, **kwargs):
+        raise AssertionError("custom token encode must not run")
+
+
 class SqliteSessionStoreTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -205,6 +213,25 @@ class SqliteSessionStoreTests(unittest.TestCase):
         self.assertEqual(
             self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
             0,
+        )
+
+    def test_rejects_str_subclasses_before_custom_encode_hooks(self):
+        token = self.store.issue(90)
+        hostile = HostileToken(token)
+
+        with self.assertRaises(SessionError):
+            self.store.resolve(hostile)
+        with self.assertRaises(SessionError):
+            self.store.revoke(hostile)
+        with self.assertRaises(SessionError):
+            with self.store.authorized_transaction(hostile):
+                self.fail("invalid token must not enter the authorized transaction")
+
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(self.store.resolve(token), 90)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            1,
         )
 
     def test_clock_must_be_finite_epoch_value(self):

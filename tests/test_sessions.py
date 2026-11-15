@@ -8,6 +8,14 @@ from server.mock import Domain
 from server.sessions import SessionError, SessionManager
 
 
+class HostileToken(str):
+    def __hash__(self):
+        raise AssertionError("custom token hash must not run")
+
+    def encode(self, *args, **kwargs):
+        raise AssertionError("custom token encode must not run")
+
+
 class SessionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -88,6 +96,16 @@ class SessionTests(unittest.TestCase):
         for value in (True, 0, "1"):
             with self.assertRaises(SessionError):
                 self.sessions.require_character(token, value, self.domain)
+
+    def test_rejects_str_subclasses_before_hash_or_encode_hooks(self):
+        token = self.sessions.issue(9)
+        hostile = HostileToken(token)
+
+        with self.assertRaises(SessionError):
+            self.sessions.resolve(hostile)
+        # Revoke preserves its historical no-op behavior for invalid tokens.
+        self.sessions.revoke(hostile)
+        self.assertEqual(self.sessions.resolve(token), 9)
 
 
 if __name__ == "__main__":
