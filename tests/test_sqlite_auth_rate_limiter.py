@@ -12,6 +12,19 @@ from server.sqlite_auth_rate_limiter import (
 )
 
 
+class HostilePrincipal(str):
+    """A string subclass whose validation hooks must never execute."""
+
+    def __len__(self):
+        raise AssertionError("custom __len__ hook must not run")
+
+    def encode(self, *args, **kwargs):
+        raise AssertionError("custom encode hook must not run")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("custom strip hook must not run")
+
+
 class SqliteAuthRateLimiterTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -196,6 +209,15 @@ class SqliteAuthRateLimiterTests(unittest.TestCase):
             ).fetchone()[0],
             1,
         )
+
+
+    def test_string_subclasses_use_invalid_bucket_without_hooks(self):
+        self.assertEqual(self.limiter.record_failure(HostilePrincipal("alice")), 1)
+        self.assertEqual(self.limiter.record_failure(None), 2)
+        self.assertEqual(self.limiter.record_failure(HostilePrincipal("bob")), 3)
+
+        with self.assertRaises(AuthenticationRateLimited):
+            self.limiter.check_allowed("another-invalid-principal")
 
 
 if __name__ == "__main__":

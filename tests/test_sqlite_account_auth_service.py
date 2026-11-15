@@ -16,6 +16,19 @@ from server.sqlite_account_auth_service import (
 PASSWORD = "correct horse battery staple"
 
 
+class HostileText(str):
+    """A string subclass whose validation hooks must never execute."""
+
+    def __len__(self):
+        raise AssertionError("custom __len__ hook must not run")
+
+    def encode(self, *args, **kwargs):
+        raise AssertionError("custom encode hook must not run")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("custom strip hook must not run")
+
+
 class SqliteAccountAuthServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -241,6 +254,21 @@ class SqliteAccountAuthServiceTests(unittest.TestCase):
         for iterations in (True, 0, 99_999, 2_000_001, 100_000.0):
             with self.subTest(iterations=iterations), self.assertRaises(ValueError):
                 SqliteAccountAuthService(self.db, iterations=iterations)
+
+
+    def test_text_subclasses_are_rejected_before_validation_hooks(self):
+        with self.assertRaisesRegex(ValueError, "password"):
+            self.service.enroll_password(1, HostileText(PASSWORD))
+
+        with self.assertRaisesRegex(AccountAuthError, "invalid credentials"):
+            self.service.authenticate_and_issue_session(
+                HostileText("alice"), PASSWORD
+            )
+
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            0,
+        )
 
 
 if __name__ == "__main__":

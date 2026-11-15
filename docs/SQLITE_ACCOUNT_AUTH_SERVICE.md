@@ -40,6 +40,13 @@ session insertion commit together.
 The returned opaque token is shown once; only its SHA-256 digest is stored in
 `durable_sessions`. Do not log, serialize, or commit the token.
 
+Username and password inputs accept exact built-in `str` values only. String
+subclasses are rejected before validation calls such as `len()`, `strip()`,
+or `encode()` can dispatch caller-defined hooks. The rate limiter applies the
+same rule to principal identifiers; non-exact strings are grouped into its
+bounded invalid-principal bucket rather than receiving a separate bypassable
+bucket.
+
 ## Optional authentication throttling
 
 `server/sqlite_auth_rate_limiter.py` provides a persistent fixed-window failure
