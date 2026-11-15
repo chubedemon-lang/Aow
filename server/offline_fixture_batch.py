@@ -50,12 +50,12 @@ def validate_fixture_batch(
                 or source_digest not in expected_sources):
             raise FixtureValidationError("fixture source digest is not in expected source set")
 
-        # Preflight the encoded length before decoding. An empty fixture is
-        # still valid when earlier fixtures have consumed the entire byte
-        # budget, but any non-empty payload must be rejected at that point.
+        # Preflight the encoded length only for an exact built-in string.
+        # A str subclass may override __len__; let the single-fixture
+        # validator reject it before any caller-defined hook can execute.
         remaining = max_total_bytes - total
         payload_hex = record.get("payload_hex")
-        if isinstance(payload_hex, str) and len(payload_hex) > 2 * remaining:
+        if type(payload_hex) is str and len(payload_hex) > 2 * remaining:
             raise FixtureValidationError("batch byte limit exceeded")
 
         # The single-fixture validator requires a positive max_bytes value.
