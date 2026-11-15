@@ -23,3 +23,8 @@ only; it never receives or downloads the original APK.
 This tool is intended to bound native helper call targets that are not
 metadata-backed managed method entries. It does not identify a helper's
 semantic name by itself.
+
+
+## Stable private ELF input
+
+The CLI opens the supplied ELF as a regular file without following symlinks where the platform supports O_NOFOLLOW. It compares the path's lstat identity with the opened descriptor, enforces the size limit before reading, and detects truncation, growth, or metadata changes during the bounded read. The analysis API still accepts caller-provided exact bytes; this path guard only protects the CLI's local-file boundary. Synthetic tests cover regular files, symlinks, non-regular paths, size limits, and concurrent file growth.
