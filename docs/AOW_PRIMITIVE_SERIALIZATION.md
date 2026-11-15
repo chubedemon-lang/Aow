@@ -50,3 +50,13 @@ round-trips, null/empty strings, UTF-16 surrogate pairs, the 32767-code-unit
 limit, boolean semantics, truncation, invalid values and exact payload
 consumption. No APK, native binary, address, raw instruction, endpoint or
 packet capture is committed.
+
+
+## Input type boundary
+
+The primitive writer accepts only an exact built-in `str` (or `None`) for
+string values. The reader accepts only exact built-in `bytes`, `bytearray`, or
+`memoryview` input. Subclasses are rejected before calling user-overridden
+`encode()` or `__bytes__()` hooks, keeping primitive serialization and input
+snapshotting deterministic. Ordinary mutable bytearrays and memoryviews are
+still copied into an immutable snapshot before decoding.

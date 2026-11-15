@@ -113,6 +113,25 @@ class AowPrimitiveCodecTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             AowPrimitiveReader("not bytes")
 
+    def test_writer_rejects_string_subclass_without_invoking_encode_override(self):
+        class HostileString(str):
+            def encode(self, *args, **kwargs):
+                raise AssertionError("custom encode hook must not run")
+
+        writer = AowPrimitiveWriter().write_byte(0xAA)
+        before = writer.to_bytes()
+        with self.assertRaises(TypeError):
+            writer.write_string(HostileString("A"))
+        self.assertEqual(writer.to_bytes(), before)
+
+    def test_reader_rejects_bytes_subclass_without_invoking_bytes_override(self):
+        class HostileBytes(bytes):
+            def __bytes__(self):
+                raise AssertionError("custom bytes hook must not run")
+
+        with self.assertRaises(TypeError):
+            AowPrimitiveReader(HostileBytes(bytes.fromhex("01020304")))
+
     def test_reader_rejects_trailing_bytes_after_known_payload(self):
         reader = AowPrimitiveReader(bytes.fromhex("01020304ff"))
         self.assertEqual(reader.read_int(), 0x01020304)
