@@ -51,6 +51,26 @@ class CombatTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Battle(self.a, self.b, 1).attack(True)
 
+    def test_rejects_noncanonical_next_actor_types_before_comparison(self):
+        class ExplosiveInt(int):
+            def __eq__(self, other):
+                raise AssertionError("custom equality hook must not run")
+
+            def __ne__(self, other):
+                raise AssertionError("custom inequality hook must not run")
+
+        for value in (True, 1.0, ExplosiveInt(1)):
+            with self.subTest(value=repr(value)), self.assertRaises(ValueError):
+                Battle(self.a, self.b, value)
+
+    def test_rejects_custom_turn_integer_before_terminal_comparisons(self):
+        class ExplosiveInt(int):
+            def __eq__(self, other):
+                raise AssertionError("custom equality hook must not run")
+
+        with self.assertRaises(ValueError):
+            Battle(self.a, self.b, 1, turn=ExplosiveInt(0))
+
     def test_defense_minimum_damage(self):
         state = Battle(Fighter(1, 3, 0, 0), Fighter(2, 3, 0, 1_000_000), 1)
         state, event = state.attack(1)
