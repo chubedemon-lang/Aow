@@ -94,13 +94,16 @@ class EvidenceRecord:
     method: str
 
     def __post_init__(self):
-        if not isinstance(self.apk_sha256, str) or not _SHA256.fullmatch(self.apk_sha256):
+        # These records are later consumed by a readiness gate. Reject str
+        # subclasses before regex, hashing, equality, or other string work so
+        # caller-defined hooks cannot run while evidence is being validated.
+        if type(self.apk_sha256) is not str or not _SHA256.fullmatch(self.apk_sha256):
             raise ValueError("apk_sha256 must be lowercase SHA-256")
-        if self.topic not in _ALLOWED_TOPICS:
+        if type(self.topic) is not str or self.topic not in _ALLOWED_TOPICS:
             raise ValueError("unsupported evidence topic")
-        if not isinstance(self.status, EvidenceStatus):
+        if type(self.status) is not EvidenceStatus:
             raise TypeError("status must be EvidenceStatus")
-        if (not isinstance(self.reference, str)
+        if (type(self.reference) is not str
                 or not _REFERENCE.fullmatch(self.reference)
                 or self.reference.startswith(("/", "\\"))
                 or _ABSOLUTE_PATH.search(self.reference)
@@ -109,9 +112,10 @@ class EvidenceRecord:
                 or re.search(r"(?i)(?:token|secret|password|apikey|api_key|credential)",
                              self.reference)):
             raise ValueError("reference must be a sanitized local source locator")
-        if self.method not in {"apk_zip_inventory", "jadx_offline",
-                               "il2cpp_offline", "synthetic_test",
-                               "authorized_local_test"}:
+        if (type(self.method) is not str
+                or self.method not in {"apk_zip_inventory", "jadx_offline",
+                                        "il2cpp_offline", "synthetic_test",
+                                        "authorized_local_test"}):
             raise ValueError("unknown observation method")
         if self.status == EvidenceStatus.VERIFIED_END_TO_END and self.method != "authorized_local_test":
             raise ValueError("end-to-end requires authorized local test")
@@ -121,14 +125,20 @@ def protocol_ready(records, required=("transport", "framing", "serialization",
                                       "handshake", "login")):
     """Require a complete authorized local test for ONE APK, never mixed APKs.
 
+    Inputs are exact built-in collections and exact EvidenceRecord instances.
     This checks evidence bookkeeping only, not actual APK compatibility.
     """
-    records = tuple(records)
-    required = tuple(required)
-    if not all(isinstance(record, EvidenceRecord) for record in records):
-        raise TypeError("records must be EvidenceRecord instances")
-    if not required or not all(topic in _ALLOWED_TOPICS for topic in required):
-        raise ValueError("required must contain supported topics")
+    if type(records) not in (list, tuple):
+        raise TypeError("records must be a built-in list or tuple")
+    if any(type(record) is not EvidenceRecord for record in records):
+        raise TypeError("records must be exact EvidenceRecord instances")
+    if type(required) not in (list, tuple):
+        raise ValueError("required must be a built-in list or tuple")
+    if not required or any(
+        type(topic) is not str or topic not in _ALLOWED_TOPICS
+        for topic in required
+    ):
+        raise ValueError("required must contain exact supported topic strings")
     return any(
         all(any(r.apk_sha256 == digest and r.topic == topic
                 and r.status == EvidenceStatus.VERIFIED_END_TO_END
