@@ -240,7 +240,7 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
                 self.audit(over_budget)
 
     def test_decode_chunks_validates_remaining_budget_type_and_range(self):
-        for invalid in (True, -1, 1):
+        for invalid in (True, -1, 8 * 1024 * 1024 + 1):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(
                 FixtureAuditError, "remaining stream byte budget"
             ):
