@@ -164,8 +164,12 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
                 {"namespace": "com.geargames.serialization.serializers",
                  "name": "LoginRequestSTDeserializer", "methods": ["deserialize"]},
                 {"namespace": "com.geargames.common.network", "name": "NetworkSettings",
-                 "fields": ["HeaderLength", "HeartbeatTimeout"],
-                 "field_defaults": {"HeaderLength": {"type_index": 9, "data_index": 2}},
+                 "fields": ["HeaderLength", "HeartbeatTimeout", "MatchingDefault"],
+                 "field_type_indexes": {"HeaderLength": 17, "MatchingDefault": 9},
+                 "field_defaults": {
+                     "HeaderLength": {"type_index": 9, "data_index": 2},
+                     "MatchingDefault": {"type_index": 9, "data_index": 4},
+                 },
                  "methods": ["get_HeartbeatTimeout"]},
             ]
             write_apk(apk, make_metadata(types))
@@ -181,8 +185,10 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
             self.assertTrue(fields_by_name["protocolVersion"]["default_value_record_present"])
             self.assertEqual(fields_by_name["protocolVersion"]["default_value_type_index"], 9)
             self.assertEqual(fields_by_name["protocolVersion"]["default_value_data_index"], 3)
+            self.assertFalse(fields_by_name["protocolVersion"]["default_value_type_matches_field_type"])
             self.assertFalse(fields_by_name["token"]["default_value_record_present"])
             self.assertIsNone(fields_by_name["token"]["default_value_type_index"])
+            self.assertIsNone(fields_by_name["token"]["default_value_type_matches_field_type"])
             methods_by_name = {
                 item["name"]: item for item in by_name["LoginRequest"]["method_records"]
             }
@@ -201,6 +207,9 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
                 item["name"]: item for item in by_name["NetworkSettings"]["field_records"]
             }
             self.assertTrue(network_fields["HeaderLength"]["default_value_record_present"])
+            self.assertFalse(network_fields["HeaderLength"]["default_value_type_matches_field_type"])
+            self.assertIsNone(network_fields["HeartbeatTimeout"]["default_value_type_matches_field_type"])
+            self.assertTrue(network_fields["MatchingDefault"]["default_value_type_matches_field_type"])
             self.assertFalse(network_fields["HeartbeatTimeout"]["default_value_record_present"])
             self.assertTrue(all(item["method_owner_matches"] for item in by_name.values()))
 
