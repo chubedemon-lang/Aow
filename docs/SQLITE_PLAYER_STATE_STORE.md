@@ -11,6 +11,8 @@
 - When called inside a caller-owned transaction, each operation uses a private SQLite savepoint. A failed operation rolls back only its own partial writes; a successful operation releases its savepoint but leaves the outer transaction open for the caller to commit or roll back.
 - A stale expected revision is rejected without changing the snapshot or writing a receipt.
 - Replaying the same request id and exact payload returns the original result snapshot. Reusing the request id with a different payload is rejected.
+- The constructor accepts only an exact built-in `sqlite3.Connection`; subclasses are rejected before custom connection hooks can run.
+- Character and request identifiers must be exact built-in strings, non-empty after whitespace-only validation, and at most 128 characters. Existing non-empty identifiers with surrounding whitespace remain unchanged for compatibility. String subclasses are rejected before `strip`, length, or hash hooks can run.
 - Separate SQLite connections serialize writers; concurrent identical requests produce one mutation and idempotent replays.
 
 ## Integrity audit

@@ -31,6 +31,19 @@ class SqliteSessionStoreTests(unittest.TestCase):
         )
         self.addCleanup(self.db.close)
 
+    def test_constructor_rejects_sqlite_connection_subclasses_before_hooks(self):
+        class HostileConnection(sqlite3.Connection):
+            @property
+            def in_transaction(self):
+                raise AssertionError("custom transaction-state hook must not run")
+
+        connection = sqlite3.connect(":memory:", factory=HostileConnection)
+        try:
+            with self.assertRaisesRegex(TypeError, "sqlite connection"):
+                SqliteSessionStore(connection)
+        finally:
+            sqlite3.Connection.close(connection)
+
     def test_issue_resolve_and_store_only_digest(self):
         token = self.store.issue(42)
         self.assertEqual(len(token), 43)
