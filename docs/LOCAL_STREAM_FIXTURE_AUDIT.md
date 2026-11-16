@@ -49,8 +49,10 @@ python -m tools.protocol_fixture_audit \\
 ```
 
 The file reader rejects symlinks and non-regular files, uses a no-follow
-descriptor, checks that the file did not change while being read, and applies
-a bounded input size. The JSON parser rejects duplicate keys, unexpected
+descriptor opened in non-blocking mode, checks that the file did not change
+while being read, and applies a bounded input size. Non-blocking mode is
+ignored for regular files but prevents a regular-file-to-FIFO path-swap race
+from hanging the CLI before the descriptor type check can reject the FIFO. The JSON parser rejects duplicate keys, unexpected
 fields, non-finite constants, and nesting deeper than 64 containers before
 constructing the decoded object graph. Invalid filesystem path values are
 normalized to a redacted fixture error rather than leaking an operating-system

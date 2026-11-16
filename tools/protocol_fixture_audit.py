@@ -72,8 +72,11 @@ def _read_regular_file_no_follow(path, max_bytes):
     if type(max_bytes) is not int or not 1 <= max_bytes <= MAX_FIXTURE_BYTES:
         raise FixtureAuditError("fixture size limit is invalid")
     nofollow = getattr(os, "O_NOFOLLOW", None)
-    if nofollow is None:
-        raise FixtureAuditError("platform does not support no-follow fixture reads")
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    if nofollow is None or nonblock is None:
+        raise FixtureAuditError(
+            "platform does not support non-blocking no-follow fixture reads"
+        )
 
     try:
         before = os.stat(path, follow_symlinks=False)
@@ -84,7 +87,9 @@ def _read_regular_file_no_follow(path, max_bytes):
     if before.st_size > max_bytes:
         raise FixtureAuditError("fixture exceeds the configured size limit")
 
-    flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
+    # O_NONBLOCK is ignored for regular files, but prevents a path-swap race
+    # from hanging forever if the final component becomes a FIFO before open.
+    flags = os.O_RDONLY | nofollow | nonblock | getattr(os, "O_CLOEXEC", 0)
     try:
         descriptor = os.open(path, flags)
     except (OSError, ValueError) as exc:

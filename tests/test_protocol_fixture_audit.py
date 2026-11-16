@@ -310,6 +310,33 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
             with self.assertRaisesRegex(FixtureAuditError, "non-symlink"):
                 inspect_fixture_file(str(link), expected_apk_sha256=APK_SHA256)
 
+    @unittest.skipUnless(
+        hasattr(os, "mkfifo") and hasattr(os, "O_NONBLOCK"),
+        "non-blocking FIFO support is unavailable",
+    )
+    def test_private_file_reader_does_not_block_on_fifo_swap_race(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private-fixture.json"
+            path.write_bytes(fixture_bytes([frame(b"x")]))
+            real_open = os.open
+
+            def replace_with_fifo_then_open(name, flags, *args, **kwargs):
+                path.unlink()
+                os.mkfifo(path)
+                self.assertTrue(flags & os.O_NONBLOCK)
+                return real_open(name, flags, *args, **kwargs)
+
+            with patch(
+                "tools.protocol_fixture_audit.os.open",
+                side_effect=replace_with_fifo_then_open,
+            ):
+                with self.assertRaisesRegex(
+                    FixtureAuditError, "changed before it could be read"
+                ):
+                    inspect_fixture_file(
+                        str(path), expected_apk_sha256=APK_SHA256
+                    )
+
     def test_cli_prints_only_redacted_summary(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "private-fixture.json"
