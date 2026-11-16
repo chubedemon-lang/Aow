@@ -11,8 +11,9 @@ account authentication, or client-facing message contract. Do not expose it to
 the Internet, a LAN, a reverse proxy, or a public VPS. Do not point the original
 APK at it and do not use extracted official endpoints.
 
-The runtime now accepts only a literal IPv4 loopback bind address. Hostnames,
-wildcard addresses, LAN addresses, and IPv6 are rejected deliberately.
+The runtime now accepts only an exact built-in string containing a literal
+IPv4 loopback address. String subclasses, hostnames, wildcard addresses, LAN
+addresses, and IPv6 are rejected before any custom string methods can run.
 
 ## Requirements
 
