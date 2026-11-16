@@ -245,3 +245,22 @@ for a particular message, what byte range is decompressed, where compression
 sits in the complete frame, or whether Sender.Cycle is symmetric. The adapter
 remains disabled pending an authorized redacted client-side byte fixture or
 local runtime trace.
+
+
+## Private local stream-fixture audit tooling — 2026-11-17
+
+The new `tools.protocol_fixture_audit` command accepts a private, operator-supplied
+fixture containing ordered, already-reassembled stream chunks for both
+directions. It checks the asserted unchanged-APK fingerprint against an
+operator-selected expected hash, applies strict JSON/hex/resource limits, and
+uses a no-follow stable file read. Only the server-to-client stream is passed
+through the isolated receive-length candidate. Client-to-server bytes are
+summarized but not decoded because Sender/Receiver symmetry remains unproven.
+
+The report contains counts and candidate frame sizes only; it does not emit
+stream bytes or the local fixture path. The input file must remain outside this
+public repository. The fixture's authorization and unchanged-client claims are
+not cryptographically authenticated by the tool and still require human review.
+A successful parse is candidate evidence only, not a complete frame contract,
+handshake/login proof, or APK compatibility result. See
+[LOCAL_STREAM_FIXTURE_AUDIT.md](LOCAL_STREAM_FIXTURE_AUDIT.md).
