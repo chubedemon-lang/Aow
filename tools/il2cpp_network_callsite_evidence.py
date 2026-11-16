@@ -237,14 +237,17 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
     # itself called from the selected windows. Build a private lookup for all
     # validated metadata-backed entrypoints; only labels are emitted.
     all_entrypoint_targets = {target for _section_name, target in windows}
-    delegate_method_targets = _all_method_targets(
+    # _all_method_targets returns defaultdict(list). Convert its fully
+    # materialized metadata result to a plain dict before crossing the strict
+    # analyzer input boundary; this avoids exposing a mapping with __missing__.
+    delegate_method_targets = dict(_all_method_targets(
         metadata,
         info,
         tables,
         relocations,
         executable,
         all_entrypoint_targets,
-    )
+    ))
 
     callsite_summary = []
     for method, target, _section_name, window_bytes, truncated, code in resolved:
