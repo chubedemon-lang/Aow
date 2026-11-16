@@ -92,6 +92,9 @@ class EvidenceRecord:
     status: EvidenceStatus
     reference: str
     method: str
+    # SHA-256 of the sanitized manifest for one authorized local test run.
+    # This groups evidence records; it is not an attestation by itself.
+    test_run_sha256: str | None = None
 
     def __post_init__(self):
         # These records are later consumed by a readiness gate. Reject str
@@ -117,32 +120,51 @@ class EvidenceRecord:
                                         "il2cpp_offline", "synthetic_test",
                                         "authorized_local_test"}):
             raise ValueError("unknown observation method")
-        if self.status == EvidenceStatus.VERIFIED_END_TO_END and self.method != "authorized_local_test":
-            raise ValueError("end-to-end requires authorized local test")
+        if self.test_run_sha256 is not None and (
+            type(self.test_run_sha256) is not str
+            or not _SHA256.fullmatch(self.test_run_sha256)
+        ):
+            raise ValueError("test_run_sha256 must be lowercase SHA-256 when present")
+        if self.status == EvidenceStatus.VERIFIED_END_TO_END:
+            if self.method != "authorized_local_test":
+                raise ValueError("end-to-end requires authorized local test")
+            if self.test_run_sha256 is None:
+                raise ValueError("end-to-end requires a test_run_sha256")
 
 
 def protocol_ready(records, required=("transport", "framing", "serialization",
                                       "handshake", "login")):
-    """Require a complete authorized local test for ONE APK, never mixed APKs.
+    """Require all topics from one authorized run of ONE APK.
 
     Inputs are exact built-in collections and exact EvidenceRecord instances.
-    This checks evidence bookkeeping only, not actual APK compatibility.
+    A shared test_run_sha256 binds records to one sanitized local-run manifest;
+    it is a grouping key, not an attestation. This checks bookkeeping only.
     """
     if type(records) not in (list, tuple):
         raise TypeError("records must be a built-in list or tuple")
-    if any(type(record) is not EvidenceRecord for record in records):
-        raise TypeError("records must be exact EvidenceRecord instances")
     if type(required) not in (list, tuple):
         raise ValueError("required must be a built-in list or tuple")
-    if not required or any(
+
+    # Snapshot built-in containers once so concurrent caller mutation cannot
+    # make separate topic checks observe different record sets.
+    record_snapshot = tuple(records)
+    required_snapshot = tuple(required)
+    if any(type(record) is not EvidenceRecord for record in record_snapshot):
+        raise TypeError("records must be exact EvidenceRecord instances")
+    if not required_snapshot or any(
         type(topic) is not str or topic not in _ALLOWED_TOPICS
-        for topic in required
+        for topic in required_snapshot
     ):
         raise ValueError("required must contain exact supported topic strings")
+
+    required_topics = frozenset(required_snapshot)
+    topics_by_run = {}
+    for record in record_snapshot:
+        if (record.status is EvidenceStatus.VERIFIED_END_TO_END
+                and record.method == "authorized_local_test"):
+            run_key = (record.apk_sha256, record.test_run_sha256)
+            topics_by_run.setdefault(run_key, set()).add(record.topic)
     return any(
-        all(any(r.apk_sha256 == digest and r.topic == topic
-                and r.status == EvidenceStatus.VERIFIED_END_TO_END
-                and r.method == "authorized_local_test"
-                for r in records) for topic in required)
-        for digest in {r.apk_sha256 for r in records}
+        required_topics.issubset(observed_topics)
+        for observed_topics in topics_by_run.values()
     )
