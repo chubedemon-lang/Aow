@@ -50,7 +50,7 @@ class EvidenceGateTests(unittest.TestCase):
         self.assertFalse(result["serialization"].ready)
         self.assertFalse(result["handshake"].ready)
 
-    def test_handshake_requires_verified_primitive_serialization(self):
+    def test_handshake_requires_verified_serialization_stage(self):
         topics = ("transport", "framing", "handshake")
         result = {item.stage: item for item in evaluate_evidence(
             [evidence(topic) for topic in topics]
