@@ -147,7 +147,7 @@ def _validate_json_nesting(text):
         if in_string:
             if escaped:
                 escaped = False
-            elif character == "\\\\":
+            elif character == "\\":
                 escaped = True
             elif character == '"':
                 in_string = False
