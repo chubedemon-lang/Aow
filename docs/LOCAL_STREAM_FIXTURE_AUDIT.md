@@ -59,8 +59,9 @@ Sender/Receiver symmetry has not been established.
 The receive candidate still models only the static four-byte signed
 big-endian count branch and rejects the HTTP marker branch. It does not verify
 the active runtime branch, full outer frame, compression/encryption placement,
-message IDs, handshake, or login. The output contains stream/chunk counts and at most 4,096 candidate frame sizes;
-it never emits fixture bytes or the local file path. If a stream exceeds this
+message IDs, handshake, or login. The output contains stream/chunk counts and
+at most 4,096 candidate frame sizes; it never emits fixture bytes or the local
+file path. If a stream exceeds this
 fixed report cap, candidate analysis stops and the result marks the reported
 frame count as a lower bound with `frame_sizes_truncated: true`. This is a
 resource-safety limit for the audit report, not an AOW protocol limit.
