@@ -158,3 +158,24 @@ MethodDef usage tokens are resolved only through caller-supplied
 metadata-to-entrypoint associations. The analyzer emits the resulting method
 label and resolution path, never the token, data-cell address, or native
 entrypoint. It does not infer a MethodInfo object layout or runtime execution.
+
+
+## Bounded metadata fan-out and text inputs
+
+The analyzer also bounds metadata-derived strings and candidate fan-out so a
+synthetic or malformed metadata map cannot force unbounded sorting, prefix
+matching, or candidate validation inside a 64 KiB code-window analysis.
+
+- Method labels are limited to 4,096 characters.
+- One executable target may carry at most 4,096 ordered method-label
+  associations. Larger or overlong associations remain unresolved; they are
+  never truncated to manufacture a unique method.
+- Descriptor and encoded-method candidate lists are limited to 4,096 entries.
+  Oversized descriptor associations remain unresolved; oversized encoded
+  candidate input is rejected.
+- Target-prefix allowlists contain at most 64 exact strings, each at most 512
+  characters.
+
+These are analyzer resource limits, not APK observations. They do not change
+the interpretation of any callback, message identifier, frame, handshake, or
+login field. Regression tests use fabricated strings and addresses only.
