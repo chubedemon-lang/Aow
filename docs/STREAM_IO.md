@@ -36,3 +36,29 @@ Run:
 python -m unittest discover -s tests -p 'test_stream_buffer.py' -v
 python -m unittest discover -s tests -p 'test_stream_writer.py' -v
 ```
+
+## Connected stream socket wrapper
+
+`server.socket_channel.SocketFrameChannel` wraps an already-connected
+`SOCK_STREAM` socket and a caller-configured `CallbackFrameReader`. It does
+not create listeners or outbound connections, and it does not select or encode
+an AOW frame. The caller still supplies the frame probe and complete bytes to
+send.
+
+The channel takes ownership of the socket, applies a finite per-operation
+socket timeout, serializes concurrent writes, and permits only one active
+reader. A receive timeout propagates without closing the reader or discarding
+buffered input. A truncated EOF raises `TruncatedFrame` and preserves the
+incomplete suffix for diagnosis. A clean peer write-half-close returns
+`None` while leaving the local write direction available.
+
+This is generic transport plumbing only. It is not connected to
+`server.mock`, an AOW listener, the receive-length candidate, or any login
+handler. Do not point the original APK at it. Tests use local
+`socket.socketpair()` endpoints and synthetic one-byte test framing only.
+
+Run:
+
+```sh
+python -m unittest discover -s tests -p 'test_socket_channel.py' -v
+```
