@@ -192,7 +192,7 @@ class EvidenceGateTests(unittest.TestCase):
 
     def test_default_gate_requires_explicit_digest_approval(self):
         record = evidence("transport")
-        self.assertFalse(evaluate_approved([record])[0].ready)
+        self.assertFalse(evaluate_evidence([record])[0].ready)
 
         approved = (evidence_record_digest(record),)
         result = evaluate_evidence(
