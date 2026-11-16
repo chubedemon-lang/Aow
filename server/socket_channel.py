@@ -52,10 +52,13 @@ class SocketFrameChannel:
         max_read_chunk_bytes=65536,
         max_write_bytes=1024 * 1024,
     ):
-        if not isinstance(sock, socket.socket):
-            raise TypeError("sock must be a connected socket.socket")
-        if not isinstance(reader, CallbackFrameReader):
-            raise TypeError("reader must be a CallbackFrameReader")
+        # These objects expose methods that this channel invokes while it
+        # owns the I/O lifecycle. Reject subclasses so overridden methods or
+        # properties cannot run inside the transport state machine.
+        if type(sock) is not socket.socket:
+            raise TypeError("sock must be an exact socket.socket instance")
+        if type(reader) is not CallbackFrameReader:
+            raise TypeError("reader must be an exact CallbackFrameReader instance")
         if (
             type(io_timeout_seconds) is not float
             or not math.isfinite(io_timeout_seconds)
