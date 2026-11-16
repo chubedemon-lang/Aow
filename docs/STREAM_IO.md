@@ -49,8 +49,10 @@ The channel takes ownership of the socket, applies a finite per-operation
 socket timeout, serializes concurrent writes, and permits only one active
 reader. A receive timeout propagates without closing the reader or discarding
 buffered input. A truncated EOF raises `TruncatedFrame` and preserves the
-incomplete suffix for diagnosis. A clean peer write-half-close returns
-`None` while leaving the local write direction available.
+incomplete suffix for diagnosis. Either peer may half-close its write direction
+while the opposite direction remains usable. Local `shutdown_write()` waits
+for an in-progress write, is idempotent, and prevents subsequent sends while
+leaving receives available. Full `close()` shuts down both directions.
 
 This is generic transport plumbing only. It is not connected to
 `server.mock`, an AOW listener, the receive-length candidate, or any login
