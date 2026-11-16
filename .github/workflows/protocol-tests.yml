@@ -41,6 +41,8 @@ on:
       - 'tests/test_stream_buffer.py'
       - 'server/stream_writer.py'
       - 'tests/test_stream_writer.py'
+      - 'server/socket_channel.py'
+      - 'tests/test_socket_channel.py'
       - 'docs/STREAM_IO.md'
       - 'server/aow_framing_candidate.py'
       - 'tests/test_aow_framing_candidate.py'
@@ -203,6 +205,21 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_offline_fixture_privacy_boundaries.py' -v
       - name: Offline evidence validation tests (metadata only)
         run: python -m unittest discover -s tests -p 'test_offline_evidence_validation.py' -v
+  socket-channel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile connected socket channel
+        run: python -m py_compile server/socket_channel.py
+      - name: Connected socket channel tests (local socket pairs only)
+        run: python -m unittest discover -s tests -p 'test_socket_channel.py' -v
+
   auth-security:
     runs-on: ubuntu-latest
     timeout-minutes: 10
