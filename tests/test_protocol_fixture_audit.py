@@ -147,14 +147,14 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
 
     def test_json_nesting_scan_ignores_brackets_inside_strings(self):
         base = fixture_bytes([frame(b"x")]).decode("utf-8")
-        bracket_text = "[" * (MAX_JSON_NESTING + 10) + "]" * (MAX_JSON_NESTING + 10)
+        bracket_text = 'quoted: " ' + "[" * (MAX_JSON_NESTING + 10) + "]" * (MAX_JSON_NESTING + 10)
         content = (base[:-1] + ', "extra":' + json.dumps(bracket_text) + "}").encode("utf-8")
         with self.assertRaisesRegex(FixtureAuditError, "object shape"):
             self.audit(content)
 
     def test_private_file_reader_normalizes_embedded_nul_path(self):
         with self.assertRaisesRegex(FixtureAuditError, "cannot be inspected safely"):
-            inspect_fixture_file("invalid\\x00fixture.json", expected_apk_sha256=APK_SHA256)
+            inspect_fixture_file("invalid\x00fixture.json", expected_apk_sha256=APK_SHA256)
 
     def test_fingerprint_must_match_operator_selected_build(self):
         content = fixture_bytes([frame(b"x")], apk_sha256="b" * 64)
