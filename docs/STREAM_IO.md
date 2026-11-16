@@ -54,7 +54,9 @@ timeout propagates without closing the reader or discarding buffered input. A tr
 incomplete suffix for diagnosis. Either peer may half-close its write direction
 while the opposite direction remains usable. Local `shutdown_write()` waits
 for an in-progress write, is idempotent, and prevents subsequent sends while
-leaving receives available. Full `close()` shuts down both directions.
+leaving receives available. Full `close()` shuts down both directions to
+interrupt a blocked receive; a concurrent read may observe clean EOF or an
+operating-system socket error depending on the shutdown/close race.
 
 This is generic transport plumbing only. It is not connected to
 `server.mock`, an AOW listener, the receive-length candidate, or any login
