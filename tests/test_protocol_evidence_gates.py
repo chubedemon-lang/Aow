@@ -1,13 +1,14 @@
-"""Readiness gates only describe evidence coverage, not APK compatibility."""
+"""Readiness gates require authorized local client evidence, not static facts alone."""
 import unittest
 
 from server.protocol_evidence_registry import Evidence, EvidenceError
 from server.protocol_evidence_gates import STAGES, evaluate_evidence
 
 
-def evidence(topic, verified=True, artifact_sha256="a" * 64):
+def evidence(topic, verified=True, artifact_sha256="a" * 64,
+             method="authorized_local_test"):
     return Evidence(
-        topic, artifact_sha256, "offline fixture observation", "il2cpp_offline",
+        topic, artifact_sha256, "offline fixture observation", method,
         verified,
         "tests/test_protocol_evidence_gates.py" if verified else None,
         (
@@ -128,6 +129,13 @@ class EvidenceGateTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "no evidence records"):
             evaluate_evidence(records, artifact_sha256="b" * 64)
 
+    def test_static_offline_methods_never_unlock_protocol_stages(self):
+        for method in ("apk_zip_inventory", "jadx_offline", "il2cpp_offline"):
+            with self.subTest(method=method):
+                records = [evidence(topic, method=method) for topic in STAGES]
+                result = evaluate_evidence(records)
+                self.assertTrue(all(not item.ready for item in result))
+                self.assertEqual(result[-1].missing, STAGES)
 
     def test_rejects_list_subclass_before_iteration(self):
         class HostileList(list):
