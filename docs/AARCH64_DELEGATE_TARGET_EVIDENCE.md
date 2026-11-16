@@ -28,6 +28,26 @@ last instruction must also remain inside the unsigned 64-bit address space.
 Windows that would wrap the address space are rejected before instruction
 decoding; addresses are never silently reduced modulo 2^64.
 
+
+## Exact input-object boundary hardening
+
+The public analyzer accepts exact built-in `bytes`, `dict`, `list`, and
+`tuple` inputs (plus exact built-in `set`/`frozenset` for target-prefix
+allowlists). Metadata labels and prefix strings must be exact built-in
+`str` values. Relocation records must be exact two-item tuples.
+
+Subclasses are rejected or remain unresolved before iteration, hashing,
+comparison, indexing, or conversion can invoke caller-defined hooks. This
+applies to the instruction window, address maps, metadata-association
+sequences, descriptor candidates, encoded-token candidates, register lists,
+and relocation records. The restriction is an input-integrity boundary for
+offline analysis; it does not add a new APK observation, callback identity,
+packet field, or compatibility claim.
+
+Synthetic regression tests use hostile Python subclasses only. They do not
+contain APK bytes, native addresses, relocation values from the APK, or packet
+fixtures.
+
 ## Redacted output
 
 Each matching constructor callsite reports relative instruction/block indexes and one of these states for the configured candidate register:
