@@ -17,6 +17,7 @@
 - `revoke_all_for_account(account_id)` removes every session for one account (logout all devices), returns the deleted row count, and is idempotent when repeated. It uses `BEGIN IMMEDIATE` so it serializes with protected `authorized_transaction()` work on other connections.
 - Concurrent revocation against separate SQLite connections has one winner.
 - Rejects an already-active caller transaction instead of committing work owned by the caller.
+- The constructor accepts only an exact built-in `sqlite3.Connection`; connection subclasses are rejected before any overridden properties or methods can run.
 
 ## Persisted-row validation
 
