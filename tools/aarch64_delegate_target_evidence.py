@@ -79,7 +79,7 @@ def _decode_ldr_x_unsigned(word):
 
 def _method_name_from_label(label):
     """Return a method name only for the canonical metadata /pN suffix."""
-    if not isinstance(label, str):
+    if type(label) is not str:
         return None
     method_name, separator, arity = label.rpartition("/p")
     if not separator or not method_name or "/p" in method_name:
@@ -101,7 +101,7 @@ def _method_labels(labels):
     # Only ordered containers preserve the number of metadata associations.
     # A set may already have collapsed duplicate entries and could manufacture
     # a false unique target, so unordered collections are deliberately rejected.
-    if not isinstance(labels, (tuple, list)):
+    if type(labels) not in (tuple, list):
         return []
     # Filtering malformed associations could turn [valid, invalid] into a
     # false unique match. Also require the exact label format emitted from
@@ -149,7 +149,7 @@ def summarize_delegate_method_pointer_arguments(
     Missing, ambiguous, or unsupported values remain unresolved without
     publishing the underlying address.
     """
-    if not isinstance(code, bytes) or len(code) % 4:
+    if type(code) is not bytes or len(code) % 4:
         raise ValueError("AArch64 code window must be a multiple of four bytes")
     if len(code) > _MAX_CODE_WINDOW_BYTES:
         raise ValueError("AArch64 code window exceeds the 64 KiB analysis limit")
@@ -161,15 +161,15 @@ def summarize_delegate_method_pointer_arguments(
         raise ValueError(
             "AArch64 code window exceeds the unsigned 64-bit address space"
         )
-    if not isinstance(method_targets, dict) or not isinstance(relocations, dict):
-        raise ValueError("method_targets and relocations must be mappings")
+    if type(method_targets) is not dict or type(relocations) is not dict:
+        raise ValueError("method_targets and relocations must be built-in dictionaries")
     address_mappings = [
         ("method_targets", method_targets),
         ("relocations", relocations),
     ]
     if descriptor_method_targets is not None:
-        if not isinstance(descriptor_method_targets, dict):
-            raise ValueError("descriptor_method_targets must be a mapping")
+        if type(descriptor_method_targets) is not dict:
+            raise ValueError("descriptor_method_targets must be a built-in dictionary")
         address_mappings.append(
             ("descriptor_method_targets", descriptor_method_targets)
         )
@@ -182,8 +182,8 @@ def summarize_delegate_method_pointer_arguments(
                 f"{mapping_name} keys must be unsigned 64-bit addresses"
             )
     if static_memory_values is not None:
-        if not isinstance(static_memory_values, dict):
-            raise ValueError("static_memory_values must be a mapping")
+        if type(static_memory_values) is not dict:
+            raise ValueError("static_memory_values must be a built-in dictionary")
         if any(
             type(address) is not int or not 0 <= address <= _MASK64
             or type(value) is not int or not 0 <= value <= _MASK64
@@ -193,8 +193,8 @@ def summarize_delegate_method_pointer_arguments(
                 "static_memory_values must map unsigned 64-bit addresses to words"
             )
     if encoded_method_usage_targets is not None:
-        if not isinstance(encoded_method_usage_targets, dict):
-            raise ValueError("encoded_method_usage_targets must be a mapping")
+        if type(encoded_method_usage_targets) is not dict:
+            raise ValueError("encoded_method_usage_targets must be a built-in dictionary")
         for token, targets in encoded_method_usage_targets.items():
             if type(token) is not int or not 0 <= token <= 0xFFFFFFFF:
                 raise ValueError(
@@ -202,7 +202,7 @@ def summarize_delegate_method_pointer_arguments(
                 )
             candidates = (targets,) if type(targets) is int else targets
             if (
-                not isinstance(candidates, (tuple, list))
+                type(candidates) not in (tuple, list)
                 or not candidates
                 or any(
                     type(target) is not int or not 0 <= target <= _MASK64
@@ -213,13 +213,13 @@ def summarize_delegate_method_pointer_arguments(
                     "encoded_method_usage_targets values must be executable address candidates"
                 )
     if (
-        not isinstance(target_prefixes, (tuple, list, set, frozenset))
+        type(target_prefixes) not in (tuple, list, set, frozenset)
         or not target_prefixes
-        or any(not isinstance(item, str) or not item for item in target_prefixes)
+        or any(type(item) is not str or not item for item in target_prefixes)
     ):
         raise ValueError("target_prefixes must be a non-empty collection of strings")
     if (
-        not isinstance(argument_registers, (tuple, list))
+        type(argument_registers) not in (tuple, list)
         or not argument_registers
         or any(type(item) is not int or not 0 <= item <= 7 for item in argument_registers)
         or len(set(argument_registers)) != len(argument_registers)
@@ -311,7 +311,7 @@ def summarize_delegate_method_pointer_arguments(
                     effective_address = base + offset
                     relocation = relocations.get(effective_address)
                 if (
-                    isinstance(relocation, tuple)
+                    type(relocation) is tuple
                     and len(relocation) == 2
                     and type(relocation[0]) is int
                     and relocation[0] == R_AARCH64_RELATIVE
@@ -371,7 +371,7 @@ def summarize_delegate_method_pointer_arguments(
                             if type(descriptor_targets) is int:
                                 descriptor_targets = (descriptor_targets,)
                             if (
-                                not isinstance(descriptor_targets, (tuple, list))
+                                type(descriptor_targets) not in (tuple, list)
                                 or not descriptor_targets
                                 or any(
                                     type(item) is not int or not 0 <= item <= _MASK64
@@ -532,7 +532,7 @@ def summarize_delegate_constructor_argument_shape(
     not an ABI proof. A dereference-and-retain pattern is pointer-like evidence;
     it does not identify the argument's managed type or callback target.
     """
-    if not isinstance(code, bytes) or len(code) % 4:
+    if type(code) is not bytes or len(code) % 4:
         raise ValueError("AArch64 code window must be a multiple of four bytes")
     if len(code) > _MAX_CODE_WINDOW_BYTES:
         raise ValueError("AArch64 code window exceeds the 64 KiB analysis limit")
