@@ -18,6 +18,38 @@ attribute, iteration, conversion, or equality hooks while evidence is being
 accepted or evaluated. They also keep the registry and ordered gates on the
 same narrow input contract.
 
+## Static verification versus protocol readiness
+
+The registry's `verified` flag means that the recorded observation was
+reproduced by its declared method. It does **not** mean that the observation
+is sufficient to unlock a client-facing protocol stage.
+
+The ordered readiness gates count a record only when all of the following are
+true:
+
+1. The record belongs to the explicitly selected APK fingerprint (or the
+   registry contains only one fingerprint).
+2. Its `verified` flag is true.
+3. Its method is exactly `authorized_local_test`.
+4. Every preceding stage has an eligible record for that same fingerprint.
+
+Static methods such as `apk_zip_inventory`, `jadx_offline`, and
+`il2cpp_offline` remain useful and may verify static facts: APK integrity,
+metadata associations, native callsites, or primitive serializer behavior.
+They cannot by themselves establish active transport, complete outer framing,
+compression/encryption activation, handshake order, LoginRequest field order,
+session behavior, or later gameplay exchanges. Even a static fact with a
+reproducible unit test remains static evidence and does not satisfy a stage
+gate.
+
+For `authorized_local_test`, the referenced local test/fixture must be a
+redacted reproduction derived from an authorized run of the exact unchanged
+APK build, or a local runtime trace from that build. A fabricated packet,
+synthetic-only unit test, method name, metadata string, or guessed schema is
+not sufficient. The registry validates the declared provenance shape; human
+review must still verify that the referenced fixture really has that origin.
+Never commit private packet bytes, credentials, endpoint values, or player data.
+
 ## Validation
 
 ```sh
@@ -31,7 +63,6 @@ They do not add native APK observations, packet fixtures, wire semantics,
 handshake/login evidence, or an interoperability claim. Keep the original APK,
 native assets, packet bytes, captures, endpoint values, and credentials out of
 the public repository.
-
 
 ## Public metadata manifest input boundary
 
