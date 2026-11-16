@@ -50,8 +50,11 @@ python -m tools.protocol_fixture_audit \\
 
 The file reader rejects symlinks and non-regular files, uses a no-follow
 descriptor, checks that the file did not change while being read, and applies
-a bounded input size. The JSON parser rejects duplicate keys and unexpected
-fields. Both stream directions are summarized, but only the
+a bounded input size. The JSON parser rejects duplicate keys, unexpected
+fields, non-finite constants, and nesting deeper than 64 containers before
+constructing the decoded object graph. Invalid filesystem path values are
+normalized to a redacted fixture error rather than leaking an operating-system
+exception. Both stream directions are summarized, but only the
 `server_to_client` direction is passed through the isolated receive-length
 candidate. The `client_to_server` direction is deliberately not decoded because
 Sender/Receiver symmetry has not been established.
