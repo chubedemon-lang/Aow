@@ -9,6 +9,7 @@ from pathlib import Path
 
 from tools.protocol_fixture_audit import (
     MAX_CANDIDATE_FRAMES,
+    MAX_JSON_NESTING,
     FixtureAuditError,
     audit_fixture_bytes,
     inspect_fixture_file,
@@ -136,6 +137,24 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertTrue(candidate["frame_count_is_lower_bound"])
         self.assertTrue(candidate["frame_sizes_truncated"])
         self.assertEqual(len(candidate["frame_sizes"]), MAX_CANDIDATE_FRAMES)
+
+    def test_rejects_excessive_json_nesting_before_object_construction(self):
+        base = fixture_bytes([frame(b"x")]).decode("utf-8")
+        nested = "[" * (MAX_JSON_NESTING + 1) + "0" + "]" * (MAX_JSON_NESTING + 1)
+        content = (base[:-1] + ', "extra":' + nested + "}").encode("utf-8")
+        with self.assertRaisesRegex(FixtureAuditError, "nesting"):
+            self.audit(content)
+
+    def test_json_nesting_scan_ignores_brackets_inside_strings(self):
+        base = fixture_bytes([frame(b"x")]).decode("utf-8")
+        bracket_text = "[" * (MAX_JSON_NESTING + 10) + "]" * (MAX_JSON_NESTING + 10)
+        content = (base[:-1] + ', "extra":' + json.dumps(bracket_text) + "}").encode("utf-8")
+        with self.assertRaisesRegex(FixtureAuditError, "object shape"):
+            self.audit(content)
+
+    def test_private_file_reader_normalizes_embedded_nul_path(self):
+        with self.assertRaisesRegex(FixtureAuditError, "cannot be inspected safely"):
+            inspect_fixture_file("invalid\\x00fixture.json", expected_apk_sha256=APK_SHA256)
 
     def test_fingerprint_must_match_operator_selected_build(self):
         content = fixture_bytes([frame(b"x")], apk_sha256="b" * 64)
