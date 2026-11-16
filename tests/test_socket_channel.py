@@ -1,10 +1,15 @@
 """Socket-channel integration tests using local socket pairs only."""
 
 import socket
+import threading
 import unittest
 
 from server.frame_reader import CallbackFrameReader, TruncatedFrame
-from server.socket_channel import SocketChannelClosed, SocketFrameChannel
+from server.socket_channel import (
+    SocketChannelClosed,
+    SocketChannelWriteClosed,
+    SocketFrameChannel,
+)
 from server.stream_writer import WritePayloadTooLarge
 
 
@@ -98,6 +103,62 @@ class SocketFrameChannelTests(unittest.TestCase):
             channel.close()
             peer.close()
 
+    def test_local_write_half_close_is_idempotent_and_keeps_receives_open(self):
+        channel, peer, _reader = make_channel()
+        try:
+            self.assertTrue(channel.shutdown_write())
+            self.assertFalse(channel.shutdown_write())
+            self.assertTrue(channel.write_eof)
+            self.assertEqual(peer.recv(1), b"")
+
+            with self.assertRaises(SocketChannelWriteClosed):
+                channel.send_bytes(b"after-eof")
+
+            peer.sendall(b"\x01A")
+            self.assertEqual(channel.receive_frame(), b"\x01A")
+            self.assertFalse(channel.read_eof)
+        finally:
+            channel.close()
+            peer.close()
+
+    def test_concurrent_writes_are_not_interleaved(self):
+        payload_a = b"A" * 32768
+        payload_b = b"B" * 32768
+        channel, peer, _reader = make_channel(max_write_bytes=len(payload_a))
+        peer.settimeout(3.0)
+        channel._socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        start = threading.Barrier(3)
+        errors = []
+
+        def send(payload):
+            try:
+                start.wait(timeout=2.0)
+                channel.send_bytes(payload)
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=send, args=(payload_a,)),
+            threading.Thread(target=send, args=(payload_b,)),
+        ]
+        try:
+            for thread in threads:
+                thread.start()
+            start.wait(timeout=2.0)
+            wire = recv_exact(peer, len(payload_a) + len(payload_b))
+            for thread in threads:
+                thread.join(timeout=3.0)
+
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertEqual(errors, [])
+            self.assertIn(wire, (payload_a + payload_b, payload_b + payload_a))
+        finally:
+            channel.close()
+            peer.close()
+            for thread in threads:
+                if thread.is_alive():
+                    thread.join(timeout=1.0)
+
     def test_truncated_peer_eof_preserves_buffered_suffix_and_marks_eof(self):
         channel, peer, reader = make_channel()
         try:
@@ -140,6 +201,7 @@ class SocketFrameChannelTests(unittest.TestCase):
         self.assertTrue(channel.close())
         self.assertFalse(channel.close())
         self.assertTrue(channel.closed)
+        self.assertTrue(channel.write_eof)
         self.assertEqual(peer.recv(1), b"")
         with self.assertRaises(SocketChannelClosed):
             channel.receive_frame()
