@@ -45,10 +45,12 @@ not create listeners or outbound connections, and it does not select or encode
 an AOW frame. The caller still supplies the frame probe and complete bytes to
 send.
 
-The channel takes ownership of the socket, applies a finite per-operation
-socket timeout, serializes concurrent writes, and permits only one active
-reader. A receive timeout propagates without closing the reader or discarding
-buffered input. A truncated EOF raises `TruncatedFrame` and preserves the
+The channel accepts exact built-in `socket.socket` and
+`CallbackFrameReader` instances only; subclasses are rejected so overridden
+methods or properties cannot run inside the I/O state machine. It takes
+ownership of the socket, applies a finite per-operation socket timeout,
+serializes concurrent writes, and permits only one active reader. A receive
+timeout propagates without closing the reader or discarding buffered input. A truncated EOF raises `TruncatedFrame` and preserves the
 incomplete suffix for diagnosis. Either peer may half-close its write direction
 while the opposite direction remains usable. Local `shutdown_write()` waits
 for an in-progress write, is idempotent, and prevents subsequent sends while

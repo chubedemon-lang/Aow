@@ -20,6 +20,21 @@ def synthetic_probe(prefix):
     return prefix[0] + 1
 
 
+class HostileSocket(socket.socket):
+    """A socket subclass whose overridable methods must not be invoked."""
+
+    def getsockopt(self, *args):
+        raise AssertionError("custom socket getsockopt hook executed")
+
+
+class DerivedFrameReader(CallbackFrameReader):
+    """A reader subclass used to test the channel's exact-type boundary."""
+
+    @property
+    def closed(self):
+        raise AssertionError("custom frame-reader property executed")
+
+
 def make_channel(
     *,
     timeout=0.2,
@@ -242,6 +257,35 @@ class SocketFrameChannelTests(unittest.TestCase):
 
             with self.assertRaises(TypeError):
                 SocketFrameChannel(local, object())
+        finally:
+            local.close()
+            peer.close()
+
+    def test_constructor_rejects_socket_subclasses_before_custom_methods(self):
+        reader = CallbackFrameReader(
+            synthetic_probe,
+            max_frame_bytes=8,
+            max_buffer_bytes=8,
+            max_probe_bytes=1,
+        )
+        hostile = HostileSocket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            with self.assertRaisesRegex(TypeError, "exact socket.socket"):
+                SocketFrameChannel(hostile, reader)
+        finally:
+            hostile.close()
+
+    def test_constructor_rejects_frame_reader_subclasses(self):
+        local, peer = socket.socketpair()
+        reader = DerivedFrameReader(
+            synthetic_probe,
+            max_frame_bytes=8,
+            max_buffer_bytes=8,
+            max_probe_bytes=1,
+        )
+        try:
+            with self.assertRaisesRegex(TypeError, "exact CallbackFrameReader"):
+                SocketFrameChannel(local, reader)
         finally:
             local.close()
             peer.close()
