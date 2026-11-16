@@ -213,6 +213,9 @@ def _collect_complete_frames(reader, frame_sizes):
 
 
 def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
+    # Account for the complete supplied stream, not only chunks reached before
+    # a candidate error. This makes partial parses visibly fail closed.
+    stream_bytes = sum(len(chunk) for chunk in chunks)
     reader = make_four_byte_length_candidate_reader(
         max_payload_bytes=max_payload_bytes,
         max_buffer_bytes=max_buffer_bytes,
@@ -233,14 +236,9 @@ def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
 
         reader.close()
         _collect_complete_frames(reader, frame_sizes)
-        return {
-            "status": "candidate_frames_recovered",
-            "reason": None,
-            "frame_count": len(frame_sizes),
-            "frame_count_is_lower_bound": False,
-            "frame_sizes_truncated": False,
-            "frame_sizes": frame_sizes,
-        }
+        status = "candidate_frames_recovered"
+        reason = None
+        truncated = False
     except (
         UnsupportedHttpMarkerBranch,
         InvalidReceiverLength,
@@ -248,14 +246,24 @@ def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
         FrameReaderError,
     ) as exc:
         truncated = isinstance(exc, _CandidateFrameCountLimit)
-        return {
-            "status": "candidate_not_recovered",
-            "reason": "CandidateFrameCountLimit" if truncated else type(exc).__name__,
-            "frame_count": len(frame_sizes),
-            "frame_count_is_lower_bound": truncated,
-            "frame_sizes_truncated": truncated,
-            "frame_sizes": frame_sizes,
-        }
+        status = "candidate_not_recovered"
+        reason = "CandidateFrameCountLimit" if truncated else type(exc).__name__
+
+    candidate_bytes_consumed = sum(frame_sizes)
+    unclassified_stream_bytes = stream_bytes - candidate_bytes_consumed
+    return {
+        "status": status,
+        "reason": reason,
+        "frame_count": len(frame_sizes),
+        "frame_count_is_lower_bound": truncated,
+        "frame_sizes_truncated": truncated,
+        "frame_sizes": frame_sizes,
+        "candidate_bytes_consumed": candidate_bytes_consumed,
+        "unclassified_stream_bytes": unclassified_stream_bytes,
+        "candidate_stream_fully_consumed": (
+            status == "candidate_frames_recovered" and unclassified_stream_bytes == 0
+        ),
+    }
 
 
 def audit_fixture_bytes(
