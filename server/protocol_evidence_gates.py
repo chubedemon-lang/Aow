@@ -5,6 +5,8 @@ These gates NEVER imply APK interoperability or live network validation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 import re
 
 from server.protocol_evidence_registry import Evidence, EvidenceError
@@ -30,9 +32,35 @@ class GateResult:
     missing: tuple[str, ...]
 
 
+def evidence_record_digest(record: Evidence) -> str:
+    """Digest every public field for an operator-reviewed evidence allowlist.
+
+    This stable digest binds approval to one exact record. It is not a
+    signature and cannot authenticate the referenced fixture's origin.
+    """
+    if type(record) is not Evidence:
+        raise EvidenceError("record must be an exact Evidence instance")
+    payload = {
+        "artifact_sha256": record.artifact_sha256,
+        "method": record.method,
+        "observation": record.observation,
+        "reproduction": record.reproduction,
+        "test_reference": record.test_reference,
+        "topic": record.topic,
+        "verified": record.verified,
+    }
+    encoded = json.dumps(
+        payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode("ascii")
+    return hashlib.sha256(
+        b"AOW-PROTOCOL-EVIDENCE-DIGEST-V1\0" + encoded
+    ).hexdigest()
+
+
 def evaluate_evidence(
     records: list[Evidence] | tuple[Evidence, ...],
     artifact_sha256: str | None = None,
+    approved_evidence_digests: list[str] | tuple[str, ...] | frozenset[str] = (),
 ) -> tuple[GateResult, ...]:
     """Require eligible verified evidence for each stage from one artifact.
 
@@ -44,9 +72,13 @@ def evaluate_evidence(
     A record's `verified` flag means its stated observation was reproduced by
     its declared method. It does not automatically make that observation
     sufficient for a protocol stage. Only `authorized_local_test` records can
-    satisfy a stage gate; static APK inventory, decompilation, and IL2CPP
-    inspection remain useful evidence but cannot establish active transport,
-    complete framing, handshake, login, or later client-facing behavior.
+    satisfy a stage gate, and only when the exact record digest is included in
+    the caller-supplied operator-reviewed `approved_evidence_digests` list.
+    The default list is empty, so no record unlocks a stage by itself. Static
+    APK inventory, decompilation, and IL2CPP inspection remain useful evidence
+    but cannot establish active transport, complete framing, handshake, login,
+    or later client-facing behavior. A digest binds the record fields; it is
+    not a signature or independent proof of fixture origin.
 
     The order is intentional: a downstream stage cannot be marked ready until
     the prior stages have eligible verified evidence from the same artifact.
@@ -55,6 +87,17 @@ def evaluate_evidence(
         raise EvidenceError("records must be a built-in list or tuple")
     if any(type(record) is not Evidence for record in records):
         raise EvidenceError("all records must be exact Evidence instances")
+    if type(approved_evidence_digests) not in (list, tuple, frozenset):
+        raise EvidenceError(
+            "approved_evidence_digests must be a built-in list, tuple, or frozenset"
+        )
+    approved = set()
+    for digest in approved_evidence_digests:
+        if type(digest) is not str or not _SHA256.fullmatch(digest):
+            raise EvidenceError("approved evidence digests must be lowercase SHA-256")
+        if digest in approved:
+            raise EvidenceError("duplicate approved evidence digest")
+        approved.add(digest)
 
     fingerprints = {record.artifact_sha256 for record in records}
     if artifact_sha256 is None:
@@ -77,7 +120,11 @@ def evaluate_evidence(
     )
     verified = {
         record.topic for record in selected_records
-        if record.verified and record.method in GATE_VERIFIED_METHODS
+        if (
+            record.verified
+            and record.method in GATE_VERIFIED_METHODS
+            and evidence_record_digest(record) in approved
+        )
     }
     results = []
     for index, stage in enumerate(STAGES):

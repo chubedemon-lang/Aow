@@ -31,7 +31,19 @@ true:
    registry contains only one fingerprint).
 2. Its `verified` flag is true.
 3. Its method is exactly `authorized_local_test`.
-4. Every preceding stage has an eligible record for that same fingerprint.
+4. The SHA-256 digest of the exact record is present in the caller-supplied
+   `approved_evidence_digests` allowlist.
+5. Every preceding stage has an eligible record for that same fingerprint.
+
+The allowlist defaults to empty and the repository ships no approved protocol
+record digests. A verification flag, method string, local test path, or
+synthetic fixture cannot unlock a stage on its own. The digest is computed from
+canonical JSON containing the artifact hash, topic, observation, method,
+verification flag, reproduction command, and local test reference. It binds
+approval to those exact fields, but it is **not a signature** and does not prove
+fixture authenticity. Populate the allowlist only after independent human
+provenance review of a redacted fixture or local runtime trace from the exact
+unchanged APK build.
 
 Static methods such as `apk_zip_inventory`, `jadx_offline`, and
 `il2cpp_offline` remain useful and may verify static facts: APK integrity,
