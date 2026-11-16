@@ -141,3 +141,18 @@ publishing private bytes or secrets.
 
 Until then, describe the repository accurately as a synthetic server prototype plus
 offline evidence tooling. Do not claim full server completion or APK compatibility.
+
+## 8. Generic connected-socket channel
+
+`server.socket_channel.SocketFrameChannel` is a transport wrapper for an
+already-connected stream socket. It owns and closes that socket, applies a
+finite per-operation timeout, serializes concurrent writes, and exposes one
+single-consumer receive path over a caller-supplied `CallbackFrameReader`.
+It never binds, listens, accepts, or connects, and it does not select an AOW
+frame probe or encode an AOW message.
+
+The wrapper is deliberately not connected to `server.mock`, the experimental
+receive-length candidate, authentication, or any gameplay service. Its tests
+use local socket pairs and a synthetic test-only frame probe. It provides
+reusable I/O lifecycle plumbing only; it does not advance the AOW evidence
+gate or make the prototype suitable for public deployment.
