@@ -9,9 +9,8 @@ a protocol decoder and does not claim original APK compatibility.
 - `verified_end_to_end`: supported by an authorized test with the unchanged
   original APK against a locally controlled server.
 
-Only the last category can satisfy `protocol_ready`, and all four required
-topics (transport, framing, handshake, login) must have independent records.
-The status gate is bookkeeping, **not** proof by itself; reviewers must inspect
+Only the last category can satisfy `protocol_ready`, and all five required topics (transport, framing, serialization, handshake, login) must have independent records.
+The gate accepts only built-in list/tuple containers and exact `EvidenceRecord` instances; it rejects custom subclasses before invoking their hooks. The status gate is bookkeeping, **not** proof by itself; reviewers must inspect
 the underlying authorized evidence before approving a compatibility claim.
 
 ## Verified metadata methods
