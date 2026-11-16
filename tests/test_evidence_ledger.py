@@ -6,8 +6,14 @@ from server.evidence_ledger import EvidenceRecord, EvidenceStatus, protocol_read
 class EvidenceLedgerTests(unittest.TestCase):
     def record(self, topic="framing", status=EvidenceStatus.CANDIDATE,
                method="il2cpp_offline", reference="metadata/type:123",
-               apk_sha256="a" * 64):
-        return EvidenceRecord(apk_sha256, topic, status, reference, method)
+               apk_sha256="a" * 64, test_run_sha256=None):
+        if (status is EvidenceStatus.VERIFIED_END_TO_END
+                and method == "authorized_local_test"
+                and test_run_sha256 is None):
+            test_run_sha256 = "c" * 64
+        return EvidenceRecord(
+            apk_sha256, topic, status, reference, method, test_run_sha256
+        )
 
     def test_candidate_cannot_claim_compatibility(self):
         self.assertFalse(protocol_ready([self.record()]))
@@ -24,6 +30,39 @@ class EvidenceLedgerTests(unittest.TestCase):
                                "authorized_local_test") for topic in topics]
         self.assertTrue(protocol_ready(records))
         self.assertFalse(protocol_ready(records[:-1]))
+
+    def test_end_to_end_records_require_a_valid_test_run_digest(self):
+        with self.assertRaisesRegex(ValueError, "test_run_sha256"):
+            EvidenceRecord(
+                "a" * 64, "framing", EvidenceStatus.VERIFIED_END_TO_END,
+                "metadata/type:123", "authorized_local_test",
+            )
+        for invalid in ("short", "A" * 64, 7):
+            with self.subTest(value=invalid), self.assertRaises(ValueError):
+                EvidenceRecord(
+                    "a" * 64, "framing", EvidenceStatus.VERIFIED_END_TO_END,
+                    "metadata/type:123", "authorized_local_test", invalid,
+                )
+
+    def test_readiness_cannot_combine_topics_from_different_test_runs(self):
+        topics = ("transport", "framing", "serialization", "handshake", "login")
+        split_runs = [
+            self.record(
+                topic, EvidenceStatus.VERIFIED_END_TO_END,
+                "authorized_local_test", test_run_sha256=f"{index + 1:064x}",
+            )
+            for index, topic in enumerate(topics)
+        ]
+        self.assertFalse(protocol_ready(split_runs))
+
+        one_run = [
+            self.record(
+                topic, EvidenceStatus.VERIFIED_END_TO_END,
+                "authorized_local_test", test_run_sha256="d" * 64,
+            )
+            for topic in topics
+        ]
+        self.assertTrue(protocol_ready(one_run))
 
     def test_missing_primitive_serialization_blocks_default_readiness(self):
         topics = ("transport", "framing", "handshake", "login")
