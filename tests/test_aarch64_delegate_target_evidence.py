@@ -710,5 +710,149 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
                     )
 
 
+
+    def test_rejects_bytes_subclasses_before_custom_length_hooks(self):
+        class HostileBytes(bytes):
+            def __len__(self):
+                raise AssertionError("custom bytes length must not run")
+
+        payload = HostileBytes(words(0xD503201F))
+        with self.assertRaisesRegex(ValueError, "code window"):
+            self.analyze(payload)
+        with self.assertRaisesRegex(ValueError, "code window"):
+            summarize_delegate_constructor_argument_shape(payload)
+
+    def test_rejects_mapping_subclasses_before_mapping_hooks(self):
+        class HostileDict(dict):
+            def __iter__(self):
+                raise AssertionError("custom mapping iterator must not run")
+
+            def items(self):
+                raise AssertionError("custom mapping items must not run")
+
+            def get(self, key, default=None):
+                raise AssertionError("custom mapping lookup must not run")
+
+        code = words(0xD503201F)
+        cases = (
+            {"targets": HostileDict(self.targets)},
+            {"relocations": HostileDict()},
+            {"descriptor_method_targets": HostileDict()},
+            {"static_memory_values": HostileDict()},
+            {"encoded_method_usage_targets": HostileDict()},
+        )
+        for kwargs in cases:
+            with self.subTest(argument=next(iter(kwargs))), self.assertRaises(ValueError):
+                self.analyze(code, **kwargs)
+
+    def test_rejects_collection_subclasses_before_iteration(self):
+        class HostileList(list):
+            def __iter__(self):
+                raise AssertionError("custom collection iterator must not run")
+
+        code = words(0xD503201F)
+        with self.assertRaises(ValueError):
+            self.analyze(code, argument_registers=HostileList([2]))
+        with self.assertRaises(ValueError):
+            self.analyze(code, target_prefixes=HostileList(["OnMessageReceivedDelegate::.ctor"]))
+
+    def test_rejects_hostile_metadata_label_without_calling_string_hooks(self):
+        class HostileText(str):
+            def rpartition(self, separator):
+                raise AssertionError("custom rpartition must not run")
+
+            def isascii(self):
+                raise AssertionError("custom isascii must not run")
+
+            def __lt__(self, other):
+                raise AssertionError("custom ordering must not run")
+
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        targets = dict(self.targets)
+        targets[self.callback] = [HostileText(self.callback_label)]
+        result = self.analyze(code, targets=targets)
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unresolved_metadata_method"},
+        )
+
+        targets = dict(self.targets)
+        targets[self.constructor] = [HostileText(self.constructor_label)]
+        self.assertEqual(self.analyze(code, targets=targets), [])
+
+    def test_rejects_metadata_association_list_subclass_without_iteration(self):
+        class HostileList(list):
+            def __iter__(self):
+                raise AssertionError("custom association iterator must not run")
+
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        targets = dict(self.targets)
+        targets[self.callback] = HostileList([self.callback_label])
+        result = self.analyze(code, targets=targets)
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unresolved_metadata_method"},
+        )
+
+    def test_rejects_relocation_tuple_subclass_without_accessors(self):
+        class HostileTuple(tuple):
+            def __len__(self):
+                raise AssertionError("custom relocation length must not run")
+
+            def __getitem__(self, index):
+                raise AssertionError("custom relocation indexing must not run")
+
+        pointer_slot = 0x9000
+        code = words(
+            adrp(8, self.start, pointer_slot),
+            ldr_x(9, 8),
+            mov_x(2, 9),
+            bl(self.start + 12, self.constructor),
+        )
+        result = self.analyze(
+            code,
+            relocations={
+                pointer_slot: HostileTuple((R_AARCH64_RELATIVE, self.callback)),
+            },
+        )
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unknown"},
+        )
+
+    def test_rejects_descriptor_and_encoded_candidate_list_subclasses(self):
+        class HostileList(list):
+            def __iter__(self):
+                raise AssertionError("custom candidate iterator must not run")
+
+        descriptor = 0x7000
+        code = words(
+            adr(2, self.start, descriptor),
+            bl(self.start + 4, self.constructor),
+        )
+        descriptor_result = self.analyze(
+            code,
+            descriptor_method_targets={descriptor: HostileList([self.callback])},
+        )
+        self.assertEqual(
+            descriptor_result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unresolved_metadata_method"},
+        )
+
+        encoded_token = 0x60000000 | ((321 << 1) | 1)
+        with self.assertRaisesRegex(ValueError, "executable address candidates"):
+            self.analyze(
+                words(0xD503201F),
+                encoded_method_usage_targets={
+                    encoded_token: HostileList([self.callback]),
+                },
+            )
+
 if __name__ == "__main__":
     unittest.main()
