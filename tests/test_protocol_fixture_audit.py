@@ -228,14 +228,14 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
 
     def test_combined_stream_budget_is_enforced_incrementally(self):
         with patch("tools.protocol_fixture_audit.MAX_TOTAL_STREAM_BYTES", 5):
-            exact_budget = self.audit(fixture_bytes([frame(b"")], [b"\\x01"]))
+            exact_budget = self.audit(fixture_bytes([frame(b"")], [b"\x01"]))
             self.assertEqual(
                 exact_budget["server_to_client"]["stream_bytes"]
                 + exact_budget["client_to_server"]["stream_bytes"],
                 5,
             )
 
-            over_budget = fixture_bytes([frame(b"")], [b"\\x01\\x02"])
+            over_budget = fixture_bytes([frame(b"")], [b"\x01\x02"])
             with self.assertRaisesRegex(FixtureAuditError, "combined stream data"):
                 self.audit(over_budget)
 
