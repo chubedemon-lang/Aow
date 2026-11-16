@@ -854,5 +854,71 @@ class DelegateTargetEvidenceTests(unittest.TestCase):
                 },
             )
 
+
+    def test_rejects_overlong_method_labels_as_unresolved(self):
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        targets = dict(self.targets)
+        targets[self.callback] = ["M" * 4097 + "/p1"]
+        result = self.analyze(code, targets=targets)
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unresolved_metadata_method"},
+        )
+
+    def test_rejects_excessive_method_associations_as_unresolved(self):
+        code = words(
+            adr(2, self.start, self.callback),
+            bl(self.start + 4, self.constructor),
+        )
+        targets = dict(self.targets)
+        targets[self.callback] = [self.callback_label] * 4097
+        result = self.analyze(code, targets=targets)
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unresolved_metadata_method"},
+        )
+
+    def test_rejects_excessive_descriptor_candidates_as_unresolved(self):
+        descriptor = 0x7000
+        code = words(
+            adr(2, self.start, descriptor),
+            bl(self.start + 4, self.constructor),
+        )
+        result = self.analyze(
+            code,
+            descriptor_method_targets={
+                descriptor: [self.callback] * 4097,
+            },
+        )
+        self.assertEqual(
+            result[0]["candidate_method_pointer_arguments"]["x2"],
+            {"resolution": "unresolved_metadata_method"},
+        )
+
+    def test_rejects_excessive_encoded_method_candidates(self):
+        encoded_token = 0x60000000 | ((321 << 1) | 1)
+        with self.assertRaisesRegex(ValueError, "executable address candidates"):
+            self.analyze(
+                words(0xD503201F),
+                encoded_method_usage_targets={
+                    encoded_token: [self.callback] * 4097,
+                },
+            )
+
+    def test_rejects_unbounded_target_prefix_allowlists(self):
+        with self.assertRaisesRegex(ValueError, "target_prefixes"):
+            self.analyze(
+                words(0xD503201F),
+                target_prefixes=("OnMessageReceivedDelegate::.ctor",) * 65,
+            )
+        with self.assertRaisesRegex(ValueError, "target_prefixes"):
+            self.analyze(
+                words(0xD503201F),
+                target_prefixes=("X" * 513,),
+            )
+
 if __name__ == "__main__":
     unittest.main()
