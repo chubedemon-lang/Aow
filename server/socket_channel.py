@@ -18,6 +18,10 @@ class SocketChannelClosed(RuntimeError):
     """The local channel has been closed and cannot accept new operations."""
 
 
+class SocketChannelWriteClosed(RuntimeError):
+    """The local write direction has been shut down."""
+
+
 class SocketFrameChannel:
     """Serialize writes and provide one blocking frame reader over a socket.
 
@@ -32,9 +36,11 @@ class SocketFrameChannel:
     class never calls bind(), listen(), accept(), or connect().
 
     Reads are single-consumer. Writes are serialized so concurrent callers
-    cannot interleave their byte sequences. A remote write-half-close is
-    reported as None after all complete buffered frames have been drained;
-    the local write direction remains usable until the channel is closed.
+    cannot interleave their byte sequences. Either peer may half-close its
+    write direction while the opposite direction remains usable. A remote
+    write-half-close is reported as None after all complete buffered frames
+    have been drained; the local write direction remains usable until it is
+    explicitly shut down or the channel is closed.
     """
 
     def __init__(
@@ -81,6 +87,7 @@ class SocketFrameChannel:
         self._write_lock = threading.Lock()
         self._closed = False
         self._read_eof = False
+        self._write_eof = False
 
     @property
     def closed(self):
@@ -93,6 +100,12 @@ class SocketFrameChannel:
         """Whether the peer has ended its write direction."""
         with self._state_lock:
             return self._read_eof
+
+    @property
+    def write_eof(self):
+        """Whether the local write direction has been shut down."""
+        with self._state_lock:
+            return self._write_eof
 
     def receive_frame(self):
         """Return one caller-defined frame, None on clean peer EOF.
@@ -137,11 +150,31 @@ class SocketFrameChannel:
             with self._state_lock:
                 if self._closed:
                     raise SocketChannelClosed("socket channel is closed")
+                if self._write_eof:
+                    raise SocketChannelWriteClosed(
+                        "socket channel write direction is shut down"
+                    )
             return write_all(
                 self._socket.send,
                 payload,
                 max_bytes=self._max_write_bytes,
             )
+
+    def shutdown_write(self):
+        """Half-close the local write direction without disabling receives.
+
+        The operation waits for any in-progress serialized write to finish.
+        It returns True only for the call that performs the transition and
+        False when the write direction is already shut down or the channel is
+        fully closed.
+        """
+        with self._write_lock:
+            with self._state_lock:
+                if self._closed or self._write_eof:
+                    return False
+                self._socket.shutdown(socket.SHUT_WR)
+                self._write_eof = True
+                return True
 
     def close(self):
         """Close the owned socket; safe to call repeatedly.
@@ -153,6 +186,7 @@ class SocketFrameChannel:
             if self._closed:
                 return False
             self._closed = True
+            self._write_eof = True
 
         try:
             self._socket.shutdown(socket.SHUT_RDWR)
