@@ -3,8 +3,10 @@
 import socket
 import threading
 import unittest
+from unittest.mock import patch
 
 from server.frame_reader import CallbackFrameReader, TruncatedFrame
+from server.stream_reader import read_next_frame
 from server.socket_channel import (
     SocketChannelClosed,
     SocketChannelWriteClosed,
@@ -223,6 +225,50 @@ class SocketFrameChannelTests(unittest.TestCase):
         with self.assertRaises(SocketChannelClosed):
             channel.send_bytes(b"x")
         peer.close()
+
+    def test_close_interrupts_blocked_receive(self):
+        channel, peer, _reader = make_channel(timeout=2.0)
+        read_started = threading.Event()
+        outcomes = []
+        original_read_next_frame = read_next_frame
+
+        def observe_read(reader, recv, *, max_chunk_bytes):
+            def observed_recv(size):
+                read_started.set()
+                return recv(size)
+
+            return original_read_next_frame(
+                reader, observed_recv, max_chunk_bytes=max_chunk_bytes
+            )
+
+        def receive():
+            try:
+                outcomes.append(channel.receive_frame())
+            except BaseException as exc:
+                outcomes.append(exc)
+
+        thread = threading.Thread(target=receive)
+        try:
+            with patch(
+                "server.socket_channel.read_next_frame",
+                side_effect=observe_read,
+            ):
+                thread.start()
+                self.assertTrue(read_started.wait(timeout=1.0))
+                self.assertTrue(channel.close())
+                thread.join(timeout=1.0)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(len(outcomes), 1)
+            # Depending on whether shutdown or close wins the recv race, the
+            # blocked call observes clean EOF or the socket's close error.
+            self.assertTrue(outcomes[0] is None or isinstance(outcomes[0], OSError))
+            self.assertTrue(channel.closed)
+        finally:
+            channel.close()
+            peer.close()
+            if thread.is_alive():
+                thread.join(timeout=1.0)
 
     def test_context_manager_closes_owned_socket(self):
         channel, peer, _reader = make_channel()
