@@ -65,15 +65,13 @@ class SqlitePlayerStateStoreTests(unittest.TestCase):
             0,
         )
 
-    def test_character_and_request_identifiers_reject_surrounding_whitespace(self):
-        for value in (" hero", "hero "):
-            with self.subTest(identifier=value), self.assertRaises(PlayerStoreError):
-                self.store.create(value)
-        self.store.create("hero")
-        for request_id in (" request", "request "):
-            with self.subTest(request_id=request_id), self.assertRaises(PlayerStoreError):
-                self.store.apply("hero", request_id, 0, currency_delta=1)
-        self.assertEqual(self.store.get("hero").revision, 0)
+    def test_identifiers_preserve_existing_nonempty_whitespace_values(self):
+        self.store.create(" hero ")
+        result = self.store.apply(
+            " hero ", " request ", 0, currency_delta=1
+        )
+        self.assertEqual(result.snapshot.character_id, " hero ")
+        self.assertEqual(self.store.get(" hero ").currency, 1)
 
     def test_create_and_read_snapshot(self):
         created = self.store.create("hero", level=4, experience=25, currency=90)
@@ -203,6 +201,7 @@ class SqlitePlayerStateStoreTests(unittest.TestCase):
     def test_invalid_mutation_inputs_are_rejected(self):
         self.store.create("hero")
         for args in (
+            (" ", 0, {"currency_delta": 1}),
             ("", 0, {"currency_delta": 1}),
             ("bad", True, {"currency_delta": 1}),
             ("bad", -1, {"currency_delta": 1}),
