@@ -44,6 +44,24 @@ def initialize(conn):
     conn.commit()
 
 
+def _validate_bounded_text(value, field_name):
+    """Validate a synthetic text field without invoking subclass hooks."""
+    if type(value) is not str or not 1 <= len(value) <= 64:
+        raise ValueError(f"invalid {field_name}")
+    return value
+
+
+def _validate_item_id(value):
+    """Accept only canonical built-in ASCII identifiers for synthetic items."""
+    if (
+        type(value) is not str
+        or not 1 <= len(value) <= 64
+        or not all(ch.isascii() and (ch.isalnum() or ch in "._-") for ch in value)
+    ):
+        raise ValueError("invalid item id")
+    return value
+
+
 class Domain:
     def __init__(self, database):
         self.database = str(database)
@@ -72,10 +90,8 @@ class Domain:
             db.close()
 
     def create_character(self, username, name):
-        if not isinstance(username, str) or not 1 <= len(username) <= 64:
-            raise ValueError("invalid username")
-        if not isinstance(name, str) or not 1 <= len(name) <= 64:
-            raise ValueError("invalid character name")
+        username = _validate_bounded_text(username, "username")
+        name = _validate_bounded_text(name, "character name")
         with self.connection() as db:
             db.execute("INSERT OR IGNORE INTO accounts(username) VALUES (?)", (username,))
             account = db.execute("SELECT id FROM accounts WHERE username=?", (username,)).fetchone()
@@ -129,10 +145,7 @@ class Domain:
         """Atomically grant or consume an item in the local synthetic domain."""
         if type(character_id) is not int or character_id < 1:
             raise ValueError("invalid character id")
-        if not isinstance(item_id, str) or not (1 <= len(item_id) <= 64) or not all(
-            c.isascii() and (c.isalnum() or c in "._-") for c in item_id
-        ):
-            raise ValueError("invalid item id")
+        item_id = _validate_item_id(item_id)
         if type(delta) is not int or delta == 0 or abs(delta) > 1_000_000:
             raise ValueError("invalid quantity change")
         with self.connection() as db:
@@ -183,10 +196,7 @@ class Domain:
 
     def set_shop_item(self, item_id, price, enabled=True):
         """Local operator configuration; no client API is provided."""
-        if not isinstance(item_id, str) or not 1 <= len(item_id) <= 64 or not all(
-            ch.isascii() and (ch.isalnum() or ch in "._-") for ch in item_id
-        ):
-            raise ValueError("invalid item id")
+        item_id = _validate_item_id(item_id)
         if type(price) is not int or not 1 <= price <= 1_000_000:
             raise ValueError("invalid price")
         if type(enabled) is not bool:
@@ -202,10 +212,7 @@ class Domain:
         """Synthetic shop purchase: atomically debit wallet and grant inventory."""
         if type(character_id) is not int or character_id < 1:
             raise ValueError("invalid character id")
-        if not isinstance(item_id, str) or not 1 <= len(item_id) <= 64 or not all(
-            ch.isascii() and (ch.isalnum() or ch in "._-") for ch in item_id
-        ):
-            raise ValueError("invalid item id")
+        item_id = _validate_item_id(item_id)
         if type(count) is not int or not 1 <= count <= 100:
             raise ValueError("invalid count")
         with self.connection() as db:
