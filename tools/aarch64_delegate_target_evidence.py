@@ -24,6 +24,11 @@ from tools.aarch64_call_argument_evidence import (
 from tools.il2cpp_codegen_inventory import R_AARCH64_RELATIVE
 
 _MAX_CODE_WINDOW_BYTES = 64 * 1024
+_MAX_METHOD_LABEL_CHARS = 4096
+_MAX_METHOD_LABELS_PER_TARGET = 4096
+_MAX_METHOD_TARGET_CANDIDATES = 4096
+_MAX_TARGET_PREFIXES = 64
+_MAX_TARGET_PREFIX_CHARS = 512
 _MASK64 = 0xFFFFFFFFFFFFFFFF
 
 
@@ -79,7 +84,7 @@ def _decode_ldr_x_unsigned(word):
 
 def _method_name_from_label(label):
     """Return a method name only for the canonical metadata /pN suffix."""
-    if type(label) is not str:
+    if type(label) is not str or len(label) > _MAX_METHOD_LABEL_CHARS:
         return None
     method_name, separator, arity = label.rpartition("/p")
     if not separator or not method_name or "/p" in method_name:
@@ -101,7 +106,7 @@ def _method_labels(labels):
     # Only ordered containers preserve the number of metadata associations.
     # A set may already have collapsed duplicate entries and could manufacture
     # a false unique target, so unordered collections are deliberately rejected.
-    if type(labels) not in (tuple, list):
+    if type(labels) not in (tuple, list) or len(labels) > _MAX_METHOD_LABELS_PER_TARGET:
         return []
     # Filtering malformed associations could turn [valid, invalid] into a
     # false unique match. Also require the exact label format emitted from
@@ -204,6 +209,7 @@ def summarize_delegate_method_pointer_arguments(
             if (
                 type(candidates) not in (tuple, list)
                 or not candidates
+                or len(candidates) > _MAX_METHOD_TARGET_CANDIDATES
                 or any(
                     type(target) is not int or not 0 <= target <= _MASK64
                     for target in candidates
@@ -215,7 +221,13 @@ def summarize_delegate_method_pointer_arguments(
     if (
         type(target_prefixes) not in (tuple, list, set, frozenset)
         or not target_prefixes
-        or any(type(item) is not str or not item for item in target_prefixes)
+        or len(target_prefixes) > _MAX_TARGET_PREFIXES
+        or any(
+            type(item) is not str
+            or not item
+            or len(item) > _MAX_TARGET_PREFIX_CHARS
+            for item in target_prefixes
+        )
     ):
         raise ValueError("target_prefixes must be a non-empty collection of strings")
     if (
@@ -373,6 +385,7 @@ def summarize_delegate_method_pointer_arguments(
                             if (
                                 type(descriptor_targets) not in (tuple, list)
                                 or not descriptor_targets
+                                or len(descriptor_targets) > _MAX_METHOD_TARGET_CANDIDATES
                                 or any(
                                     type(item) is not int or not 0 <= item <= _MASK64
                                     for item in descriptor_targets
