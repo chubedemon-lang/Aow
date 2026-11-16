@@ -9,9 +9,22 @@ a protocol decoder and does not claim original APK compatibility.
 - `verified_end_to_end`: supported by an authorized test with the unchanged
   original APK against a locally controlled server.
 
-Only the last category can satisfy `protocol_ready`, and all five required topics (transport, framing, serialization, handshake, login) must have independent records.
-The gate accepts only built-in list/tuple containers and exact `EvidenceRecord` instances; it rejects custom subclasses before invoking their hooks. The status gate is bookkeeping, **not** proof by itself; reviewers must inspect
-the underlying authorized evidence before approving a compatibility claim.
+Only the last category can satisfy `protocol_ready`. All five required topics
+(transport, framing, serialization, handshake, login) must be present for the
+same APK fingerprint **and the same authorized test run**.
+
+Each `verified_end_to_end` record must carry `test_run_sha256`: the lowercase
+SHA-256 of the sanitized manifest for that one local test run. The ledger uses
+this digest only to prevent records from separate runs being combined. It does
+not fetch, validate, or authenticate the manifest, and the digest is not an
+attestation. Keep the manifest and any raw client/server bytes private; publish
+only the digest and sanitized repository-local references.
+
+The gate accepts only built-in list/tuple containers and exact
+`EvidenceRecord` instances; it snapshots the collections before evaluating
+them and rejects custom subclasses before invoking their hooks. The status gate
+is bookkeeping, **not** proof by itself; reviewers must inspect the underlying
+authorized evidence before approving a compatibility claim.
 
 ## Verified metadata methods
 
