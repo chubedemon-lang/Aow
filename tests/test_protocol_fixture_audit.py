@@ -131,7 +131,7 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         over_limit = self.audit(fixture_bytes([over_limit_stream]))
         candidate = over_limit["server_to_client"]["receive_candidate"]
         self.assertEqual(candidate["status"], "candidate_not_recovered")
-        self.assertEqual(candidate["reason"], "_CandidateFrameCountLimit")
+        self.assertEqual(candidate["reason"], "CandidateFrameCountLimit")
         self.assertEqual(candidate["frame_count"], MAX_CANDIDATE_FRAMES)
         self.assertTrue(candidate["frame_count_is_lower_bound"])
         self.assertTrue(candidate["frame_sizes_truncated"])
