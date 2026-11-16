@@ -8,6 +8,7 @@ from io import StringIO
 from pathlib import Path
 
 from tools.protocol_fixture_audit import (
+    MAX_CANDIDATE_FRAMES,
     FixtureAuditError,
     audit_fixture_bytes,
     inspect_fixture_file,
@@ -113,6 +114,28 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
             oversized["server_to_client"]["receive_candidate"]["reason"],
             "ReceiverPayloadTooLarge",
         )
+
+    def test_candidate_frame_report_has_a_hard_count_cap(self):
+        exact_limit_stream = b"".join(
+            frame(b"") for _ in range(MAX_CANDIDATE_FRAMES)
+        )
+        exact_limit = self.audit(fixture_bytes([exact_limit_stream]))
+        exact_candidate = exact_limit["server_to_client"]["receive_candidate"]
+        self.assertEqual(exact_candidate["status"], "candidate_frames_recovered")
+        self.assertEqual(exact_candidate["frame_count"], MAX_CANDIDATE_FRAMES)
+        self.assertFalse(exact_candidate["frame_count_is_lower_bound"])
+        self.assertFalse(exact_candidate["frame_sizes_truncated"])
+        self.assertEqual(len(exact_candidate["frame_sizes"]), MAX_CANDIDATE_FRAMES)
+
+        over_limit_stream = exact_limit_stream + frame(b"")
+        over_limit = self.audit(fixture_bytes([over_limit_stream]))
+        candidate = over_limit["server_to_client"]["receive_candidate"]
+        self.assertEqual(candidate["status"], "candidate_not_recovered")
+        self.assertEqual(candidate["reason"], "CandidateFrameCountLimit")
+        self.assertEqual(candidate["frame_count"], MAX_CANDIDATE_FRAMES)
+        self.assertTrue(candidate["frame_count_is_lower_bound"])
+        self.assertTrue(candidate["frame_sizes_truncated"])
+        self.assertEqual(len(candidate["frame_sizes"]), MAX_CANDIDATE_FRAMES)
 
     def test_fingerprint_must_match_operator_selected_build(self):
         content = fixture_bytes([frame(b"x")], apk_sha256="b" * 64)
