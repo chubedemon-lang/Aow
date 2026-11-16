@@ -14,8 +14,10 @@ def validate_loopback_bind(host, port):
 
     Hostnames are deliberately rejected: resolving a name at a later time could
     produce a non-loopback address. The current HTTP server is IPv4-only.
+    Accept an exact built-in string so caller-defined str subclass hooks cannot
+    run before the literal address has been validated.
     """
-    if not isinstance(host, str) or not host or host.strip() != host:
+    if type(host) is not str or not host or host.strip() != host:
         raise RuntimeSafetyError("host must be a literal IPv4 loopback address")
     try:
         address = ipaddress.ip_address(host)
