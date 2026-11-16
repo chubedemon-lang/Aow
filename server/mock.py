@@ -212,10 +212,7 @@ class Domain:
         """Synthetic shop purchase: atomically debit wallet and grant inventory."""
         if type(character_id) is not int or character_id < 1:
             raise ValueError("invalid character id")
-        if not isinstance(item_id, str) or not 1 <= len(item_id) <= 64 or not all(
-            ch.isascii() and (ch.isalnum() or ch in "._-") for ch in item_id
-        ):
-            raise ValueError("invalid item id")
+        item_id = _validate_item_id(item_id)
         if type(count) is not int or not 1 <= count <= 100:
             raise ValueError("invalid count")
         with self.connection() as db:
