@@ -217,6 +217,57 @@ class EvidenceManifestTests(unittest.TestCase):
                 with self.subTest(field=field, value=value), self.assertRaises(EvidenceError):
                     validate_record(sample(**{field: value}))
 
+    def test_rejects_record_subclass_before_mapping_hooks(self):
+        class HostileRecord(dict):
+            def __iter__(self):
+                raise AssertionError("custom __iter__ must not run")
+
+            def __getitem__(self, key):
+                raise AssertionError("custom __getitem__ must not run")
+
+        with self.assertRaisesRegex(EvidenceError, "record must have exactly"):
+            validate_record(HostileRecord(sample()))
+
+    def test_rejects_string_subclass_before_text_hooks(self):
+        class HostileText(str):
+            def __len__(self):
+                raise AssertionError("custom __len__ must not run")
+
+            def strip(self):
+                raise AssertionError("custom strip must not run")
+
+        with self.assertRaisesRegex(EvidenceError, "invalid metadata field: notes"):
+            validate_record(sample(notes=HostileText("safe text")))
+
+    def test_rejects_string_subclass_keys_before_hash_hooks(self):
+        class HostileKey(str):
+            hash_calls = 0
+
+            def __hash__(self):
+                type(self).hash_calls += 1
+                return str.__hash__(self)
+
+        record = sample()
+        value = record.pop("id")
+        record[HostileKey("id")] = value
+        calls_before_validation = HostileKey.hash_calls
+
+        with self.assertRaisesRegex(EvidenceError, "record keys must be exact"):
+            validate_record(record)
+
+        self.assertEqual(HostileKey.hash_calls, calls_before_validation)
+
+    def test_rejects_list_subclass_before_iteration_and_length_hooks(self):
+        class HostileList(list):
+            def __iter__(self):
+                raise AssertionError("custom __iter__ must not run")
+
+            def __len__(self):
+                raise AssertionError("custom __len__ must not run")
+
+        with self.assertRaisesRegex(EvidenceError, "exact built-in list"):
+            validate_manifest(HostileList([sample()]))
+
 
 if __name__ == "__main__":
     unittest.main()
