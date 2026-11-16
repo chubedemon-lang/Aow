@@ -218,12 +218,14 @@ def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
         truncated = isinstance(exc, _CandidateFrameCountLimit)
         return {
             "status": "candidate_not_recovered",
-            "reason": type(exc).__name__,
+            "reason": "CandidateFrameCountLimit" if truncated else type(exc).__name__,
             "frame_count": len(frame_sizes),
             "frame_count_is_lower_bound": truncated,
             "frame_sizes_truncated": truncated,
             "frame_sizes": frame_sizes,
         }
+
+
 def audit_fixture_bytes(
     content,
     *,
