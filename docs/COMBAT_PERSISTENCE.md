@@ -87,7 +87,7 @@ AOW combat fields, damage rules, message schemas, or wire compatibility.
 
 ## Canonical in-memory turn-state validation — 2026-11-16
 
-The synthetic `Battle` value object now validates the turn counter as an
+The synthetic `Battle` value object validates the turn counter as an
 exact built-in integer before any terminal-state comparison, and validates
 `next_actor` as an exact built-in integer before membership/equality checks.
 Boolean values, floats and integer subclasses are rejected. This prevents a
@@ -98,3 +98,16 @@ type when SQLite persists it.
 Regression tests exercise boolean, float and hostile integer-subclass actor
 values, plus a hostile integer-subclass turn counter. This is synthetic domain
 validation only; it does not define AOW combat rules or packet fields.
+
+
+## Canonical fighter-reference validation — 2026-11-16
+
+The in-memory `Battle` value object now requires both participants to be
+exact built-in `Fighter` instances before reading any participant fields.
+Arbitrary objects and `Fighter` subclasses are rejected, preventing custom
+attribute-access hooks from running during participant-ID comparisons.
+
+Regression coverage includes a hostile `Fighter` subclass and non-`Fighter`
+objects in both participant positions. This is synthetic domain validation
+only; it does not define AOW combat entities, packet fields, or wire
+compatibility.

@@ -71,6 +71,29 @@ class CombatTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Battle(self.a, self.b, 1, turn=ExplosiveInt(0))
 
+    def test_rejects_noncanonical_fighter_objects_before_attribute_access(self):
+        class HostileFighter(Fighter):
+            def __post_init__(self):
+                # Deliberately bypass the base validation for this hostile test object.
+                pass
+
+            def __getattribute__(self, name):
+                if name == "fighter_id":
+                    raise AssertionError("custom fighter attribute hook must not run")
+                return super().__getattribute__(name)
+
+        hostile = HostileFighter(1, 20, 7, 2)
+        invalid_pairs = (
+            (hostile, self.b),
+            (self.a, hostile),
+            (object(), self.b),
+            (self.a, None),
+        )
+        for first, second in invalid_pairs:
+            with self.subTest(first_type=type(first).__name__, second_type=type(second).__name__):
+                with self.assertRaises(ValueError):
+                    Battle(first, second, 1)
+
     def test_defense_minimum_damage(self):
         state = Battle(Fighter(1, 3, 0, 0), Fighter(2, 3, 0, 1_000_000), 1)
         state, event = state.attack(1)

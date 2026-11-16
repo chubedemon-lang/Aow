@@ -35,6 +35,10 @@ class Battle:
     turn: int = 0
 
     def __post_init__(self):
+        # Reject arbitrary objects and Fighter subclasses before reading fields;
+        # subclasses may override attribute access or other comparison hooks.
+        if type(self.first) is not Fighter or type(self.second) is not Fighter:
+            raise ValueError("invalid fighters")
         # Validate exact built-in integer types before equality checks. bool,
         # float and int subclasses are not canonical persisted turn values.
         _stat(self.turn, "turn")
