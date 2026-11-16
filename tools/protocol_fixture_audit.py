@@ -26,6 +26,7 @@ MAX_CHUNKS_PER_DIRECTION = 4096
 MAX_BUFFER_BYTES = 2 * 1024 * 1024
 DEFAULT_MAX_PAYLOAD_BYTES = 1024 * 1024
 DEFAULT_MAX_BUFFER_BYTES = DEFAULT_MAX_PAYLOAD_BYTES + 4
+MAX_CANDIDATE_FRAMES = 4096
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _HEX_BYTES = re.compile(r"^(?:[0-9a-fA-F]{2})+$")
@@ -163,11 +164,19 @@ def _decode_chunks(value, field):
     return decoded, total
 
 
+class _CandidateFrameCountLimit(FrameReaderError):
+    """The redacted report reached its fixed candidate-frame count cap."""
+
+
 def _collect_complete_frames(reader, frame_sizes):
     while True:
         frame = reader.read_frame()
         if frame is None:
             return
+        if len(frame_sizes) >= MAX_CANDIDATE_FRAMES:
+            raise _CandidateFrameCountLimit(
+                "candidate frame report reached its configured count limit"
+            )
         frame_sizes.append(len(frame))
 
 
@@ -196,6 +205,8 @@ def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
             "status": "candidate_frames_recovered",
             "reason": None,
             "frame_count": len(frame_sizes),
+            "frame_count_is_lower_bound": False,
+            "frame_sizes_truncated": False,
             "frame_sizes": frame_sizes,
         }
     except (
@@ -204,14 +215,15 @@ def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
         ReceiverPayloadTooLarge,
         FrameReaderError,
     ) as exc:
+        truncated = isinstance(exc, _CandidateFrameCountLimit)
         return {
             "status": "candidate_not_recovered",
             "reason": type(exc).__name__,
             "frame_count": len(frame_sizes),
+            "frame_count_is_lower_bound": truncated,
+            "frame_sizes_truncated": truncated,
             "frame_sizes": frame_sizes,
         }
-
-
 def audit_fixture_bytes(
     content,
     *,
