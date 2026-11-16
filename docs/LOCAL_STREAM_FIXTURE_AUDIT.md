@@ -54,9 +54,12 @@ a bounded input size. The JSON parser rejects duplicate keys, unexpected
 fields, non-finite constants, and nesting deeper than 64 containers before
 constructing the decoded object graph. Invalid filesystem path values are
 normalized to a redacted fixture error rather than leaking an operating-system
-exception. Both stream directions are summarized, but only the
-`server_to_client` direction is passed through the isolated receive-length
-candidate. The `client_to_server` direction is deliberately not decoded because
+exception. Both stream directions are summarized under one aggregate 8 MiB
+resource budget. The remaining budget is enforced incrementally before each
+hex chunk is materialized, so the second direction cannot temporarily allocate
+beyond the aggregate cap. This is an audit resource limit, not an AOW protocol
+limit. Only the `server_to_client` direction is passed through the isolated
+receive-length candidate. The `client_to_server` direction is deliberately not decoded because
 Sender/Receiver symmetry has not been established.
 
 The receive candidate still models only the static four-byte signed

@@ -164,7 +164,11 @@ def _validate_json_nesting(text):
                 raise FixtureAuditError("fixture must be valid UTF-8 JSON")
 
 
-def _decode_chunks(value, field):
+def _decode_chunks(
+    value, field, *, remaining_total_bytes=MAX_TOTAL_STREAM_BYTES
+):
+    if type(remaining_total_bytes) is not int or not 0 <= remaining_total_bytes <= MAX_TOTAL_STREAM_BYTES:
+        raise FixtureAuditError("remaining stream byte budget is invalid")
     if type(value) is not list:
         raise FixtureAuditError(field + " must be a built-in list")
     if len(value) > MAX_CHUNKS_PER_DIRECTION:
@@ -181,12 +185,13 @@ def _decode_chunks(value, field):
             raise FixtureAuditError(
                 field + " contains an invalid hexadecimal chunk at index " + str(index)
             )
+        chunk_size = len(encoded) // 2
+        if total + chunk_size > remaining_total_bytes:
+            raise FixtureAuditError("combined stream data exceeds the configured limit")
         chunk = bytes.fromhex(encoded)
         if not chunk:
             raise FixtureAuditError(field + " contains an empty chunk")
-        total += len(chunk)
-        if total > MAX_TOTAL_STREAM_BYTES:
-            raise FixtureAuditError("combined stream data exceeds the configured limit")
+        total += chunk_size
         decoded.append(chunk)
     return decoded, total
 
@@ -322,15 +327,17 @@ def audit_fixture_bytes(
     if type(streams) is not dict or set(streams) != _STREAM_KEYS:
         raise FixtureAuditError("fixture must contain exactly both stream directions")
     server_chunks, server_bytes = _decode_chunks(
-        streams["server_to_client"], "server_to_client"
-    )
-    client_chunks, client_bytes = _decode_chunks(
-        streams["client_to_server"], "client_to_server"
+        streams["server_to_client"],
+        "server_to_client",
+        remaining_total_bytes=MAX_TOTAL_STREAM_BYTES,
     )
     if not server_chunks:
         raise FixtureAuditError("server_to_client must contain at least one chunk")
-    if server_bytes + client_bytes > MAX_TOTAL_STREAM_BYTES:
-        raise FixtureAuditError("combined stream data exceeds the configured limit")
+    client_chunks, client_bytes = _decode_chunks(
+        streams["client_to_server"],
+        "client_to_server",
+        remaining_total_bytes=MAX_TOTAL_STREAM_BYTES - server_bytes,
+    )
 
     candidate = _inspect_receive_candidate(
         server_chunks,

@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -14,6 +15,7 @@ from tools.protocol_fixture_audit import (
     audit_fixture_bytes,
     inspect_fixture_file,
     main,
+    _decode_chunks,
 )
 
 
@@ -223,6 +225,30 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
             self.audit(content, max_buffer_bytes=3)
         with self.assertRaisesRegex(FixtureAuditError, "size limit"):
             self.audit(content, max_fixture_bytes=8)
+
+    def test_combined_stream_budget_is_enforced_incrementally(self):
+        with patch("tools.protocol_fixture_audit.MAX_TOTAL_STREAM_BYTES", 5):
+            exact_budget = self.audit(fixture_bytes([frame(b"")], [b"\x01"]))
+            self.assertEqual(
+                exact_budget["server_to_client"]["stream_bytes"]
+                + exact_budget["client_to_server"]["stream_bytes"],
+                5,
+            )
+
+            over_budget = fixture_bytes([frame(b"")], [b"\x01\x02"])
+            with self.assertRaisesRegex(FixtureAuditError, "combined stream data"):
+                self.audit(over_budget)
+
+    def test_decode_chunks_validates_remaining_budget_type_and_range(self):
+        for invalid in (True, -1, 8 * 1024 * 1024 + 1):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                FixtureAuditError, "remaining stream byte budget"
+            ):
+                _decode_chunks(
+                    [],
+                    "client_to_server",
+                    remaining_total_bytes=invalid,
+                )
 
     def test_summary_never_emits_fixture_bytes_or_local_path(self):
         private_payload = bytes.fromhex("deadc0de11223344")
