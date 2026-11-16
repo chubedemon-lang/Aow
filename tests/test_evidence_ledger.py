@@ -110,5 +110,76 @@ class EvidenceLedgerTests(unittest.TestCase):
             protocol_ready([{"topic": "login"}])
 
 
+    def test_rejects_records_list_subclass_before_iteration(self):
+        class HostileList(list):
+            def __iter__(self):
+                raise AssertionError("custom records iterator must not run")
+
+        with self.assertRaisesRegex(TypeError, "built-in list or tuple"):
+            protocol_ready(HostileList())
+
+    def test_rejects_record_subclass_before_attribute_access(self):
+        class HostileRecord(EvidenceRecord):
+            def __post_init__(self):
+                pass
+
+            def __getattribute__(self, name):
+                if name in {"apk_sha256", "topic", "status", "method"}:
+                    raise AssertionError("custom record accessor must not run")
+                return super().__getattribute__(name)
+
+        record = HostileRecord(
+            "a" * 64, "transport", EvidenceStatus.VERIFIED_END_TO_END,
+            "metadata/type:123", "authorized_local_test",
+        )
+        with self.assertRaisesRegex(TypeError, "exact EvidenceRecord"):
+            protocol_ready([record])
+
+    def test_rejects_required_list_subclass_before_iteration(self):
+        class HostileList(list):
+            def __iter__(self):
+                raise AssertionError("custom required iterator must not run")
+
+        with self.assertRaisesRegex(ValueError, "built-in list or tuple"):
+            protocol_ready([], HostileList(["transport"]))
+
+    def test_rejects_required_string_subclass_before_hashing(self):
+        class HostileTopic(str):
+            def __hash__(self):
+                raise AssertionError("custom topic hash must not run")
+
+            def __eq__(self, other):
+                raise AssertionError("custom topic equality must not run")
+
+        with self.assertRaisesRegex(ValueError, "exact supported topic strings"):
+            protocol_ready([], (HostileTopic("transport"),))
+
+    def test_evidence_record_rejects_string_subclasses_before_hooks(self):
+        class HostileText(str):
+            def __hash__(self):
+                raise AssertionError("custom string hash must not run")
+
+            def __eq__(self, other):
+                raise AssertionError("custom string equality must not run")
+
+            def __len__(self):
+                raise AssertionError("custom string length must not run")
+
+        valid = self.record()
+        candidates = (
+            (HostileText(valid.apk_sha256), valid.topic, valid.status,
+             valid.reference, valid.method),
+            (valid.apk_sha256, HostileText(valid.topic), valid.status,
+             valid.reference, valid.method),
+            (valid.apk_sha256, valid.topic, valid.status,
+             HostileText(valid.reference), valid.method),
+            (valid.apk_sha256, valid.topic, valid.status,
+             valid.reference, HostileText(valid.method)),
+        )
+        for values in candidates:
+            with self.subTest(field=values), self.assertRaises((TypeError, ValueError)):
+                EvidenceRecord(*values)
+
+
 if __name__ == "__main__":
     unittest.main()
