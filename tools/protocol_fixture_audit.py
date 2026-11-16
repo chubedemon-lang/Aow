@@ -20,6 +20,7 @@ from server.frame_reader import FrameReaderError
 
 
 MAX_FIXTURE_BYTES = 20 * 1024 * 1024
+MAX_JSON_NESTING = 64
 MAX_CHUNK_BYTES = 1024 * 1024
 MAX_TOTAL_STREAM_BYTES = 8 * 1024 * 1024
 MAX_CHUNKS_PER_DIRECTION = 4096
@@ -76,7 +77,7 @@ def _read_regular_file_no_follow(path, max_bytes):
 
     try:
         before = os.stat(path, follow_symlinks=False)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise FixtureAuditError("fixture file cannot be inspected safely") from exc
     if not stat.S_ISREG(before.st_mode):
         raise FixtureAuditError("fixture must be a regular non-symlink file")
@@ -86,7 +87,7 @@ def _read_regular_file_no_follow(path, max_bytes):
     flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
     try:
         descriptor = os.open(path, flags)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise FixtureAuditError("fixture file cannot be opened safely") from exc
 
     try:
@@ -109,7 +110,7 @@ def _read_regular_file_no_follow(path, max_bytes):
         after = os.fstat(descriptor)
         try:
             path_after = os.stat(path, follow_symlinks=False)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             raise FixtureAuditError("fixture path changed during read") from exc
         if (
             not _same_file_snapshot(opened, after)
@@ -135,6 +136,32 @@ def _unique_object(pairs):
 
 def _reject_json_constant(_value):
     raise FixtureAuditError("non-finite JSON values are not accepted")
+
+
+def _validate_json_nesting(text):
+    """Reject deeply nested JSON before the decoder builds nested objects."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > MAX_JSON_NESTING:
+                raise FixtureAuditError("fixture JSON nesting exceeds the configured depth limit")
+        elif character in "]}":
+            depth -= 1
+            if depth < 0:
+                raise FixtureAuditError("fixture must be valid UTF-8 JSON")
 
 
 def _decode_chunks(value, field):
@@ -265,6 +292,7 @@ def audit_fixture_bytes(
 
     try:
         text = content.decode("utf-8")
+        _validate_json_nesting(text)
         document = json.loads(
             text,
             object_pairs_hook=_unique_object,
@@ -272,7 +300,7 @@ def audit_fixture_bytes(
         )
     except FixtureAuditError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise FixtureAuditError("fixture must be valid UTF-8 JSON") from exc
 
     if type(document) is not dict or set(document) != _FIXTURE_KEYS:
