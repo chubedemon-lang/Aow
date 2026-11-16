@@ -31,3 +31,17 @@ They do not add native APK observations, packet fixtures, wire semantics,
 handshake/login evidence, or an interoperability claim. Keep the original APK,
 native assets, packet bytes, captures, endpoint values, and credentials out of
 the public repository.
+
+
+## Public metadata manifest input boundary
+
+The metadata-only manifest path is equally strict: JSON ingestion accepts only
+exact built-in `bytes`; decoded manifests must be exact built-in `list`
+objects; records must be exact built-in `dict` objects; dictionary keys and
+free-text values must be exact built-in `str` objects. These checks happen
+before length, decoding, iteration, indexing, hashing, or string methods can
+dispatch to caller-defined subclass hooks.
+
+This is input-boundary hardening for the evidence bookkeeping tools only. It
+does not add APK observations, packet fixtures, protocol semantics, or an
+interoperability claim.

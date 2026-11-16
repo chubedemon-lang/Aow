@@ -94,7 +94,7 @@ def _contains_network_locator(value):
 
 
 def _validate_public_text(key, value):
-    if not isinstance(value, str) or not value.strip() or len(value) > 512:
+    if type(value) is not str or not value.strip() or len(value) > 512:
         raise EvidenceError("invalid metadata field: " + key)
     if not value.isprintable():
         raise EvidenceError("control character in metadata")
@@ -119,7 +119,11 @@ def validate_record(record):
     text are rejected to reduce accidental publication of private captures
     or credentials.
     """
-    if not isinstance(record, dict) or set(record) != FIELDS:
+    if type(record) is not dict:
+        raise EvidenceError("record must have exactly the approved metadata fields")
+    if any(type(key) is not str for key in record):
+        raise EvidenceError("record keys must be exact built-in strings")
+    if set(record) != FIELDS:
         raise EvidenceError("record must have exactly the approved metadata fields")
     result = {}
     for key in ("id", "method", "reproduction", "test_reference", "notes"):
@@ -148,8 +152,8 @@ def validate_record(record):
 
 def validate_manifest(records):
     """Validate metadata-only manifest; reject duplicate evidence identifiers."""
-    if not isinstance(records, list):
-        raise EvidenceError("manifest must be a list")
+    if type(records) is not list:
+        raise EvidenceError("manifest must be an exact built-in list")
     if len(records) > MAX_MANIFEST_RECORDS:
         raise EvidenceError("manifest exceeds maximum record count")
     seen = set()

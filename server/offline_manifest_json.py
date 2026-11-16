@@ -28,8 +28,8 @@ def load_manifest_json(payload):
     Rejects ambiguous duplicate keys and non-standard JSON constants.
     The caller is responsible for keeping the source file private.
     """
-    if not isinstance(payload, bytes):
-        raise EvidenceError("manifest JSON must be bytes")
+    if type(payload) is not bytes:
+        raise EvidenceError("manifest JSON must be exact built-in bytes")
     if len(payload) > MAX_MANIFEST_JSON_BYTES:
         raise EvidenceError("manifest JSON exceeds byte limit")
     try:
