@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from server.frame_reader import CallbackFrameReader, TruncatedFrame
+from server.stream_reader import read_next_frame
 from server.socket_channel import (
     SocketChannelClosed,
     SocketChannelWriteClosed,
