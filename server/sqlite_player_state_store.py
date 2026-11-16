@@ -52,7 +52,7 @@ class SqlitePlayerStateStore:
     """
 
     def __init__(self, connection: sqlite3.Connection):
-        if not isinstance(connection, sqlite3.Connection):
+        if type(connection) is not sqlite3.Connection:
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")
@@ -119,15 +119,15 @@ class SqlitePlayerStateStore:
 
     @staticmethod
     def _character_id(value):
-        if (not isinstance(value, str) or not value.strip()
-                or len(value) > 128):
+        if (type(value) is not str or not value
+                or len(value) > 128 or value != value.strip()):
             raise PlayerStoreError("invalid character identifier")
         return value
 
     @staticmethod
     def _request_id(value):
-        if (not isinstance(value, str) or not value.strip()
-                or len(value) > 128):
+        if (type(value) is not str or not value
+                or len(value) > 128 or value != value.strip()):
             raise PlayerStoreError("invalid request identifier")
         return value
 
