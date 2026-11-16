@@ -48,6 +48,17 @@ class OfflineManifestJsonTests(unittest.TestCase):
         with self.assertRaises(EvidenceError):
             load_manifest_json(json.dumps([{"payload": "private"}]).encode())
 
+    def test_rejects_bytes_subclass_before_length_or_decode_hooks(self):
+        class HostileBytes(bytes):
+            def __len__(self):
+                raise AssertionError("custom __len__ must not run")
+
+            def decode(self, *args, **kwargs):
+                raise AssertionError("custom decode must not run")
+
+        with self.assertRaisesRegex(EvidenceError, "exact built-in bytes"):
+            load_manifest_json(HostileBytes(b"[]"))
+
 
 if __name__ == "__main__":
     unittest.main()
