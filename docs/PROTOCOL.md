@@ -249,7 +249,7 @@ local runtime trace.
 
 ## Private local stream-fixture audit tooling — 2026-11-17
 
-The new \`tools.protocol_fixture_audit\` command accepts a private, operator-supplied
+The new `tools.protocol_fixture_audit` command accepts a private, operator-supplied
 fixture containing ordered, already-reassembled stream chunks for both
 directions. It checks the asserted unchanged-APK fingerprint against an
 operator-selected expected hash, applies strict JSON/hex/resource limits, and
