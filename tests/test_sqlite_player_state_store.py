@@ -26,6 +26,55 @@ class SqlitePlayerStateStoreTests(unittest.TestCase):
         self.store = SqlitePlayerStateStore(self.db)
         self.addCleanup(self.db.close)
 
+    def test_constructor_rejects_sqlite_connection_subclasses_before_hooks(self):
+        class HostileConnection(sqlite3.Connection):
+            @property
+            def in_transaction(self):
+                raise AssertionError("custom transaction-state hook must not run")
+
+        connection = sqlite3.connect(":memory:", factory=HostileConnection)
+        try:
+            with self.assertRaisesRegex(TypeError, "sqlite connection"):
+                SqlitePlayerStateStore(connection)
+        finally:
+            sqlite3.Connection.close(connection)
+
+    def test_identifiers_reject_string_subclasses_before_custom_hooks(self):
+        class HostileIdentifier(str):
+            def __len__(self):
+                raise AssertionError("custom string length hook must not run")
+
+            def strip(self, *args, **kwargs):
+                raise AssertionError("custom string strip hook must not run")
+
+            def __hash__(self):
+                raise AssertionError("custom string hash hook must not run")
+
+        with self.assertRaises(PlayerStoreError):
+            self.store.create(HostileIdentifier("hero"))
+        self.store.create("hero")
+        with self.assertRaises(PlayerStoreError):
+            self.store.get(HostileIdentifier("hero"))
+        with self.assertRaises(PlayerStoreError):
+            self.store.apply(
+                "hero", HostileIdentifier("request"), 0, currency_delta=1
+            )
+        self.assertEqual(self.store.get("hero").revision, 0)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM player_state_mutations").fetchone()[0],
+            0,
+        )
+
+    def test_character_and_request_identifiers_reject_surrounding_whitespace(self):
+        for value in (" hero", "hero "):
+            with self.subTest(identifier=value), self.assertRaises(PlayerStoreError):
+                self.store.create(value)
+        self.store.create("hero")
+        for request_id in (" request", "request "):
+            with self.subTest(request_id=request_id), self.assertRaises(PlayerStoreError):
+                self.store.apply("hero", request_id, 0, currency_delta=1)
+        self.assertEqual(self.store.get("hero").revision, 0)
+
     def test_create_and_read_snapshot(self):
         created = self.store.create("hero", level=4, experience=25, currency=90)
         self.assertEqual((created.level, created.experience, created.currency,
