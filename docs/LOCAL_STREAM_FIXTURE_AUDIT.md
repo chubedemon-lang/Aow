@@ -69,8 +69,14 @@ message IDs, handshake, or login. The output contains stream/chunk counts and
 at most 4,096 candidate frame sizes; it never emits fixture bytes or the local
 file path. If a stream exceeds this
 fixed report cap, candidate analysis stops and the result marks the reported
-frame count as a lower bound with `frame_sizes_truncated: true`. This is a
-resource-safety limit for the audit report, not an AOW protocol limit.
+frame count as a lower bound with `frame_sizes_truncated: true`. The report
+also includes `candidate_bytes_consumed`,
+`unclassified_stream_bytes`, and `candidate_stream_fully_consumed`. These
+fields account for the complete supplied server-to-client stream, including
+bytes after an unsupported marker, an incomplete tail, or data left after the
+report cap. They describe only how much input this candidate parser accepted;
+they do not validate the real AOW frame boundary. This is a resource-safety
+limit for the audit report, not an AOW protocol limit.
 
 ## Provenance and limits
 
