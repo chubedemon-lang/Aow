@@ -71,6 +71,9 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertEqual(candidate["status"], "candidate_frames_recovered")
         self.assertEqual(candidate["frame_count"], 2)
         self.assertEqual(candidate["frame_sizes"], [len(first), len(second)])
+        self.assertEqual(candidate["candidate_bytes_consumed"], len(first + second))
+        self.assertEqual(candidate["unclassified_stream_bytes"], 0)
+        self.assertTrue(candidate["candidate_stream_fully_consumed"])
 
     def test_client_to_server_stream_is_summarized_but_not_decoded(self):
         content = fixture_bytes([frame(b"ok")], [b"HTTP", b"tail"])
@@ -94,6 +97,22 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertEqual(candidate["reason"], "UnsupportedHttpMarkerBranch")
         self.assertEqual(candidate["frame_count"], 0)
 
+    def test_partial_candidate_frames_leave_marker_and_tail_unclassified(self):
+        complete = frame(b"ok")
+        unsupported_tail = b"HTTPresponse"
+        result = self.audit(fixture_bytes([complete + unsupported_tail]))
+        candidate = result["server_to_client"]["receive_candidate"]
+
+        self.assertEqual(result["status"], "candidate_not_recovered")
+        self.assertEqual(candidate["frame_count"], 1)
+        self.assertEqual(candidate["candidate_bytes_consumed"], len(complete))
+        self.assertEqual(
+            candidate["unclassified_stream_bytes"], len(unsupported_tail)
+        )
+        self.assertFalse(candidate["candidate_stream_fully_consumed"])
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
+
     def test_truncated_receive_candidate_is_reported_without_guessing(self):
         result = self.audit(fixture_bytes([frame(b"payload")[:-1]]))
         candidate = result["server_to_client"]["receive_candidate"]
@@ -101,6 +120,11 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertEqual(result["status"], "candidate_not_recovered")
         self.assertEqual(candidate["reason"], "TruncatedFrame")
         self.assertEqual(candidate["frame_count"], 0)
+        self.assertEqual(candidate["candidate_bytes_consumed"], 0)
+        self.assertEqual(
+            candidate["unclassified_stream_bytes"], len(frame(b"payload")[:-1])
+        )
+        self.assertFalse(candidate["candidate_stream_fully_consumed"])
 
     def test_negative_and_oversized_candidate_lengths_fail_closed(self):
         negative = self.audit(fixture_bytes([b"\xff\xff\xff\xff"]))
