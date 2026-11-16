@@ -119,15 +119,15 @@ class SqlitePlayerStateStore:
 
     @staticmethod
     def _character_id(value):
-        if (type(value) is not str or not value
-                or len(value) > 128 or value != value.strip()):
+        if (type(value) is not str or not value.strip()
+                or len(value) > 128):
             raise PlayerStoreError("invalid character identifier")
         return value
 
     @staticmethod
     def _request_id(value):
-        if (type(value) is not str or not value
-                or len(value) > 128 or value != value.strip()):
+        if (type(value) is not str or not value.strip()
+                or len(value) > 128):
             raise PlayerStoreError("invalid request identifier")
         return value
 
