@@ -206,8 +206,8 @@ The metadata identifier reader now opens the APK once with no-follow/non-blockin
 flags where the platform provides them, verifies the opened descriptor is a
 regular file, reads the metadata ZIP member from that descriptor, and computes
 the APK SHA-256 from the same descriptor. It compares descriptor identity,
-size, modification time and change time before/after the ZIP read and hash
-pass, rejecting observed in-place mutation.
+size and modification time before/after the ZIP read and hash pass, rejecting
+observed in-place mutation without treating a pathname rename as content change.
 
 This prevents a pathname replacement from pairing metadata read from one file
 with a fingerprint computed from a different file. Synthetic regression tests
