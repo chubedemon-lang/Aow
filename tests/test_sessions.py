@@ -107,6 +107,65 @@ class SessionTests(unittest.TestCase):
         self.sessions.revoke(hostile)
         self.assertEqual(self.sessions.resolve(token), 9)
 
+    def test_clock_must_be_callable(self):
+        with self.assertRaisesRegex(ValueError, "clock must be callable"):
+            SessionManager(clock=123)
+
+    def test_issue_rejects_invalid_clock_values_without_creating_sessions(self):
+        class HostileInt(int):
+            def __float__(self):
+                raise AssertionError("custom numeric conversion must not run")
+
+        class HostileFloat(float):
+            def __float__(self):
+                raise AssertionError("custom numeric conversion must not run")
+
+        invalid_values = (
+            True, -1, float("nan"), float("inf"), float("-inf"), "100",
+            HostileInt(100), HostileFloat(100.0),
+        )
+        for value in invalid_values:
+            with self.subTest(value_type=type(value).__name__, value=str(value)):
+                manager = SessionManager(clock=lambda value=value: value)
+                with self.assertRaises(SessionError):
+                    manager.issue(1)
+                self.assertEqual(manager._sessions, {})
+
+    def test_clock_exception_fails_closed_without_consuming_session(self):
+        token = self.sessions.issue(7)
+
+        def broken_clock():
+            raise RuntimeError("private clock detail")
+
+        self.sessions.clock = broken_clock
+        with self.assertRaisesRegex(SessionError, "session clock failed"):
+            self.sessions.resolve(token)
+
+        self.sessions.clock = lambda: self.now
+        self.assertEqual(self.sessions.resolve(token), 7)
+
+    def test_clock_rollback_cannot_extend_or_purge_sessions(self):
+        token = self.sessions.issue(8)
+        self.now = 99.0
+
+        with self.assertRaisesRegex(SessionError, "moved backwards"):
+            self.sessions.resolve(token)
+        with self.assertRaisesRegex(SessionError, "moved backwards"):
+            self.sessions.purge_expired()
+        self.assertEqual(len(self.sessions._sessions), 1)
+
+        self.now = 100.0
+        self.assertEqual(self.sessions.resolve(token), 8)
+
+    def test_unrepresentable_expiry_does_not_issue_a_token(self):
+        manager = SessionManager(
+            ttl_seconds=10 ** 400,
+            clock=lambda: 1.0,
+        )
+        with self.assertRaisesRegex(SessionError, "expiry is not representable"):
+            manager.issue(9)
+        self.assertEqual(manager._sessions, {})
+
 
 if __name__ == "__main__":
     unittest.main()
