@@ -19,6 +19,10 @@ from tools.il2cpp_codegen_inventory import (
     _metadata_images, _slice, _table,
 )
 
+from tools.aarch64_memory_access_evidence import (
+    summarize_unsigned_immediate_memory_accesses,
+)
+
 TARGET_METHODS = {
     ("com.geargames.common.network", "Network"): {
         "ConnectBeginAsync", "SendMessage", "ProcessingOneReceivedMessage",
@@ -1419,6 +1423,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             **indirect_summary,
             **ordered_summary,
             **control_flow_summary,
+            "memory_access_summary": summarize_unsigned_immediate_memory_accesses(code),
         })
     callsite_summary.sort(key=lambda x: (x["type"], x["method"]))
 
@@ -1441,6 +1446,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             **helper_summary,
             **named_summary,
             **indirect_summary,
+            "memory_access_summary": summarize_unsigned_immediate_memory_accesses(code),
         })
     network_callsite_summary.sort(
         key=lambda x: (x["namespace"], x["type"], x["method"], x["parameter_count"])

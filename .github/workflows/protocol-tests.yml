@@ -17,6 +17,9 @@ on:
       - 'tests/test_il2cpp_metadata_usage_evidence.py'
       - 'tools/aarch64_call_argument_evidence.py'
       - 'tests/test_aarch64_call_argument_evidence.py'
+      - 'tools/aarch64_memory_access_evidence.py'
+      - 'tests/test_aarch64_memory_access_evidence.py'
+      - 'docs/AARCH64_MEMORY_ACCESS_EVIDENCE.md'
       - 'tools/aarch64_delegate_target_evidence.py'
       - 'tools/aarch64_eh_frame_index.py'
       - 'tests/test_aarch64_eh_frame_index.py'
@@ -131,6 +134,8 @@ jobs:
           python-version: '3.12'
       - name: AArch64 small argument evidence tests (synthetic code only)
         run: python -m unittest discover -s tests -p 'test_aarch64_call_argument_evidence.py' -v
+      - name: AArch64 memory access evidence tests (synthetic code only)
+        run: python -m unittest discover -s tests -p 'test_aarch64_memory_access_evidence.py' -v
       - name: AArch64 delegate method-pointer tests (synthetic code only)
         run: python -m unittest discover -s tests -p 'test_aarch64_delegate_target_evidence.py' -v
       - name: Compile offline analysis and evidence tools
@@ -143,6 +148,7 @@ jobs:
             tools/il2cpp_network_callsite_evidence.py \
             tools/il2cpp_metadata_usage_evidence.py \
             tools/aarch64_call_argument_evidence.py \
+            tools/aarch64_memory_access_evidence.py \
             tools/aarch64_delegate_target_evidence.py \
             tools/aarch64_eh_frame_index.py \
             server/aow_primitive_codec.py \

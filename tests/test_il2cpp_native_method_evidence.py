@@ -1160,5 +1160,53 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertNotIn("0x5004", rendered)
 
 
+    def test_network_and_login_serializer_summaries_include_redacted_memory_accesses(self):
+        def encode_access(size, opc, base, target, immediate):
+            return (
+                (size << 30) | 0x39000000 | (opc << 22)
+                | (immediate << 10) | (base << 5) | target
+            )
+
+        words = (
+            encode_access(2, 0, 8, 9, 3),
+            encode_access(2, 1, 8, 10, 3),
+        )
+        network = inspect_bytes(
+            make_metadata(["Cycle"], type_name="Receiver"),
+            make_elf(1, text_words=words),
+        )
+        network_summary = network["network_callsite_summary"][0]["memory_access_summary"]
+        self.assertEqual(network_summary["memory_access_count"], 2)
+        self.assertEqual(
+            [item["operation"] for item in network_summary["memory_accesses"]],
+            ["store", "load"],
+        )
+        self.assertEqual(
+            [item["byte_offset"] for item in network_summary["memory_accesses"]],
+            [12, 12],
+        )
+
+        serializer = inspect_bytes(
+            make_metadata(
+                ["serialize"],
+                image="ConvertedAssembly.dll",
+                type_name="LoginRequestSTSerializer",
+                namespace="com.geargames.serialization.serializers",
+            ),
+            make_elf(1, image="ConvertedAssembly.dll", text_words=words),
+        )
+        serializer_summary = serializer["serializer_callsite_summary"][0]["memory_access_summary"]
+        self.assertEqual(serializer_summary["memory_access_count"], 2)
+
+        rendered = json.dumps({
+            "network": network_summary,
+            "serializer": serializer_summary,
+        })
+        self.assertNotIn("0x5000", rendered)
+        self.assertNotIn("instruction_word", rendered)
+        self.assertFalse(network_summary["native_addresses_emitted"])
+        self.assertFalse(serializer_summary["raw_instructions_emitted"])
+
+
 if __name__ == "__main__":
     unittest.main()
