@@ -29,10 +29,14 @@ The resolver does not coerce fractional account IDs or malformed timestamp
 values into apparently valid sessions.
 
 A corrupt row fails closed as an invalid session and is left untouched for
-operator diagnosis. `resolve_in_transaction()` preserves the caller's
-transaction ownership when it rejects a corrupt row. This protects the synthetic
-session store from corrupted or manually altered SQLite values; it is not an
-APK authentication rule.
+operator diagnosis. Runtime resolution also rejects a creation timestamp later
+than the current epoch clock. This deliberately fails closed if the wall clock
+moves backwards: the session remains unusable until the clock catches up or an
+operator repairs the row. `resolve_in_transaction()` preserves the caller's
+transaction ownership when it rejects a corrupt or not-yet-valid row. The
+read-only integrity audit checks row structure but does not compare creation
+timestamps with the current clock. These are synthetic session-store safeguards,
+not APK authentication rules.
 
 ## Authorized state transactions
 
