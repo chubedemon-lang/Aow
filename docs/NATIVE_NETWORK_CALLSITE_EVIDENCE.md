@@ -474,3 +474,32 @@ this tooling change. This does not identify NetworkSettings.HeaderLength or
 establish framing. The authorized client-side fixture/runtime-trace blocker
 remains unchanged.
 
+
+
+## Fresh authorized APK re-verification — 2026-11-17
+
+The unchanged authorized APK was read again from a private workspace. Its SHA-256 matched the established fingerprint at the top of this document. The archive contains 7,368 entries, no duplicate member names, and the full ZIP CRC test reported no bad member. The metadata is IL2CPP v31 with 31,187 type definitions, 197,631 method definitions and 165 metadata images. The fresh bounded codegen pass associated all 197,631 method slots with 161 non-empty native module pointer tables; 164,023 slots have AArch64 relative relocations to executable sections. The APK, native library, raw instructions, native addresses and packet bytes remain private.
+
+### Receiver.Cycle receive path
+
+A fresh private method-entry mapping and disassembly rechecked the bounded `Receiver.Cycle` window:
+
+- The initial `ClientNetworkStreamBuffer.SetDataAvailable` call has a statically known second-argument register value of 4.
+- The following `AbstractClientBuffer.Write` call has a statically known third-argument register value of 4.
+- The next direct `SimpleDeserializer.deserializeInt` call is made with offset argument zero.
+- Its result is compared with the `0x48545450` HTTP marker. On the non-marker branch, the same returned value flows into the later `SetDataAvailable` argument and `AbstractClientBuffer.Write` count argument.
+- A second direct `deserializeInt` call remains associated with a static-state lookup before the decompression, `MessageMeta` construction and receiver-queue handoff path.
+
+This strengthens the receive-side four-byte big-endian length-prefix **candidate** with fresh register-level static observations. It is still a bounded native entry-window analysis, not a runtime trace, complete frame contract, or proof that this branch executes for every connection.
+
+### Sender and login limits
+
+The bounded `Sender.Cycle` window again contains two `SimpleSerializer.serializeInt` callsites, one `ZipCompression` callsite and two `ClientStreamBuffer.Write` callsites. It also contains an `AbstractClientBuffer.Read` call with a statically known count argument of 4. These callsites do not prove sender/receiver framing symmetry or assign definitive semantics to either serialized integer.
+
+The LoginRequest serializer/deserializer entry windows again contain direct helper-call counts of 19 integer, 16 string, 2 long and 1 boolean operations on the serializer side, versus 14 integer, 16 string, 2 long and 1 boolean operations on the deserializer side. These are not field counts or field order.
+
+The new ADR decoder was added to the generic analyzer, but no ADR instruction was observed in the selected NetworkSettings, Receiver, Sender or LoginRequest entry windows in this pass; the observed address-building instructions there use ADRP. This negative observation does not change any protocol conclusion.
+
+### Remaining limits
+
+The relationship between the `NetworkSettings.HeaderLength` metadata field and the receive-side fixed four-byte setup remains unresolved. The effective runtime field value, complete outer frame, sender/receiver symmetry, compression/encryption placement, message IDs, handshake order, LoginRequest field order and unchanged-APK end-to-end behavior remain unverified. The APK-facing adapter remains disabled. No extracted endpoint was contacted.

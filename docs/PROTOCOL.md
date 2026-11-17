@@ -264,3 +264,10 @@ not cryptographically authenticated by the tool and still require human review.
 A successful parse is candidate evidence only, not a complete frame contract,
 handshake/login proof, or APK compatibility result. See
 [LOCAL_STREAM_FIXTURE_AUDIT.md](LOCAL_STREAM_FIXTURE_AUDIT.md).
+
+
+## Fresh offline receive-path re-verification — 2026-11-17
+
+The authorized unchanged APK was re-read privately with a matching established SHA-256, 7,368 ZIP entries, no duplicate names and a passing full ZIP CRC check. A fresh bounded native pass revalidated the receive-side callsite pattern: a fixed count of 4 is supplied to the initial `ClientNetworkStreamBuffer.SetDataAvailable` and `AbstractClientBuffer.Write` calls, then `SimpleDeserializer.deserializeInt` is called at offset zero. Its result is compared with the HTTP marker; on the non-marker branch that result is reused as the next read/copy count. This supports the existing receive-side four-byte big-endian length-prefix candidate, but does not establish a complete frame or runtime behavior.
+
+The sender window still has two integer serializer callsites, compression and stream-write callsites, without proven symmetry. LoginRequest serializer/deserializer primitive-helper counts were rechecked, but field order remains unknown. The `NetworkSettings.HeaderLength` field-to-read-site relationship, handshake sequence, authentication semantics and unchanged-APK end-to-end compatibility remain unverified. The real APK adapter stays disabled pending an authorized client-side byte fixture or local runtime trace. No APK, native asset or capture was committed, and no official endpoint was contacted.
