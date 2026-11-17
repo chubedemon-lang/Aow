@@ -110,7 +110,7 @@ class SqliteConnectionBoundaryTests(unittest.TestCase):
         self.addCleanup(db.close)
         hostile = object.__new__(_HostileAuthorizer)
 
-        with self.assertRaisesRegex(TypeError, "character authorizer"):
+        with self.assertRaisesRegex(TypeError, "authorizer must support transactional authorization"):
             with authorized_character_transaction(db, hostile, "token", 1):
                 self.fail("transaction body must not run")
 
