@@ -12,6 +12,7 @@ relocation slots, relocation targets, or raw instruction words.
 - ADRP creates an `adrp_derived_address` value using its signed 21-bit page offset from the instruction PC page.
 - 64-bit ADD (immediate) preserves an existing address and records the latest
   instruction-relative definition.
+- 64-bit unflagged SUB (immediate) preserves an existing address with a negative displacement; underflow invalidates only the destination. `SUB Xd, SP, #imm` remains symbolic `stack_pointer` provenance.
 - 64-bit `ADD Xd, SP, #imm` marks the destination as `stack_pointer`; later
   64-bit ADD and MOV operations preserve that symbolic class. The concrete
   stack address and displacement are not modeled.

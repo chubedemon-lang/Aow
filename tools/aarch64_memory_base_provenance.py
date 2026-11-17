@@ -1,6 +1,6 @@
 """Bounded, redacted AArch64 memory-base provenance observations.
 
-Tracks ADR/ADRP/ADD/MOV, stack-pointer-derived addresses and relocation-backed
+Tracks ADR/ADRP/ADD/SUB/MOV, stack-pointer-derived addresses and relocation-backed
 64-bit LDR chains inside a conservative intraprocedural CFG. Absolute
 addresses are used internally and never emitted. This is static evidence,
 not a runtime trace or field resolver.
@@ -95,6 +95,21 @@ def _decode_add_from_stack_pointer(word):
     if word & (1 << 22):
         immediate <<= 12
     return destination, immediate
+
+
+def _decode_sub_immediate(word):
+    """Return (destination, source, immediate) for unflagged 64-bit SUB Xd, Xn/SP, #imm."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    # sf=1, op=1, S=0: exclude 32-bit SUB and flag-setting SUBS forms.
+    if (word & 0xFF800000) != 0xD1000000:
+        return None
+    destination = word & 0x1F
+    source = (word >> 5) & 0x1F
+    immediate = (word >> 10) & 0xFFF
+    if word & (1 << 22):
+        immediate <<= 12
+    return destination, source, immediate
 
 
 def _validate_relocation_targets(relocation_targets):
@@ -215,6 +230,29 @@ def summarize_control_flow_memory_base_provenance(
                 registers[destination] = (
                     "stack_pointer", None, instruction_index, 1
                 )
+                continue
+
+            sub = _decode_sub_immediate(word)
+            if sub is not None:
+                destination, source, immediate = sub
+                if destination == 31:
+                    # Writes to SP/XZR are outside the tracked general-register state.
+                    continue
+                if source == 31:
+                    registers[destination] = (
+                        "stack_pointer", None, instruction_index, 1
+                    )
+                elif source in registers:
+                    kind, value, _definition, depth = registers[source]
+                    result = None if value is None else value - immediate
+                    if result is None or result >= 0:
+                        registers[destination] = (
+                            kind, result, instruction_index, depth + 1
+                        )
+                    else:
+                        registers.pop(destination, None)
+                else:
+                    registers.pop(destination, None)
                 continue
 
             add = _decode_add_immediate(word)
