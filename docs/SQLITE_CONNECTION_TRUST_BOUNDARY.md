@@ -16,10 +16,11 @@ not an extension point for connection, session-store or authorizer subclasses.
   same connection object.
 - These checks run before reading overridable properties or invoking methods.
 
-The session store already requires an exact built-in SQLite connection. The
-facades now apply the same rule at their public constructors and schema
-preflight helpers so an unsupported subclass is rejected before any schema
-query, transaction-state read, PRAGMA or table creation.
+The session store, inventory store, map-position store, shop store and
+reward ledger require an exact built-in SQLite connection. The authorized
+facades and schema preflight helpers apply the same rule so an unsupported
+subclass is rejected before any schema query, transaction-state read, PRAGMA
+or table creation.
 
 ## Scope and compatibility
 
