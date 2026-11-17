@@ -180,7 +180,13 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
                 item["name"]: item for item in by_name["LoginRequest"]["field_records"]
             }
             self.assertEqual(fields_by_name["protocolVersion"]["type_index"], 17)
+            self.assertEqual(fields_by_name["protocolVersion"]["field_definition_index"], 0)
+            self.assertEqual(fields_by_name["protocolVersion"]["declaring_type_definition_index"], 0)
+            self.assertEqual(fields_by_name["protocolVersion"]["field_default_value_record_index"], 0)
             self.assertEqual(fields_by_name["token"]["type_index"], 42)
+            self.assertEqual(fields_by_name["token"]["field_definition_index"], 1)
+            self.assertEqual(fields_by_name["token"]["declaring_type_definition_index"], 0)
+            self.assertIsNone(fields_by_name["token"]["field_default_value_record_index"])
             self.assertEqual(fields_by_name["protocolVersion"]["metadata_token"], 0x04000001)
             self.assertTrue(fields_by_name["protocolVersion"]["default_value_record_present"])
             self.assertEqual(fields_by_name["protocolVersion"]["default_value_type_index"], 9)
@@ -207,6 +213,9 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
                 item["name"]: item for item in by_name["NetworkSettings"]["field_records"]
             }
             self.assertTrue(network_fields["HeaderLength"]["default_value_record_present"])
+            self.assertEqual(network_fields["HeaderLength"]["field_definition_index"], 2)
+            self.assertEqual(network_fields["HeaderLength"]["declaring_type_definition_index"], 3)
+            self.assertEqual(network_fields["HeaderLength"]["field_default_value_record_index"], 1)
             self.assertNotIn("default_value_type_matches_field_type", network_fields["HeaderLength"])
             self.assertFalse(network_fields["HeaderLength"]["default_value_type_index_matches_field_type_index"])
             self.assertIsNone(network_fields["HeartbeatTimeout"]["default_value_type_index_matches_field_type_index"])

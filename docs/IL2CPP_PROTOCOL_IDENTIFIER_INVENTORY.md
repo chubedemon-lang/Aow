@@ -177,3 +177,25 @@ observation: no new call path, numeric message ID, field serialization order,
 packet fixture, framing contract, handshake, or login exchange was established
 in this re-verification. The APK and all extracted assets remain outside this
 public repository.
+
+
+## Stable field/default table coordinates — 2026-11-18
+
+The allowlisted field inventory now emits two explicit metadata coordinates
+for each field: `field_definition_index` (the global v31 field-table row)
+and `declaring_type_definition_index` (the global v31 type-definition row).
+When a field has a default record, it also emits
+`field_default_value_record_index` (the global field-default table row).
+
+These coordinates make later offline joins reproducible without relying on
+field names alone. They are **metadata table indexes**, not native byte
+offsets, managed object offsets, static-field storage addresses, resolved
+managed types, or proof that a default is applied at runtime. The existing
+`type_index` and default-data index remain unresolved metadata references.
+In particular, this change does not decode `NetworkSettings.HeaderLength`,
+its effective runtime value, or its relationship to the receive-side
+four-byte candidate.
+
+Synthetic metadata tests verify stable indexes across multiple allowlisted
+types and fields with and without default-value records. No APK bytes, native
+assets, private offsets, or default-data values are emitted or committed.
