@@ -24,7 +24,7 @@ class SessionRegistry:
 
     @staticmethod
     def _key(value):
-        if not isinstance(value, str) or not 1 <= len(value) <= 128 or not value.strip():
+        if type(value) is not str or not 1 <= len(value) <= 128 or not value.strip():
             raise RegistryError("invalid connection identifier")
         return value
 
