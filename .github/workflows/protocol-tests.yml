@@ -23,6 +23,7 @@ on:
       - 'tests/test_aarch64_memory_base_provenance.py'
       - 'tools/il2cpp_network_callsite_evidence.py'
       - 'docs/AARCH64_MEMORY_ACCESS_EVIDENCE.md'
+      - 'docs/AARCH64_MEMORY_BASE_PROVENANCE.md'
       - 'tools/aarch64_delegate_target_evidence.py'
       - 'tools/aarch64_eh_frame_index.py'
       - 'tests/test_aarch64_eh_frame_index.py'
