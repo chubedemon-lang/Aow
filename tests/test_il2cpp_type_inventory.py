@@ -185,10 +185,10 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
             self.assertTrue(fields_by_name["protocolVersion"]["default_value_record_present"])
             self.assertEqual(fields_by_name["protocolVersion"]["default_value_type_index"], 9)
             self.assertEqual(fields_by_name["protocolVersion"]["default_value_data_index"], 3)
-            self.assertFalse(fields_by_name["protocolVersion"]["default_value_type_matches_field_type"])
+            self.assertFalse(fields_by_name["protocolVersion"]["default_value_type_index_matches_field_type_index"])
             self.assertFalse(fields_by_name["token"]["default_value_record_present"])
             self.assertIsNone(fields_by_name["token"]["default_value_type_index"])
-            self.assertIsNone(fields_by_name["token"]["default_value_type_matches_field_type"])
+            self.assertIsNone(fields_by_name["token"]["default_value_type_index_matches_field_type_index"])
             methods_by_name = {
                 item["name"]: item for item in by_name["LoginRequest"]["method_records"]
             }
@@ -207,9 +207,10 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
                 item["name"]: item for item in by_name["NetworkSettings"]["field_records"]
             }
             self.assertTrue(network_fields["HeaderLength"]["default_value_record_present"])
-            self.assertFalse(network_fields["HeaderLength"]["default_value_type_matches_field_type"])
-            self.assertIsNone(network_fields["HeartbeatTimeout"]["default_value_type_matches_field_type"])
-            self.assertTrue(network_fields["MatchingDefault"]["default_value_type_matches_field_type"])
+            self.assertNotIn("default_value_type_matches_field_type", network_fields["HeaderLength"])
+            self.assertFalse(network_fields["HeaderLength"]["default_value_type_index_matches_field_type_index"])
+            self.assertIsNone(network_fields["HeartbeatTimeout"]["default_value_type_index_matches_field_type_index"])
+            self.assertTrue(network_fields["MatchingDefault"]["default_value_type_index_matches_field_type_index"])
             self.assertFalse(network_fields["HeartbeatTimeout"]["default_value_record_present"])
             self.assertTrue(all(item["method_owner_matches"] for item in by_name.values()))
 
