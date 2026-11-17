@@ -4,6 +4,7 @@ import unittest
 
 from tools.aarch64_call_argument_evidence import (
     _decode_move_wide,
+    _decode_sub_immediate,
     _decode_conditional_branch_target,
     _decode_unconditional_branch_target,
     _is_indirect_branch,
@@ -38,6 +39,20 @@ def mov_w(destination, source):
 
 def add_x(register, source, immediate):
     return 0x91000000 | (immediate << 10) | (source << 5) | register
+
+
+def sub_x(register, source, immediate, *, shifted=False):
+    return (
+        0xD1000000 | (int(shifted) << 22) | (immediate << 10)
+        | (source << 5) | register
+    )
+
+
+def sub_w(register, source, immediate, *, shifted=False):
+    return (
+        0x51000000 | (int(shifted) << 22) | (immediate << 10)
+        | (source << 5) | register
+    )
 
 
 def bl(pc, target):
@@ -108,6 +123,60 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
             code, 0x1000, self.targets, target_prefixes=self.prefixes
         )
         self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 4})
+
+    def test_tracks_sub_immediate_before_allowlisted_call(self):
+        code = words(movz_x(1, 9), sub_x(1, 1, 5), bl(0x1008, self.target))
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 4})
+
+    def test_tracks_shifted_sub_immediate(self):
+        code = words(
+            movz_x(1, 0x1004),
+            sub_x(1, 1, 1, shifted=True),
+            bl(0x1008, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 4})
+
+    def test_tracks_32_bit_sub_with_zero_extended_result(self):
+        code = words(movz_w(1, 10), sub_w(1, 1, 6), bl(0x1008, self.target))
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 4})
+
+    def test_unknown_sub_source_invalidates_only_destination(self):
+        code = words(
+            movz_x(1, 9), movz_x(2, 7), sub_x(1, 3, 1),
+            bl(0x100C, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x2": 7})
+
+    def test_sub_wraps_to_register_width_and_reports_only_coarse_class(self):
+        code = words(movz_x(1, 0), sub_x(1, 1, 1), bl(0x1008, self.target))
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes,
+            include_argument_classes=True,
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {})
+        self.assertEqual(
+            result[0]["known_argument_constant_classes"]["x1"],
+            "nonzero_64bit",
+        )
+
+    def test_sub_decoder_excludes_subs_and_stack_register_operands(self):
+        self.assertIsNone(_decode_sub_immediate(sub_x(1, 2, 1) | (1 << 29)))
+        self.assertIsNone(_decode_sub_immediate(sub_x(31, 2, 1)))
+        self.assertIsNone(_decode_sub_immediate(sub_x(1, 31, 1)))
+        self.assertEqual(_decode_sub_immediate(sub_x(1, 2, 1)), (1, 2, 1, (1 << 64) - 1))
+        self.assertEqual(_decode_sub_immediate(sub_w(1, 2, 1)), (1, 2, 1, (1 << 32) - 1))
 
     def test_tracks_movk_and_omits_values_above_public_limit(self):
         code = words(
