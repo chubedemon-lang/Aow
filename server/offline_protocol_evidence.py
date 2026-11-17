@@ -97,7 +97,8 @@ def _contains_network_locator(value):
 
 def _contains_sensitive_material_once(value):
     return (
-        _contains_network_locator(value)
+        not value.isprintable()
+        or _contains_network_locator(value)
         or _ABSOLUTE_PATH.search(value) is not None
         or _PARENT_PATH.search(value) is not None
         or _CREDENTIAL_ASSIGNMENT.search(value) is not None
