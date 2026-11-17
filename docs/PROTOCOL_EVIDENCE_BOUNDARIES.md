@@ -70,6 +70,13 @@ python -m unittest discover -s tests -p 'test_protocol_evidence_gates.py' -v
 python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
+Free-text metadata is screened in its literal form and after up to three
+percent-decoding rounds. If valid percent escapes remain after that bound, the
+validator rejects the value conservatively. This prevents encoded URLs,
+addresses, credentials, absolute paths, traversal segments, and raw-byte
+markers from bypassing the public metadata boundary. This remains a bounded
+guardrail rather than a general-purpose data-loss-prevention scanner.
+
 Synthetic hostile-subclass tests validate only the Python input boundary.
 They do not add native APK observations, packet fixtures, wire semantics,
 handshake/login evidence, or an interoperability claim. Keep the original APK,
