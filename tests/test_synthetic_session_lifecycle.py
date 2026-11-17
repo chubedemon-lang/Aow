@@ -6,6 +6,14 @@ from server.synthetic_session_lifecycle import (
 )
 
 
+class _HostileIdentifier(str):
+    def __len__(self):
+        raise AssertionError("custom string length hook must not execute")
+
+    def __iter__(self):
+        raise AssertionError("custom string iterator must not execute")
+
+
 class SessionLifecycleTests(unittest.TestCase):
     def test_happy_path_and_reentry(self):
         s = SyntheticSession()
@@ -38,6 +46,19 @@ class SessionLifecycleTests(unittest.TestCase):
                 with self.assertRaises(SessionTransitionError):
                     s.select_character(bad)
                 self.assertEqual(s.snapshot.state, SessionState.AUTHENTICATED)
+
+    def test_string_subclass_is_rejected_before_custom_hooks(self):
+        s = SyntheticSession()
+        s.authenticate()
+        with self.assertRaisesRegex(SessionTransitionError, "invalid identifier"):
+            s.select_character(_HostileIdentifier("player_1"))
+        self.assertEqual(s.snapshot.state, SessionState.AUTHENTICATED)
+
+        s.select_character("player_1")
+        with self.assertRaisesRegex(SessionTransitionError, "invalid identifier"):
+            s.join_map(_HostileIdentifier("map_1"))
+        self.assertEqual(s.snapshot.state, SessionState.CHARACTER_READY)
+        self.assertEqual(s.snapshot.player_id, "player_1")
 
     def test_invalid_map_keeps_character_state(self):
         s = SyntheticSession()
