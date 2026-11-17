@@ -66,7 +66,7 @@ class SqliteConnectionBoundaryTests(unittest.TestCase):
         operations = (
             ("character schema", lambda: require_character_schema(connection)),
             ("character lifecycle schema", lambda: require_character_lifecycle_schema(connection)),
-            ("character authorizer", lambda: SqliteCharacterAuthorizer(connection, None)),
+            ("authorizer must support transactional authorization", lambda: SqliteCharacterAuthorizer(connection, None)),
             ("character service", lambda: SqliteAuthorizedCharacterService(connection)),
             ("player state service", lambda: SqliteAuthorizedPlayerStateService(connection)),
             ("map position service", lambda: SqliteAuthorizedMapPositionService(connection)),
