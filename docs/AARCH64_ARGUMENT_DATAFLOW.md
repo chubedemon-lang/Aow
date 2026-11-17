@@ -20,10 +20,14 @@ path of a conditional branch remains reachable. Bytes after an unconditional
 branch or return are not analyzed unless another in-window branch reaches
 them.
 
-The pass propagates only the supported MOVZ/MOVN/MOVK, unshifted
-64-bit/32-bit MOV-register alias, and ADD (immediate) operations. Unknown
-instructions clear the entire abstract register state. A call clears the
-caller-saved registers modeled by this pass.
+The pass propagates the supported MOVZ/MOVN/MOVK, unshifted
+64-bit/32-bit MOV-register alias, ADD (immediate), and unflagged SUB
+(immediate) operations. ADD/SUB forms using register 31 as SP, and SUBS
+flag-setting forms, are not modeled. W-register arithmetic is masked to 32
+bits (and therefore zero-extends when later observed as an X-register value);
+X-register arithmetic is masked to 64 bits. An unknown source invalidates only
+the arithmetic destination. Unknown instructions clear the entire abstract
+register state. A call clears the caller-saved registers modeled by this pass.
 
 Constants cross a block boundary only when the destination block has exactly
 one reachable predecessor whose start precedes it in the window. Multi-predecessor
