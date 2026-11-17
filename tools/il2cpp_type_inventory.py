@@ -225,7 +225,8 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
                 "default_value_type_index": (
                     default_value["type_index"] if default_value is not None else None
                 ),
-                "default_value_type_matches_field_type": (
+                # Exact metadata index identity only; this is not semantic type resolution.
+                "default_value_type_index_matches_field_type_index": (
                     default_value["type_index"] == field_type_index
                     if default_value is not None else None
                 ),
@@ -335,6 +336,7 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
         "observed_type_definitions": summaries,
         "interpretation": (
             "Static metadata type/field/method associations and raw type indexes only. "
+            "Default-value type comparison reports exact index equality, not semantic type equivalence. "
             "Native type-index resolution, default-value decoding, method bodies, "
             "serialization order, numeric wire message IDs, framing, transport "
             "activation, and APK compatibility are not established."
