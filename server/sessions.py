@@ -3,6 +3,7 @@
 Session tokens are server-issued, opaque, short-lived and never persisted.
 """
 from contextlib import closing
+import math
 import secrets
 import threading
 import time
@@ -16,18 +17,57 @@ class SessionManager:
     def __init__(self, ttl_seconds=900, clock=None):
         if type(ttl_seconds) is not int or ttl_seconds < 1:
             raise ValueError("invalid ttl")
+        if clock is not None and not callable(clock):
+            raise ValueError("clock must be callable")
         self.ttl_seconds = ttl_seconds
         self.clock = clock if clock is not None else time.monotonic
         self._sessions = {}
+        self._last_clock_value = None
         self._lock = threading.RLock()
+
+    def _now(self):
+        """Read a finite, non-negative, nondecreasing built-in clock value.
+
+        All callers hold _lock. Rejecting rollback prevents a faulty injected
+        clock from extending sessions or making expired sessions appear valid.
+        """
+        try:
+            now = self.clock()
+        except Exception as exc:
+            raise SessionError("session clock failed") from exc
+
+        if type(now) is int:
+            valid = now >= 0
+        elif type(now) is float:
+            valid = math.isfinite(now) and now >= 0
+        else:
+            valid = False
+        if not valid:
+            raise SessionError(
+                "session clock must return a finite non-negative built-in number"
+            )
+        if (
+            self._last_clock_value is not None
+            and now < self._last_clock_value
+        ):
+            raise SessionError("session clock moved backwards")
+        self._last_clock_value = now
+        return now
 
     def issue(self, account_id):
         """Operator/test-only issuance after independently verified authentication."""
         if type(account_id) is not int or account_id < 1:
             raise ValueError("invalid account id")
         with self._lock:
+            now = self._now()
+            try:
+                expires = now + self.ttl_seconds
+            except OverflowError as exc:
+                raise SessionError("session expiry is not representable") from exc
+            if type(expires) is float and not math.isfinite(expires):
+                raise SessionError("session expiry is not finite")
             token = secrets.token_urlsafe(32)
-            self._sessions[token] = (account_id, self.clock() + self.ttl_seconds)
+            self._sessions[token] = (account_id, expires)
             return token
 
     def resolve(self, token):
@@ -38,7 +78,7 @@ class SessionManager:
             if record is None:
                 raise SessionError("invalid session")
             account_id, expires = record
-            if self.clock() >= expires:
+            if self._now() >= expires:
                 del self._sessions[token]
                 raise SessionError("expired session")
             return account_id
@@ -71,7 +111,7 @@ class SessionManager:
 
     def purge_expired(self):
         with self._lock:
-            now = self.clock()
+            now = self._now()
             expired = [token for token, (_, expiry) in self._sessions.items() if now >= expiry]
             for token in expired:
                 del self._sessions[token]
