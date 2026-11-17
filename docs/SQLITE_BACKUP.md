@@ -28,6 +28,18 @@ only permissions on supported platforms. The destination filesystem must
 support hard links; otherwise the command fails closed. Do not work around
 that failure by copying over an existing database.
 
+## Verify a copied backup
+
+After copying a backup to another disk or machine, verify it in read-only mode
+before any restore attempt:
+
+```sh
+python -m tools.sqlite_backup --verify-only ./backups/aow_mock-before-change.sqlite3
+```
+
+This reopens the file with SQLite `mode=ro`, runs the same integrity and
+foreign-key checks, and prints aggregate metadata. It does not modify the file.
+
 ## Rehearse a restore
 
 Never restore over a live database. Copy the backup to a new, empty working
