@@ -120,6 +120,26 @@ def _decode_add_immediate(word):
     return destination, source, immediate, width_mask
 
 
+def _decode_sub_immediate(word):
+    """Decode unflagged SUB (immediate) on general W/X registers only."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    # SUB (immediate): sf may select W/X, op=1, S=0. Exclude SUBS.
+    if (word & 0x7F800000) != 0x51000000:
+        return None
+    is_64 = bool(word & 0x80000000)
+    destination = word & 0x1F
+    source = (word >> 5) & 0x1F
+    # Rn/Rd=31 denote SP for this unflagged form; SP is not a constant.
+    if destination == 31 or source == 31:
+        return None
+    immediate = (word >> 10) & 0xFFF
+    if word & (1 << 22):
+        immediate <<= 12
+    width_mask = (1 << (64 if is_64 else 32)) - 1
+    return destination, source, immediate, width_mask
+
+
 def _decode_bl_target(word, pc):
     if (word & 0xFC000000) != 0x94000000:
         return None
@@ -400,6 +420,17 @@ def summarize_small_argument_constants(
                 if source in registers:
                     registers[destination] = (
                         registers[source] + immediate
+                    ) & width_mask
+                else:
+                    registers.pop(destination, None)
+                continue
+
+            sub = _decode_sub_immediate(word)
+            if sub is not None:
+                destination, source, immediate, width_mask = sub
+                if source in registers:
+                    registers[destination] = (
+                        registers[source] - immediate
                     ) & width_mask
                 else:
                     registers.pop(destination, None)
