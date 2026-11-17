@@ -32,6 +32,9 @@ from tools.il2cpp_codegen_inventory import (
 from tools.aarch64_call_argument_evidence import (
     summarize_small_argument_constants,
 )
+from tools.aarch64_memory_access_evidence import (
+    summarize_control_flow_memory_accesses,
+)
 from tools.aarch64_delegate_target_evidence import (
     summarize_delegate_constructor_argument_shape,
     summarize_delegate_method_pointer_arguments,
@@ -264,6 +267,9 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "entry_window_kind": "next_distinct_executable_entry_in_section",
             "entry_window_bytes": window_bytes,
             "entry_window_truncated": truncated,
+            "cfg_memory_access_observations": (
+                summarize_control_flow_memory_accesses(code, target)
+            ),
             **direct,
             **indirect,
             "linear_window_small_argument_observations": (
@@ -314,12 +320,14 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         "packet_bytes_emitted": False,
         "interpretation": (
             "Aggregate AArch64 B/BL and conservative relocation-backed "
-            "ADRP/ADD/LDR/BLR-or-BR callsite evidence from bounded native "
-            "entry windows. A window ends at the next distinct executable "
-            "method entry in the same section and may contain multiple control "
-            "flow paths. Counts do not establish execution order, reachability, "
-            "field meaning, packet framing, compression activation, message "
-            "IDs, handshake semantics or APK/server compatibility."
+            "ADRP/ADD/LDR/BLR-or-BR callsite evidence plus bounded CFG-scoped "
+            "integer memory-access observations from native entry windows. "
+            "Memory-access reachability is structural only: both conditional "
+            "outcomes are assumed and path conditions are not evaluated. "
+            "Windows may contain shared or cold code. These observations do not "
+            "establish runtime execution, base-register provenance, managed-field "
+            "identity, packet framing, compression activation, message IDs, "
+            "handshake semantics or APK/server compatibility."
         ),
     }
 

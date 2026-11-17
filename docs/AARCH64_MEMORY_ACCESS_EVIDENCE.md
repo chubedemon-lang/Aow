@@ -1,44 +1,47 @@
 # AArch64 memory-access evidence (tooling only)
 
-The native network evidence report now includes a bounded summary of common
-integer LDR/STR instructions using unsigned scaled-immediate addressing.
-The scanner is intended to help compare memory-access shapes in the mapped
-NetworkSettings initializer, Receiver.Cycle, Sender.Cycle, and selected
-serializer entry windows during a future authorized offline APK pass.
+The native network callsite report now includes a bounded, redacted summary of
+integer LDR/STR instructions using unsigned scaled-immediate addressing. Each
+event reports an instruction-relative index, basic-block index, load/store
+direction, access width, base/target register names, encoded byte displacement,
+and whether its block is structurally reachable in the supported bounded CFG.
 
-## Reported fields
+## Analysis behavior
 
-Each reported access contains only:
+The flat helper `summarize_unsigned_immediate_memory_accesses` remains available
+for a linear scan. The native callsite report uses
+`summarize_control_flow_memory_accesses`, which reuses the repository's
+bounded AArch64 branch builder:
 
-- relative instruction_index within the bounded method window;
-- operation (load or store);
-- access width in bytes (1, 2, 4, or 8);
-- base and target register names;
-- the encoded unsigned byte displacement from the base register.
+- B.cond, CBZ/CBNZ and TBZ/TBNZ contribute both in-window outcomes;
+- direct B contributes only its in-window target;
+- recognized indirect branches and returns terminate the current path;
+- accesses in blocks not reachable from the entry block are marked
+  `statically_reachable: false`;
+- the report is capped at 128 accesses per method window.
 
-The summary is capped at 128 entries per method window. It does not emit native
-addresses or raw instruction words.
+The CFG summary evaluates no condition flags or register predicates. External
+branch targets are not followed, unknown branch encodings are not decoded, and
+the graph is not a complete disassembly or execution trace. Structural
+reachability is not proof that an instruction executes at runtime.
 
 ## Interpretation limits
 
-This is a linear instruction scan, not a control-flow graph or execution trace.
-A reported instruction can be in a cold or unreachable branch. The analyzer
-does not resolve the base register to an object, static-fields block, stack
+The base register is not resolved to an object, static-fields block, stack
 frame, heap allocation, or data cell. The displacement is **not** a managed
-field offset. It does not decode field metadata, static-field layout, class
-initialization, relocation-backed pointer provenance, or values loaded/stored.
+field offset. The summary does not decode IL2CPP field metadata, static-field
+layout, class initialization, relocation-backed pointer provenance, or values
+loaded/stored. SIMD/FP, sign-extending, unscaled, pre/post-indexed, pair, atomic
+and other memory forms are omitted.
 
-Only unsigned-immediate integer load/store encodings are included. SIMD/FP,
-sign-extending, unscaled, pre/post-indexed, pair, atomic and other forms are
-omitted. Absence from the report does not mean a method has no memory access.
+Synthetic instruction-vector tests validate the decoder, CFG reachability,
+report bounds and redacted output only. No APK analysis is performed by tests.
+Do not infer that an access belongs to `NetworkSettings.HeaderLength`, and do
+not promote the four-byte receive-length candidate to a verified frame
+contract from this report.
 
-Synthetic tests validate instruction decoding and report boundaries only.
-No APK analysis is performed by the tests. Do not infer that an access belongs
-to NetworkSettings.HeaderLength, and do not use this report to promote the
-four-byte receive-length candidate to a verified frame contract.
-
-The next offline analysis step remains to correlate the same base/data-flow
-origin and access displacement between NetworkSettings initialization and
-Receiver.Cycle, then corroborate the interpretation with an authorized,
+The next offline analysis step remains to correlate a common base/data-flow
+origin and access displacement between `NetworkSettings` initialization and
+`Receiver.Cycle`, then corroborate the interpretation with an authorized,
 redacted client-side byte fixture or local runtime trace. Keep the APK, native
 assets and all private fixture bytes outside this public repository.

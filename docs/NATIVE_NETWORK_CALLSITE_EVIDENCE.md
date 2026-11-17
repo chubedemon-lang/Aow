@@ -426,25 +426,31 @@ The helper-boundary parser is documented in AARCH64_EH_FRAME_INDEX.md and is
 covered by synthetic-only tests.
 
 
-## Unsigned-immediate memory-access summaries — tooling only
+## CFG-scoped memory-access observations — tooling only
 
-The native callsite report now includes a bounded, redacted summary of integer
-LDR/STR instructions using unsigned scaled-immediate addressing for selected
-network and login/session serializer entry windows. Each event reports a
-relative instruction index, load/store direction, access width, base/target
-register names and encoded byte displacement. The per-method report is capped
-at 128 events and emits no native address or instruction word.
+The native callsite report now includes `cfg_memory_access_observations` for
+each selected method entry window. It decodes a bounded subset of integer
+LDR/STR unsigned-scaled-immediate instructions and annotates each event with
+its relative instruction index, basic-block index, access width, registers,
+encoded displacement and structural reachability from the entry block.
 
-This is a linear scan of a bounded entry window, not a control-flow graph or
-execution trace. The base register is not resolved, so a displacement cannot
-be identified as a managed field offset or attributed to a static field. Stack,
-object, static, heap and unrelated memory accesses may all appear. SIMD/FP,
-sign-extending, unscaled, pre/post-indexed, pair and atomic forms are omitted.
+The CFG builder recognizes a limited branch subset. Both outcomes of a
+conditional branch are assumed; no flags or register predicates are evaluated.
+Direct unconditional branches follow only an in-window target, while recognized
+indirect branches and returns terminate the path. Unknown branch encodings and
+external targets are not fully resolved. This is a bounded structural graph,
+not a complete disassembler or execution trace.
 
-Synthetic instruction-vector tests validate only the decoder, bounds and
-redacted report shape. No APK pass was run for this tooling change. In
-particular, no new evidence links an access to NetworkSettings.HeaderLength;
-the four-byte receive-length candidate, complete sender/receiver framing,
-compression placement, handshake and LoginRequest field order remain
-unverified. The APK adapter stays disabled pending a provenance-reviewed
-authorized client-side fixture or local runtime trace.
+The base register remains unresolved. An encoded displacement cannot be
+identified as a managed field offset or attributed to a static field. The
+summary does not establish object/static-field provenance, runtime values,
+field identity, or whether a path executes. Only unsigned-immediate integer
+load/store forms are included; SIMD/FP, sign-extending, unscaled,
+pre/post-indexed, pair and atomic forms remain omitted.
+
+Synthetic instruction-vector tests validate the decoder and graph bookkeeping
+only. No new APK analysis or protocol finding is implied. In particular, this
+does not link any access to `NetworkSettings.HeaderLength`; the receive-length
+candidate, complete framing, compression placement, handshake and LoginRequest
+field order remain unverified. The real APK adapter stays disabled pending a
+provenance-reviewed authorized client-side fixture or local runtime trace.
