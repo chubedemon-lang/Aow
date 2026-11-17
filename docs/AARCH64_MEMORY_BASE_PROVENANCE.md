@@ -9,8 +9,11 @@ relocation slots, relocation targets, or raw instruction words.
 ## Supported provenance
 
 - ADRP creates an adrp_derived_address abstract value.
-- 64-bit ADD (immediate) preserves the address and records the latest
+- 64-bit ADD (immediate) preserves an existing address and records the latest
   instruction-relative definition.
+- 64-bit `ADD Xd, SP, #imm` marks the destination as `stack_pointer`; later
+  64-bit ADD and MOV operations preserve that symbolic class. The concrete
+  stack address and displacement are not modeled.
 - The unshifted 64-bit MOV register alias copies the abstract value.
 - A 64-bit unsigned-offset LDR can create a relocation_loaded_pointer only
   when its effective slot exactly matches a caller-supplied
@@ -50,7 +53,9 @@ runtime trace. It does not model register spills, stack slots, pair/unscaled/
 pre/post-indexed/SIMD/atomic memory operations, arbitrary loads, class
 initialization, IL2CPP static-field layout or arbitrary relocation types.
 Unknown instructions intentionally discard state. A relocation-loaded pointer
-does not identify the pointed-to managed object or field.
+does not identify the pointed-to managed object or field. Stack-pointer-derived
+values are symbolic only and are never used for absolute relocation-slot
+matching.
 
 Synthetic tests validate instruction decoding, conservative CFG state flow,
 redaction and resource limits only. They do not analyze the APK. Do not infer
