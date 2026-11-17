@@ -231,14 +231,17 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         if encoded_token in encoded_values:
             encoded_method_usage_targets.setdefault(encoded_token, []).append(target)
 
-    method_targets = _all_method_targets(
+    # _all_method_targets returns defaultdict(list). Materialize its
+    # validated metadata associations as a plain dict before crossing the
+    # strict AArch64 analyzer input boundary; do not expose __missing__ hooks.
+    method_targets = dict(_all_method_targets(
         metadata,
         info,
         tables,
         relocations,
         executable,
         direct_targets | indirect_targets,
-    )
+    ))
     # A delegate's method argument can point at an entrypoint that is not
     # itself called from the selected windows. Build a private lookup for all
     # validated metadata-backed entrypoints; only labels are emitted.

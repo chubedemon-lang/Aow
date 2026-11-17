@@ -48,7 +48,7 @@ def _method_name_from_label(label):
 
 def _ordered_method_labels(labels):
     """Preserve association multiplicity; reject unordered or malformed input."""
-    if not isinstance(labels, (tuple, list)):
+    if type(labels) not in (tuple, list):
         return []
     if any(_method_name_from_label(label) is None for label in labels):
         return []
@@ -319,18 +319,21 @@ def summarize_small_argument_constants(
     """
     if type(include_argument_classes) is not bool:
         raise ValueError("include_argument_classes must be bool")
-    if not isinstance(code, bytes) or len(code) % 4:
+    if type(code) is not bytes:
+        raise ValueError("AArch64 code window must be exact built-in bytes")
+    if len(code) % 4:
         raise ValueError("AArch64 code window must be a multiple of four bytes")
     if len(code) > _MAX_CODE_WINDOW_BYTES:
         raise ValueError("AArch64 code window exceeds the 64 KiB analysis limit")
     if type(start_va) is not int or start_va < 0 or start_va % 4:
         raise ValueError("AArch64 code window start must be an aligned address")
-    if not isinstance(method_targets, dict):
-        raise ValueError("method_targets must be a mapping")
-    if (not isinstance(target_prefixes, (tuple, list, set, frozenset))
+    if (type(method_targets) is not dict
+            or any(type(target) is not int for target in method_targets)):
+        raise ValueError("method_targets must be a built-in dict with exact integer keys")
+    if (type(target_prefixes) not in (tuple, list, set, frozenset)
             or not target_prefixes
-            or any(not isinstance(item, str) or not item for item in target_prefixes)):
-        raise ValueError("target_prefixes must be a non-empty collection of strings")
+            or any(type(item) is not str or not item for item in target_prefixes)):
+        raise ValueError("target_prefixes must be a non-empty built-in collection of strings")
     if not code:
         return []
 

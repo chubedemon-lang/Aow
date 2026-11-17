@@ -97,6 +97,38 @@ def words(*values):
     return b"".join(struct.pack("<I", value) for value in values)
 
 
+class _HostileBytes(bytes):
+    def __len__(self):
+        raise AssertionError("bytes subclass hook must not run")
+
+
+class _HostileTargets(dict):
+    def get(self, *args, **kwargs):
+        raise AssertionError("dict subclass hook must not run")
+
+
+class _HostileLabels(list):
+    def __iter__(self):
+        raise AssertionError("list subclass hook must not run")
+
+
+class _HostilePrefixes(list):
+    def __iter__(self):
+        raise AssertionError("prefix collection hook must not run")
+
+
+class _HostilePrefix(str):
+    def __bool__(self):
+        raise AssertionError("string subclass hook must not run")
+
+
+class _HostileTargetAddress(int):
+    __hash__ = int.__hash__
+
+    def __eq__(self, other):
+        raise AssertionError("integer subclass hook must not run")
+
+
 class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.target = 0x4000
@@ -645,6 +677,51 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
                 self.assertFalse(_is_indirect_branch(value))
                 self.assertFalse(_is_indirect_call(value))
 
+
+    def test_rejects_bytes_subclass_before_custom_length_hook(self):
+        code = _HostileBytes(words(movz_x(1, 4), bl(0x1004, self.target)))
+        with self.assertRaisesRegex(ValueError, "exact built-in bytes"):
+            summarize_small_argument_constants(
+                code, 0x1000, self.targets, target_prefixes=self.prefixes
+            )
+
+    def test_rejects_dict_subclass_before_custom_lookup_hook(self):
+        targets = _HostileTargets(self.targets)
+        with self.assertRaisesRegex(ValueError, "built-in dict"):
+            summarize_small_argument_constants(
+                words(bl(0x1000, self.target)), 0x1000,
+                targets, target_prefixes=self.prefixes,
+            )
+
+    def test_rejects_integer_subclass_method_target_keys(self):
+        targets = {_HostileTargetAddress(self.target): [self.label]}
+        with self.assertRaisesRegex(ValueError, "exact integer keys"):
+            summarize_small_argument_constants(
+                words(bl(0x1000, self.target)), 0x1000,
+                targets, target_prefixes=self.prefixes,
+            )
+
+    def test_ignores_hostile_label_list_subclass_without_iterating_it(self):
+        targets = {self.target: _HostileLabels([self.label])}
+        result = summarize_small_argument_constants(
+            words(bl(0x1000, self.target)), 0x1000,
+            targets, target_prefixes=self.prefixes,
+        )
+        self.assertEqual(result, [])
+
+    def test_rejects_hostile_prefix_collection_before_iteration(self):
+        with self.assertRaisesRegex(ValueError, "built-in collection"):
+            summarize_small_argument_constants(
+                b"", 0x1000, self.targets,
+                target_prefixes=_HostilePrefixes(self.prefixes),
+            )
+
+    def test_rejects_string_subclass_prefix_before_custom_truthiness(self):
+        with self.assertRaisesRegex(ValueError, "built-in collection"):
+            summarize_small_argument_constants(
+                b"", 0x1000, self.targets,
+                target_prefixes=(_HostilePrefix(self.prefixes[0]),),
+            )
 
 if __name__ == "__main__":
     unittest.main()
