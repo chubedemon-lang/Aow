@@ -504,6 +504,10 @@ jobs:
             server/sqlite_authorized_player_bootstrap_service.py \
             server/sqlite_authorized_world_state_service.py \
             server/sqlite_character_authorizer.py \
-            server/sqlite_authorized_transaction.py
+            server/sqlite_authorized_transaction.py \
+            server/sqlite_inventory_store.py \
+            server/sqlite_map_position_store.py \
+            server/sqlite_shop_store.py \
+            server/sqlite_reward_ledger.py
       - name: SQLite authorization trust-boundary regression tests
         run: python -m unittest discover -s tests -p 'test_sqlite_connection_boundaries.py' -v
