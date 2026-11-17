@@ -61,7 +61,7 @@ class SqliteAuthorizedWorldStateService:
 
     def __init__(self, connection: sqlite3.Connection, *,
                  ttl_seconds: int = 900, clock=None):
-        if not isinstance(connection, sqlite3.Connection):
+        if type(connection) is not sqlite3.Connection:
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")
