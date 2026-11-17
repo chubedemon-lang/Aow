@@ -6,6 +6,7 @@ authorized offline work and a sanitized local reproduction is recorded.
 Never commit private capture contents, endpoints or credentials.
 """
 import re
+from urllib.parse import unquote
 
 from server.protocol_evidence_registry import ALLOWED_TOPICS, VERIFIED_METHODS
 
@@ -76,6 +77,7 @@ _PACKET_BYTES = re.compile(
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.IGNORECASE
 )
+_PERCENT_ESCAPE = re.compile(r"%[0-9a-f]{2}", re.IGNORECASE)
 
 
 class EvidenceError(ValueError):
@@ -93,18 +95,46 @@ def _contains_network_locator(value):
     return False
 
 
+def _contains_sensitive_material_once(value):
+    return (
+        _contains_network_locator(value)
+        or _ABSOLUTE_PATH.search(value) is not None
+        or _PARENT_PATH.search(value) is not None
+        or _CREDENTIAL_ASSIGNMENT.search(value) is not None
+        or _BEARER_VALUE.search(value) is not None
+        or _PACKET_BYTES.search(value) is not None
+        or _PRIVATE_KEY.search(value) is not None
+    )
+
+
+def _contains_sensitive_material(value):
+    """Screen literal and bounded percent-decoded public metadata.
+
+    Downstream viewers may decode URL-style escapes before displaying or
+    processing metadata. Check the original text and up to three decoding
+    rounds. If valid escapes remain after that bound, reject conservatively
+    rather than allowing deeper nested encoding to hide sensitive material.
+    """
+    candidate = value
+    for _ in range(3):
+        if _contains_sensitive_material_once(candidate):
+            return True
+        decoded = unquote(candidate)
+        if decoded == candidate:
+            return False
+        candidate = decoded
+    return (
+        _contains_sensitive_material_once(candidate)
+        or _PERCENT_ESCAPE.search(candidate) is not None
+    )
+
+
 def _validate_public_text(key, value):
     if type(value) is not str or not value.strip() or len(value) > 512:
         raise EvidenceError("invalid metadata field: " + key)
     if not value.isprintable():
         raise EvidenceError("control character in metadata")
-    if (_contains_network_locator(value)
-            or _ABSOLUTE_PATH.search(value)
-            or _PARENT_PATH.search(value)
-            or _CREDENTIAL_ASSIGNMENT.search(value)
-            or _BEARER_VALUE.search(value)
-            or _PACKET_BYTES.search(value)
-            or _PRIVATE_KEY.search(value)):
+    if _contains_sensitive_material(value):
         raise EvidenceError(
             "sensitive endpoint, path, credential, or raw-byte marker in " + key
         )
