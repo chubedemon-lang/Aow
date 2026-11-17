@@ -30,7 +30,7 @@ class MovementState:
     def __init__(self, map_id: int, start: Position, max_step: float) -> None:
         if type(map_id) is not int or map_id < 0:
             raise MovementError("invalid map_id")
-        if not isinstance(start, Position):
+        if type(start) is not Position:
             raise MovementError("invalid start")
         if type(max_step) not in (int, float) or not isfinite(max_step) or max_step <= 0:
             raise MovementError("invalid max_step")
@@ -47,7 +47,7 @@ class MovementState:
             raise MovementError("map mismatch")
         if type(tick) is not int or tick < 0 or tick <= self.last_tick:
             raise MovementError("tick must increase")
-        if not isinstance(target, Position):
+        if type(target) is not Position:
             raise MovementError("invalid target")
         if hypot(target.x - self.position.x, target.y - self.position.y) > self.max_step:
             raise MovementError("step exceeds local limit")
