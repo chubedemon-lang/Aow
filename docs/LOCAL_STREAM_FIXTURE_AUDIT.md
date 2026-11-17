@@ -19,7 +19,9 @@ The schema is intentionally narrow:
   `authorized_local_packet_fixture`.
 - `streams.server_to_client` and `streams.client_to_server`: ordered arrays
   of non-empty hexadecimal chunks for each already-reassembled TCP byte
-  stream. These are stream chunks, not individual PCAP packet payloads.
+  stream. Both arrays must contain at least one chunk; a one-way capture is
+  incomplete and is rejected rather than presented as a bidirectional exchange.
+  These are stream chunks, not individual PCAP packet payloads.
 - Do not include endpoint addresses, ports, timestamps, usernames, tokens, or
   other identity fields.
 
