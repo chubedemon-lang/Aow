@@ -46,6 +46,18 @@ def add_x(destination, source, immediate):
     return 0x91000000 | (immediate << 10) | (source << 5) | destination
 
 
+def sub_x(destination, source, immediate):
+    return 0xD1000000 | (immediate << 10) | (source << 5) | destination
+
+
+def subs_x(destination, source, immediate):
+    return 0xF1000000 | (immediate << 10) | (source << 5) | destination
+
+
+def sub_w(destination, source, immediate):
+    return 0x51000000 | (immediate << 10) | (source << 5) | destination
+
+
 def mov_x(destination, source):
     return 0xAA0003E0 | (source << 16) | destination
 
@@ -138,6 +150,79 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
         self.assertEqual(access["base_definition_instruction_index"], 1)
         self.assertEqual(access["base_derivation_depth"], 3)
         self.assertEqual(result["memory_accesses_with_known_base_provenance"], 1)
+
+    def test_tracks_sub_immediate_from_adr_derived_address(self):
+        start = 0x5300
+        target = 0x5600
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(adr(8, start, target), sub_x(9, 8, 0x20), str_w(0, 9, 1)),
+            start,
+        )
+        access = result["memory_accesses"][0]
+        self.assertEqual(access["base_provenance"], "adr_derived_address")
+        self.assertEqual(access["base_definition_instruction_index"], 1)
+        self.assertEqual(access["base_derivation_depth"], 2)
+
+    def test_tracks_shifted_sub_immediate_from_adrp_address(self):
+        start = 0x5400
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(
+                adrp(8, start, 0x9000),
+                sub_x(9, 8, 1 << 12),
+                str_w(0, 9),
+            ),
+            start,
+        )
+        access = result["memory_accesses"][0]
+        self.assertEqual(access["base_provenance"], "adrp_derived_address")
+        self.assertEqual(access["base_definition_instruction_index"], 1)
+        self.assertEqual(access["base_derivation_depth"], 2)
+
+    def test_tracks_sub_from_stack_pointer_as_symbolic(self):
+        start = 0x5500
+        words = (
+            sub_x(8, 31, 0x30),
+            add_x(9, 8, 0x10),
+            mov_x(10, 9),
+            str_w(0, 10),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words), start
+        )
+        access = result["memory_accesses"][0]
+        self.assertEqual(access["base_register"], "x10")
+        self.assertEqual(access["base_provenance"], "stack_pointer")
+        self.assertEqual(access["base_definition_instruction_index"], 2)
+        self.assertEqual(access["base_derivation_depth"], 3)
+
+    def test_sub_underflow_invalidates_only_destination(self):
+        start = 0x5600
+        words = (
+            adr(8, start, start + 0x10),
+            sub_x(9, 8, 0x20),
+            str_w(0, 9),
+            str_w(0, 8),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words), start
+        )
+        self.assertEqual(result["memory_accesses"][0]["base_provenance"], "unknown")
+        self.assertEqual(
+            result["memory_accesses"][1]["base_provenance"], "adr_derived_address"
+        )
+
+    def test_subs_and_32_bit_sub_do_not_preserve_pointer_state(self):
+        start = 0x5700
+        prefix = (adr(8, start, start + 0x100),)
+        for arithmetic in (subs_x(9, 8, 0x10), sub_w(9, 8, 0x10)):
+            with self.subTest(arithmetic=hex(arithmetic)):
+                result = summarize_control_flow_memory_base_provenance(
+                    code_bytes(*(prefix + (arithmetic, str_w(0, 9)))),
+                    start,
+                )
+                self.assertEqual(
+                    result["memory_accesses"][0]["base_provenance"], "unknown"
+                )
 
     def test_tracks_relocation_backed_pointer_load_without_emitting_addresses(self):
         start = 0x1000
