@@ -41,7 +41,9 @@ class SyntheticSession:
 
     @staticmethod
     def _identifier(value):
-        if not isinstance(value, str) or not 1 <= len(value) <= 128:
+        # Exact built-in strings only: a str subclass can override __len__ or
+        # iteration hooks and must be rejected before any such hook executes.
+        if type(value) is not str or not 1 <= len(value) <= 128:
             raise SessionTransitionError("invalid identifier")
         if not all(c.isascii() and (c.isalnum() or c in "_-") for c in value):
             raise SessionTransitionError("invalid identifier")

@@ -3,6 +3,22 @@ import unittest
 from server.synthetic_movement import MovementError, MovementState, Position
 
 
+class _HostilePosition(Position):
+    def __getattribute__(self, name):
+        if name in {"x", "y"}:
+            raise AssertionError("custom coordinate accessor must not execute")
+        return super().__getattribute__(name)
+
+
+def hostile_position():
+    # Bypass the subclass's inherited dataclass initializer so the test can
+    # prove that MovementState rejects the type before reading coordinates.
+    value = object.__new__(_HostilePosition)
+    object.__setattr__(value, "x", 1)
+    object.__setattr__(value, "y", 1)
+    return value
+
+
 class MovementTests(unittest.TestCase):
     def make_actor(self):
         return MovementState(2, Position(0, 0), 5)
@@ -32,6 +48,16 @@ class MovementTests(unittest.TestCase):
         with self.assertRaises(MovementError):
             a.move(2, 0, Position(6, 0))
         self.assertEqual(a.move(2, 0, Position(5, 0)), Position(5, 0))
+
+    def test_position_subclass_rejected_before_coordinate_access(self):
+        hostile = hostile_position()
+        with self.assertRaisesRegex(MovementError, "invalid start"):
+            MovementState(2, hostile, 5)
+
+        actor = self.make_actor()
+        with self.assertRaisesRegex(MovementError, "invalid target"):
+            actor.move(2, 0, hostile)
+        self.assertEqual((actor.position, actor.last_tick), (Position(0, 0), -1))
 
     def test_nonfinite_coordinates_and_invalid_constructor(self):
         for x in (float("nan"), float("inf"), "1", True):
