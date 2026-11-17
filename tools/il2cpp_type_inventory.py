@@ -225,7 +225,7 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
                 "default_value_type_index": (
                     default_value["type_index"] if default_value is not None else None
                 ),
-                "default_value_type_matches_field_type": (
+                "default_value_type_index_matches_field_type_index": (
                     default_value["type_index"] == field_type_index
                     if default_value is not None else None
                 ),
