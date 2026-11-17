@@ -89,8 +89,8 @@ class SqliteSessionStore:
         return hashlib.sha256(token.encode("ascii")).digest()
 
     @staticmethod
-    def _validated_stored_session_row(row):
-        """Reject corrupted persisted identity/expiry fields without coercion."""
+    def _validated_stored_session_row(row, now=None):
+        """Reject corrupt or not-yet-valid persisted sessions without coercion."""
         if row is None:
             return None
         account_id, created_at, expires_at = row
@@ -108,7 +108,8 @@ class SqliteSessionStore:
         if (not math.isfinite(created) or created < 0
                 or not math.isfinite(expiry) or expiry <= created
                 or not math.isfinite(latest_expiry) or latest_expiry <= created
-                or expiry > latest_expiry):
+                or expiry > latest_expiry
+                or (now is not None and created > now)):
             raise SessionError("invalid session")
         return account_id, expiry
 
@@ -164,7 +165,7 @@ class SqliteSessionStore:
                 (digest,),
             ).fetchone()
             if row is not None:
-                stored_account_id, expires_at = self._validated_stored_session_row(row)
+                stored_account_id, expires_at = self._validated_stored_session_row(row, now)
                 if now >= expires_at:
                     self.db.execute(
                         "DELETE FROM durable_sessions WHERE token_hash=?", (digest,)
@@ -195,7 +196,7 @@ class SqliteSessionStore:
         ).fetchone()
         if row is None:
             raise SessionError("invalid session")
-        account_id, expires_at = self._validated_stored_session_row(row)
+        account_id, expires_at = self._validated_stored_session_row(row, now)
         if now >= expires_at:
             raise SessionError("expired session")
         return account_id
