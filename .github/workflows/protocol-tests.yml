@@ -73,6 +73,9 @@ on:
       - 'docs/OFFLINE_PACKET_FIXTURE_VALIDATION.md'
       - 'server/offline_evidence_validation.py'
       - 'tests/test_offline_evidence_validation.py'
+      - 'tools/protocol_fixture_audit.py'
+      - 'tests/test_protocol_fixture_audit.py'
+      - 'docs/LOCAL_STREAM_FIXTURE_AUDIT.md'
       - 'docs/TRANSPORT_EVIDENCE_GATE.md'
       - 'docs/PROTOCOL.md'
       - 'server/sqlite_reward_ledger.py'
@@ -459,3 +462,18 @@ jobs:
         run: python -m py_compile tools/aarch64_eh_frame_index.py
       - name: AArch64 FDE index tests (synthetic headers only)
         run: python -m unittest discover -s tests -p 'test_aarch64_eh_frame_index.py' -v
+
+  private-stream-fixture-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile private stream fixture audit tool
+        run: python -m py_compile tools/protocol_fixture_audit.py
+      - name: Private stream fixture audit tests (synthetic streams only)
+        run: python -m unittest discover -s tests -p 'test_protocol_fixture_audit.py' -v
