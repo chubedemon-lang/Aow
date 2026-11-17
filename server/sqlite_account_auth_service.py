@@ -56,7 +56,7 @@ class SqliteAccountAuthService:
                  iterations: int = _DEFAULT_ITERATIONS,
                  ttl_seconds: int = 900, clock=None,
                  rate_limiter: SqliteAuthRateLimiter | None = None):
-        if not isinstance(connection, sqlite3.Connection):
+        if type(connection) is not sqlite3.Connection:
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")
@@ -75,7 +75,7 @@ class SqliteAccountAuthService:
             ) from exc
 
         if rate_limiter is not None and (
-                not isinstance(rate_limiter, SqliteAuthRateLimiter)
+                type(rate_limiter) is not SqliteAuthRateLimiter
                 or rate_limiter.db is not connection):
             raise ValueError("rate limiter must use the same SQLite connection")
 

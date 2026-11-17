@@ -40,7 +40,7 @@ session insertion commit together.
 The returned opaque token is shown once; only its SHA-256 digest is stored in
 `durable_sessions`. Do not log, serialize, or commit the token.
 
-Username and password inputs accept exact built-in `str` values only. String
+The account-auth service and its optional rate limiter also require an exact built-in `sqlite3.Connection`; connection subclasses are rejected before any overridable connection property or method is accessed. An injected limiter must be an exact `SqliteAuthRateLimiter` instance bound to that same connection. This keeps the authentication transaction boundary consistent with the durable session store.\n\nUsername and password inputs accept exact built-in `str` values only. String
 subclasses are rejected before validation calls such as `len()`, `strip()`,
 or `encode()` can dispatch caller-defined hooks. The rate limiter applies the
 same rule to principal identifiers; non-exact strings are grouped into its

@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from server.sessions import SessionError
+from server.sqlite_auth_rate_limiter import SqliteAuthRateLimiter
 from server.sqlite_account_auth_service import (
     AccountAuthError,
     AccountCredentialAlreadyExists,
@@ -267,6 +268,40 @@ class SqliteAccountAuthServiceTests(unittest.TestCase):
 
         self.assertEqual(
             self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            0,
+        )
+
+
+    def test_constructor_rejects_sqlite_connection_subclasses_before_hooks(self):
+        class HostileConnection(sqlite3.Connection):
+            @property
+            def in_transaction(self):
+                raise AssertionError("custom transaction-state hook must not run")
+
+        connection = sqlite3.connect(
+            ":memory:", isolation_level=None, factory=HostileConnection
+        )
+        try:
+            with self.assertRaisesRegex(TypeError, "sqlite connection"):
+                SqliteAccountAuthService(connection, iterations=100_000)
+        finally:
+            sqlite3.Connection.close(connection)
+
+    def test_constructor_rejects_rate_limiter_subclasses_before_db_access(self):
+        class HostileRateLimiter(SqliteAuthRateLimiter):
+            def __getattribute__(self, name):
+                if name == "db":
+                    raise AssertionError("custom limiter db accessor must not run")
+                return super().__getattribute__(name)
+
+        hostile = object.__new__(HostileRateLimiter)
+        with self.assertRaisesRegex(ValueError, "same SQLite connection"):
+            SqliteAccountAuthService(
+                self.db, iterations=100_000, rate_limiter=hostile
+            )
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM account_credentials").fetchone()[0],
             0,
         )
 

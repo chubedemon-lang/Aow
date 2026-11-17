@@ -43,7 +43,7 @@ class SqliteAuthRateLimiter:
         max_buckets: int = 10_000,
         clock=None,
     ):
-        if not isinstance(connection, sqlite3.Connection):
+        if type(connection) is not sqlite3.Connection:
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")
