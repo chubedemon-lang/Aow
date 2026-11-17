@@ -1,7 +1,7 @@
 # AArch64 memory-access evidence (tooling only)
 
 The native network callsite report now includes a bounded, redacted summary of
-integer LDR/STR instructions using unsigned scaled-immediate addressing. Each
+integer LDR/STR instructions using unsigned-scaled and signed unscaled-immediate addressing, including pre/post-indexed writeback forms. Each
 event reports an instruction-relative index, basic-block index, load/store
 direction, access width, base/target register names, encoded byte displacement,
 and whether its block is structurally reachable in the supported bounded CFG.
@@ -9,9 +9,10 @@ and whether its block is structurally reachable in the supported bounded CFG.
 ## Analysis behavior
 
 The flat helper `summarize_unsigned_immediate_memory_accesses` remains available
-for a linear scan. The native callsite report uses
+for a linear unsigned-scaled scan. The native callsite report uses
 `summarize_control_flow_memory_accesses`, which reuses the repository's
-bounded AArch64 branch builder:
+bounded AArch64 branch builder and reports the addressing mode, signed byte
+displacement, and writeback displacement where applicable:
 
 - B.cond, CBZ/CBNZ and TBZ/TBNZ contribute both in-window outcomes;
 - direct B contributes only its in-window target;
@@ -34,8 +35,10 @@ redacted base-provenance pass is documented in
 [AARCH64_MEMORY_BASE_PROVENANCE.md](AARCH64_MEMORY_BASE_PROVENANCE.md). That
 pass tracks only ADRP/ADD/MOV and explicitly supplied relative-relocation-backed
 64-bit LDR chains; it does not identify managed fields or resolve arbitrary
-pointer flows. SIMD/FP, sign-extending, unscaled, pre/post-indexed, pair, atomic
-and other memory forms remain omitted.
+pointer flows. SIMD/FP, sign-extending, unprivileged, pair, atomic and other memory forms
+remain omitted. The CFG access summary includes supported unscaled and
+pre/post-indexed integer forms; its structural reachability still does not
+model register writeback or execute the memory operation.
 
 Synthetic instruction-vector tests validate the decoder, CFG reachability,
 report bounds and redacted output only. No APK analysis is performed by tests.

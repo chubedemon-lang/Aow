@@ -1,7 +1,7 @@
 # AArch64 memory-base provenance (bounded static evidence)
 
 The native network callsite report includes an optional, redacted intraprocedural
-summary of the base register used by supported integer LDR/STR unsigned-offset
+summary of the base register used by supported integer LDR/STR unsigned-scaled, unscaled, and pre/post-indexed
 instructions. The analyzer uses absolute addresses internally to follow a
 small set of address-building operations, but never emits those addresses,
 relocation slots, relocation targets, or raw instruction words.
@@ -17,8 +17,8 @@ relocation slots, relocation targets, or raw instruction words.
   64-bit ADD and MOV operations preserve that symbolic class. The concrete
   stack address and displacement are not modeled.
 - The unshifted 64-bit MOV register alias copies the abstract value.
-- A 64-bit unsigned-offset LDR can create a relocation_loaded_pointer only
-  when its effective slot exactly matches a caller-supplied
+- A 64-bit unsigned-scaled or signed unscaled-offset LDR can create a
+  relocation_loaded_pointer only when its effective slot exactly matches a caller-supplied
   R_AARCH64_RELATIVE relocation entry.
 - A 64-bit PC-relative `LDR Xt, label` literal load is reported separately.
   It creates a relocation_loaded_pointer only when its literal-pool slot
@@ -35,16 +35,16 @@ instructions clear the abstract state.
 
 ## Output and safety
 
-Each retained unsigned-offset memory-access observation contains only:
+Each retained memory-access observation contains only:
 
 - instruction-relative index;
-- load/store operation and access width;
+- load/store operation, access width, addressing mode, signed access displacement and signed writeback displacement;
 - base-register name;
 - symbolic base-provenance class;
 - relative definition index and derivation depth.
 
 The report includes total, structurally reachable and structurally
-unreachable unsigned-offset access counts, plus separate PC-relative literal
+unreachable supported immediate access counts, plus separate PC-relative literal
 load counts and redacted literal-load observations. Each observation list is
 capped at 128 by default and accepts at most 512. The code window is capped at
 64 KiB and the supplied relocation map at 200,000 entries.
@@ -56,8 +56,7 @@ analysis pass and must remain in memory only.
 ## Interpretation limits
 
 This is not a full AArch64 emulator, alias analysis, points-to analysis or
-runtime trace. It does not model register spills, stack slots, pair/unscaled/
-pre/post-indexed/SIMD/atomic memory operations, arbitrary data loads, class
+runtime trace. It does not model register spills, stack slots, pair/pair/SIMD/atomic memory operations, arbitrary data loads, class
 initialization, IL2CPP static-field layout or arbitrary relocation types.
 Unknown instructions intentionally discard state. A relocation-loaded pointer
 does not identify the pointed-to managed object or field. Stack-pointer-derived

@@ -55,6 +55,83 @@ def decode_unsigned_immediate_memory_access(word):
     }
 
 
+
+def decode_unscaled_immediate_memory_access(word):
+    """Decode integer LDUR/STUR and pre/post-indexed LDR/STR forms.
+
+    Unprivileged mode, sign-extending loads, SIMD/FP, pair and atomic forms
+    are deliberately excluded. Writeback with base/target register overlap
+    is rejected because that encoding is architecturally constrained.
+    """
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    if word & (1 << 26):
+        return None
+    if (word & 0x3B000000) != 0x38000000:
+        return None
+
+    opc = (word >> 22) & 0x3
+    if opc not in (0, 1):
+        return None
+
+    mode = (word >> 10) & 0x3
+    if mode == 2:  # unprivileged LDTR/STTR family
+        return None
+
+    size = (word >> 30) & 0x3
+    access_bytes = 1 << size
+    base = (word >> 5) & 0x1F
+    target = word & 0x1F
+    if mode in (1, 3) and base != 31 and base == target:
+        return None
+
+    encoded_offset = (word >> 12) & 0x1FF
+    signed_offset = (
+        encoded_offset - 0x200 if encoded_offset & 0x100
+        else encoded_offset
+    )
+    if mode == 1:
+        addressing_mode = "post_index"
+        byte_offset = 0
+        base_update_bytes = signed_offset
+    elif mode == 3:
+        addressing_mode = "pre_index"
+        byte_offset = signed_offset
+        base_update_bytes = signed_offset
+    else:
+        addressing_mode = "unscaled"
+        byte_offset = signed_offset
+        base_update_bytes = 0
+
+    register_prefix = "x" if access_bytes == 8 else "w"
+    base_register = "sp" if base == 31 else f"x{base}"
+    target_register = (
+        f"{register_prefix}zr" if target == 31
+        else f"{register_prefix}{target}"
+    )
+    return {
+        "operation": "load" if opc == 1 else "store",
+        "access_bytes": access_bytes,
+        "base_register": base_register,
+        "target_register": target_register,
+        "byte_offset": byte_offset,
+        "addressing_mode": addressing_mode,
+        "base_update_bytes": base_update_bytes,
+    }
+
+
+def decode_integer_immediate_memory_access(word):
+    """Decode supported unsigned-scaled or unscaled/writeback integer LDR/STR."""
+    unsigned = decode_unsigned_immediate_memory_access(word)
+    if unsigned is not None:
+        return {
+            **unsigned,
+            "addressing_mode": "unsigned_scaled",
+            "base_update_bytes": 0,
+        }
+    return decode_unscaled_immediate_memory_access(word)
+
+
 def summarize_unsigned_immediate_memory_accesses(code, *, max_accesses=128):
     """Summarize bounded unsigned-immediate integer loads/stores in one window.
 
@@ -99,7 +176,7 @@ def summarize_unsigned_immediate_memory_accesses(code, *, max_accesses=128):
 
 
 def summarize_control_flow_memory_accesses(code, start_va, *, max_accesses=128):
-    """Summarize memory accesses with structural reachability in a bounded CFG.
+    """Summarize supported integer immediate LDR/STR accesses in a bounded CFG.
 
     Supported conditional branches contribute both in-window successors;
     conditions are not evaluated. Supported unconditional branches and
@@ -150,7 +227,7 @@ def summarize_control_flow_memory_accesses(code, start_va, *, max_accesses=128):
     reachable_total = 0
     unreachable_total = 0
     for instruction_index, word in enumerate(words):
-        decoded = decode_unsigned_immediate_memory_access(word)
+        decoded = decode_integer_immediate_memory_access(word)
         if decoded is None:
             continue
         block_index = instruction_blocks[instruction_index]
@@ -169,7 +246,7 @@ def summarize_control_flow_memory_accesses(code, start_va, *, max_accesses=128):
             })
 
     return {
-        "analysis_kind": "bounded_intraprocedural_cfg_unsigned_immediate_integer_load_store",
+        "analysis_kind": "bounded_intraprocedural_cfg_integer_immediate_load_store",
         "instruction_count": instruction_count,
         "basic_block_count": len(blocks),
         "statically_reachable_block_count": len(reachable_blocks),

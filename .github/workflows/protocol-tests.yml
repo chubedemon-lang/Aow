@@ -232,6 +232,23 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_offline_fixture_privacy_boundaries.py' -v
       - name: Offline evidence validation tests (metadata only)
         run: python -m unittest discover -s tests -p 'test_offline_evidence_validation.py' -v
+  aarch64-memory-access:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile bounded AArch64 memory analyzers
+        run: python -m py_compile tools/aarch64_memory_access_evidence.py tools/aarch64_memory_base_provenance.py
+      - name: AArch64 immediate memory-access regression tests (synthetic vectors only)
+        run: python -m unittest discover -s tests -p 'test_aarch64_memory_access_evidence.py' -v
+      - name: AArch64 memory-base writeback provenance tests (synthetic vectors only)
+        run: python -m unittest discover -s tests -p 'test_aarch64_memory_base_provenance.py' -v
+
   socket-channel:
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -5,6 +5,8 @@ import unittest
 
 from tools.aarch64_memory_access_evidence import (
     decode_unsigned_immediate_memory_access,
+    decode_unscaled_immediate_memory_access,
+    decode_integer_immediate_memory_access,
     summarize_unsigned_immediate_memory_accesses,
     summarize_control_flow_memory_accesses,
 )
@@ -17,6 +19,20 @@ def encode_access(*, size, opc, base, target, immediate):
         | 0x39000000
         | (opc << 22)
         | (immediate << 10)
+        | (base << 5)
+        | target
+    )
+
+
+
+def encode_unscaled_access(*, size, opc, base, target, immediate, mode=0):
+    """Encode an integer unscaled or pre/post-indexed memory operation."""
+    return (
+        (size << 30)
+        | 0x38000000
+        | (opc << 22)
+        | ((immediate & 0x1FF) << 12)
+        | (mode << 10)
         | (base << 5)
         | target
     )
@@ -77,6 +93,83 @@ class AArch64MemoryAccessEvidenceTests(unittest.TestCase):
         for word in rejected:
             with self.subTest(word=word):
                 self.assertIsNone(decode_unsigned_immediate_memory_access(word))
+
+    def test_decodes_signed_unscaled_and_pre_post_indexed_forms(self):
+        cases = (
+            (0xF85F8020, "load", 8, "x0", -8, "unscaled", 0),
+            (0xB85FC020, "load", 4, "w0", -4, "unscaled", 0),
+            (0x385FF020, "load", 1, "w0", -1, "unscaled", 0),
+            (0xF81F8420, "store", 8, "x0", 0, "post_index", -8),
+            (0xF81F8C20, "store", 8, "x0", -8, "pre_index", -8),
+        )
+        for word, operation, width, target, offset, mode, update in cases:
+            with self.subTest(word=hex(word)):
+                result = decode_unscaled_immediate_memory_access(word)
+                self.assertEqual(result, {
+                    "operation": operation,
+                    "access_bytes": width,
+                    "base_register": "x1",
+                    "target_register": target,
+                    "byte_offset": offset,
+                    "addressing_mode": mode,
+                    "base_update_bytes": update,
+                })
+
+    def test_unscaled_decoder_rejects_unprivileged_and_ambiguous_encodings(self):
+        rejected = (
+            encode_unscaled_access(
+                size=3, opc=1, base=1, target=0, immediate=-8, mode=2
+            ),
+            encode_unscaled_access(
+                size=3, opc=2, base=1, target=0, immediate=-8
+            ),
+            encode_unscaled_access(
+                size=3, opc=1, base=1, target=0, immediate=-8
+            ) | (1 << 26),
+            encode_unscaled_access(
+                size=3, opc=1, base=1, target=1, immediate=8, mode=1
+            ),
+            True,
+            -1,
+            1 << 32,
+        )
+        for word in rejected:
+            with self.subTest(word=word):
+                self.assertIsNone(decode_unscaled_immediate_memory_access(word))
+
+    def test_combined_decoder_labels_unsigned_and_unscaled_addressing(self):
+        unsigned = decode_integer_immediate_memory_access(
+            encode_access(size=3, opc=1, base=1, target=0, immediate=2)
+        )
+        unscaled = decode_integer_immediate_memory_access(0xF85F8020)
+        self.assertEqual(unsigned["addressing_mode"], "unsigned_scaled")
+        self.assertEqual(unsigned["byte_offset"], 16)
+        self.assertEqual(unsigned["base_update_bytes"], 0)
+        self.assertEqual(unscaled["addressing_mode"], "unscaled")
+        self.assertEqual(unscaled["byte_offset"], -8)
+
+    def test_cfg_summary_includes_unscaled_and_writeback_accesses(self):
+        words = (
+            encode_access(size=2, opc=1, base=8, target=9, immediate=2),
+            0xF85F8020,
+            0xF81F8420,
+        )
+        summary = summarize_control_flow_memory_accesses(
+            code_bytes(*words), 0x4000
+        )
+        self.assertEqual(summary["memory_access_count"], 3)
+        self.assertEqual(
+            [item["addressing_mode"] for item in summary["memory_accesses"]],
+            ["unsigned_scaled", "unscaled", "post_index"],
+        )
+        self.assertEqual(
+            [item["byte_offset"] for item in summary["memory_accesses"]],
+            [8, -8, 0],
+        )
+        self.assertEqual(
+            [item["base_update_bytes"] for item in summary["memory_accesses"]],
+            [0, 0, -8],
+        )
 
     def test_summary_preserves_instruction_order_and_caps_report(self):
         words = (
