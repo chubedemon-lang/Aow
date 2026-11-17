@@ -176,17 +176,63 @@ def create_backup(source, destination):
                 pass
 
 
+def verify_backup(path):
+    """Verify an existing SQLite backup without modifying it."""
+    backup_path = _source_path(path)
+    connection = None
+    try:
+        connection = sqlite3.connect(
+            backup_path.as_uri() + "?mode=ro",
+            uri=True,
+            timeout=10,
+            isolation_level=None,
+        )
+        page_count, tables = _validate_backup(connection)
+        return BackupReport(
+            destination=str(backup_path),
+            page_count=page_count,
+            tables=tables,
+            integrity="ok",
+            foreign_key_violations=0,
+        )
+    except BackupError:
+        raise
+    except sqlite3.Error as exc:
+        raise BackupError("SQLite backup could not be verified") from exc
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Create a verified, non-overwriting SQLite backup."
+        description="Create or verify a non-overwriting SQLite backup."
     )
-    parser.add_argument("source", help="existing SQLite database file")
-    parser.add_argument("destination", help="new backup path; must not exist")
+    parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="verify an existing database/backup read-only instead of creating a backup",
+    )
+    parser.add_argument("source", help="existing SQLite database or backup file")
+    parser.add_argument(
+        "destination",
+        nargs="?",
+        help="new backup path; required unless --verify-only is used",
+    )
     args = parser.parse_args(argv)
+
     try:
-        report = create_backup(args.source, args.destination)
+        if args.verify_only:
+            if args.destination is not None:
+                parser.error("--verify-only accepts exactly one path")
+            report = verify_backup(args.source)
+        else:
+            if args.destination is None:
+                parser.error("destination is required unless --verify-only is used")
+            report = create_backup(args.source, args.destination)
     except BackupError as exc:
         parser.exit(2, "backup failed: " + str(exc) + "\n")
+
     print(json.dumps(asdict(report), sort_keys=True))
     return 0
 
