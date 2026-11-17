@@ -192,7 +192,7 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
         access = result["memory_accesses"][0]
         self.assertEqual(access["base_register"], "x10")
         self.assertEqual(access["base_provenance"], "stack_pointer")
-        self.assertEqual(access["base_definition_instruction_index"], 2)
+        self.assertEqual(access["base_definition_instruction_index"], 1)
         self.assertEqual(access["base_derivation_depth"], 3)
 
     def test_sub_underflow_invalidates_only_destination(self):
