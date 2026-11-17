@@ -17,6 +17,10 @@ from server.sqlite_authorized_player_state_service import (
 )
 from server.sqlite_authorized_shop_service import SqliteAuthorizedShopService
 from server.sqlite_authorized_transaction import authorized_character_transaction
+from server.sqlite_inventory_store import SqliteInventoryStore
+from server.sqlite_map_position_store import SqliteMapPositionStore
+from server.sqlite_reward_ledger import SqliteRewardLedger
+from server.sqlite_shop_store import SqliteShopStore
 from server.sqlite_authorized_world_state_service import (
     SqliteAuthorizedWorldStateService,
 )
@@ -74,6 +78,10 @@ class SqliteConnectionBoundaryTests(unittest.TestCase):
             ("shop service", lambda: SqliteAuthorizedShopService(connection, {})),
             ("world state service", lambda: SqliteAuthorizedWorldStateService(connection)),
             ("player bootstrap service", lambda: SqliteAuthorizedPlayerBootstrapService(connection)),
+            ("inventory store", lambda: SqliteInventoryStore(connection)),
+            ("map position store", lambda: SqliteMapPositionStore(connection)),
+            ("shop store", lambda: SqliteShopStore(connection, {})),
+            ("reward ledger", lambda: SqliteRewardLedger(connection)),
         )
 
         for name, operation in operations:
