@@ -7,7 +7,7 @@ The repository contains process-local and durable session primitives, a shared c
 server/sessions.py implements a local-only session primitive:
 
 - Tokens are generated using secrets.token_urlsafe(32); never log or commit tokens.
-- A session maps to an internal account ID and expires according to a monotonic clock.
+- A session maps to an internal account ID and expires according to a monotonic clock. The process-local manager rejects non-built-in, negative, non-finite, failing, or backwards-moving clock readings; a clock rollback cannot extend a session's lifetime or purge records early.
 - require_character checks ownership in SQLite before permitting future character actions.
 - The short-lived ownership-check connection is explicitly closed on both success and rejection. A sqlite3.Connection context manager alone only commits or rolls back; it does not close the connection.
 - Sessions are process-local and disappear on restart.
