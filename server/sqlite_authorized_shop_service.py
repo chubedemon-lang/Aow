@@ -36,7 +36,7 @@ class SqliteAuthorizedShopService:
                  offers: dict[str, ShopOffer], *,
                  max_purchase_quantity: int = 99,
                  ttl_seconds: int = 900, clock=None):
-        if not isinstance(connection, sqlite3.Connection):
+        if type(connection) is not sqlite3.Connection:
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")

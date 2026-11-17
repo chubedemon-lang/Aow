@@ -9,6 +9,9 @@ not an AOW login or wire protocol.
 from contextlib import contextmanager
 import sqlite3
 
+from server.sqlite_character_authorizer import SqliteCharacterAuthorizer
+from server.sqlite_session_store import SqliteSessionStore
+
 
 @contextmanager
 def authorized_character_transaction(connection, authorizer, token,
@@ -20,15 +23,17 @@ def authorized_character_transaction(connection, authorizer, token,
     must use this exact SQLite connection so revocation and state mutation are
     serialized by the same database write lock.
     """
-    if not isinstance(connection, sqlite3.Connection):
+    if type(connection) is not sqlite3.Connection:
         raise TypeError("sqlite connection required")
-    if getattr(authorizer, "db", None) is not connection:
-        raise ValueError("authorizer must use the same SQLite connection")
-    session_store = getattr(authorizer, "sessions", None)
-    if getattr(session_store, "db", None) is not connection:
-        raise ValueError("session store must use the same SQLite connection")
-    if not callable(getattr(authorizer, "require_in_transaction", None)):
+    if type(authorizer) is not SqliteCharacterAuthorizer:
         raise TypeError("authorizer must support transactional authorization")
+    if authorizer.db is not connection:
+        raise ValueError("authorizer must use the same SQLite connection")
+    session_store = authorizer.sessions
+    if type(session_store) is not SqliteSessionStore:
+        raise TypeError("durable session store required")
+    if session_store.db is not connection:
+        raise ValueError("session store must use the same SQLite connection")
     if connection.in_transaction:
         raise ValueError("connection must not have an active transaction")
 
