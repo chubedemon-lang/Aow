@@ -35,6 +35,9 @@ from tools.aarch64_call_argument_evidence import (
 from tools.aarch64_memory_access_evidence import (
     summarize_control_flow_memory_accesses,
 )
+from tools.aarch64_memory_base_provenance import (
+    summarize_control_flow_memory_base_provenance,
+)
 from tools.aarch64_delegate_target_evidence import (
     summarize_delegate_constructor_argument_shape,
     summarize_delegate_method_pointer_arguments,
@@ -252,6 +255,22 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         all_entrypoint_targets,
     ))
 
+    # Keep absolute relocation targets private to this analysis pass. The
+    # downstream summary emits only symbolic provenance classes and relative
+    # instruction indexes, never slot or target addresses.
+    relative_relocation_targets = {
+        slot: relocation[1]
+        for slot, relocation in relocations.items()
+        if (
+            isinstance(relocation, tuple)
+            and len(relocation) == 2
+            and type(relocation[0]) is int
+            and relocation[0] == R_AARCH64_RELATIVE
+            and type(relocation[1]) is int
+            and 0 <= relocation[1] <= 0xFFFFFFFFFFFFFFFF
+        )
+    }
+
     callsite_summary = []
     for method, target, _section_name, window_bytes, truncated, code in resolved:
         direct = _summarize_named_method_calls(code, target, method_targets)
@@ -269,6 +288,12 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "entry_window_truncated": truncated,
             "cfg_memory_access_observations": (
                 summarize_control_flow_memory_accesses(code, target)
+            ),
+            "cfg_memory_base_provenance_observations": (
+                summarize_control_flow_memory_base_provenance(
+                    code, target,
+                    relocation_targets=relative_relocation_targets,
+                )
             ),
             **direct,
             **indirect,
@@ -321,11 +346,13 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         "interpretation": (
             "Aggregate AArch64 B/BL and conservative relocation-backed "
             "ADRP/ADD/LDR/BLR-or-BR callsite evidence plus bounded CFG-scoped "
-            "integer memory-access observations from native entry windows. "
+            "memory-access and redacted base-register provenance observations. "
             "Memory-access reachability is structural only: both conditional "
             "outcomes are assumed and path conditions are not evaluated. "
-            "Windows may contain shared or cold code. These observations do not "
-            "establish runtime execution, base-register provenance, managed-field "
+            "Base provenance tracks only ADRP/ADD/MOV and explicitly supplied "
+            "relative-relocation-backed 64-bit LDR chains; absolute addresses "
+            "are not emitted. Windows may contain shared or cold code. These "
+            "observations do not establish runtime execution, managed-field "
             "identity, packet framing, compression activation, message IDs, "
             "handshake semantics or APK/server compatibility."
         ),
