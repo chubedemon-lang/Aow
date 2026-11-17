@@ -217,6 +217,31 @@ class EvidenceManifestTests(unittest.TestCase):
                 with self.subTest(field=field, value=value), self.assertRaises(EvidenceError):
                     validate_record(sample(**{field: value}))
 
+    def test_rejects_percent_encoded_sensitive_values_in_every_free_text_field(self):
+        examples = (
+            "https%3A%2F%2Fexample.org%2Ftrace",
+            "ftp%3A%2F%2Fexample.org%2Fcapture",
+            "%2Fmnt%2Fdata%2Fprivate%2Faow.apk",
+            "docs%2F..%2Fprivate%2Fcapture.pcap",
+            "token%3Dsample-secret",
+            "packet_bytes%3Ddeadbeef",
+            "https%253A%252F%252Fexample.org%252Ftrace",
+            "https%2525253A%2525252F%2525252Fexample.org%2525252Ftrace",
+        )
+        for field in ("method", "reproduction", "test_reference", "notes"):
+            for value in examples:
+                with self.subTest(field=field, value=value), self.assertRaises(EvidenceError):
+                    validate_record(sample(**{field: value}))
+
+    def test_accepts_percent_encoded_repository_reference_without_sensitive_content(self):
+        item = validate_record(sample(
+            notes="Reviewed local reference docs%2FPROTOCOL.md%23framing"
+        ))
+        self.assertEqual(
+            item["notes"],
+            "Reviewed local reference docs%2FPROTOCOL.md%23framing",
+        )
+
     def test_rejects_record_subclass_before_mapping_hooks(self):
         class HostileRecord(dict):
             def __iter__(self):
