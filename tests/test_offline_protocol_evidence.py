@@ -233,6 +233,11 @@ class EvidenceManifestTests(unittest.TestCase):
                 with self.subTest(field=field, value=value), self.assertRaises(EvidenceError):
                     validate_record(sample(**{field: value}))
 
+    def test_rejects_percent_encoded_control_and_invisible_characters(self):
+        for value in ("safe%00text", "safe%0Atext", "safe%E2%80%8Btext"):
+            with self.subTest(value=value), self.assertRaises(EvidenceError):
+                validate_record(sample(notes=value))
+
     def test_accepts_percent_encoded_repository_reference_without_sensitive_content(self):
         item = validate_record(sample(
             notes="Reviewed local reference docs%2FPROTOCOL.md%23framing"
