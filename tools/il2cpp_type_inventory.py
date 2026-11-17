@@ -186,6 +186,7 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
         if field_index in field_defaults:
             raise MetadataInventoryError("duplicate field default record")
         field_defaults[field_index] = {
+            "record_index": default_index,
             "type_index": default_type_index,
             "data_index": data_index,
         }
@@ -219,9 +220,16 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
             default_value = field_defaults.get(field_index)
             field_records.append({
                 "name": _read_heap_string(heap, field_name_index),
+                # These are global metadata-table coordinates, not native field
+                # offsets or proof of managed runtime layout.
+                "field_definition_index": field_index,
+                "declaring_type_definition_index": type_index,
                 "type_index": field_type_index,
                 "metadata_token": field_token,
                 "default_value_record_present": default_value is not None,
+                "field_default_value_record_index": (
+                    default_value["record_index"] if default_value is not None else None
+                ),
                 "default_value_type_index": (
                     default_value["type_index"] if default_value is not None else None
                 ),
