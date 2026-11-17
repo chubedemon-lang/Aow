@@ -135,6 +135,9 @@ on:
       - 'tools/sqlite_backup.py'
       - 'tests/test_sqlite_backup.py'
       - 'docs/SQLITE_BACKUP.md'
+      - 'server/sessions.py'
+      - 'tests/test_sessions.py'
+      - 'docs/SESSION_FOUNDATION.md'
       - '.github/workflows/protocol-tests.yml'
 jobs:
   unit:
@@ -510,6 +513,21 @@ jobs:
             server/sqlite_authorized_transaction.py
       - name: SQLite authorization trust-boundary regression tests
         run: python -m unittest discover -s tests -p 'test_sqlite_connection_boundaries.py' -v
+
+  process-local-session-manager:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile process-local synthetic session manager
+        run: python -m py_compile server/sessions.py
+      - name: Session clock and lifecycle regression tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_sessions.py' -v
 
   sqlite-online-backup:
     runs-on: ubuntu-latest
