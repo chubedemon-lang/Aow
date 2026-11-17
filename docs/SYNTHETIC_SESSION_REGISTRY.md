@@ -22,6 +22,12 @@ again to observe current state. The underscore-prefixed unchecked transition
 methods and handler binding are internal implementation details; callers must
 use public transition methods.
 
+Connection keys, account identifiers, and character identifiers accept exact
+built-in `str` values only. String subclasses are rejected before length,
+normalization, hashing, or comparison can invoke caller-defined hooks. This is
+an in-process input-boundary rule for the synthetic registry, not a wire-format
+or APK identity constraint.
+
 A future multi-process server must enforce these constraints in the durable
 database with unique indexes/transactions rather than relying on this
 process-local lock.
