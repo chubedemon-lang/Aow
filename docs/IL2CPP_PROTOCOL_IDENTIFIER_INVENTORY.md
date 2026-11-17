@@ -199,3 +199,19 @@ four-byte candidate.
 Synthetic metadata tests verify stable indexes across multiple allowlisted
 types and fields with and without default-value records. No APK bytes, native
 assets, private offsets, or default-data values are emitted or committed.
+
+## Stable APK input handling — 2026-11-18
+
+The metadata identifier reader now opens the APK once with no-follow/non-blocking
+flags where the platform provides them, verifies the opened descriptor is a
+regular file, reads the metadata ZIP member from that descriptor, and computes
+the APK SHA-256 from the same descriptor. It compares descriptor identity,
+size, modification time and change time before/after the ZIP read and hash
+pass, rejecting observed in-place mutation.
+
+This prevents a pathname replacement from pairing metadata read from one file
+with a fingerprint computed from a different file. Synthetic regression tests
+cover pathname replacement after open, in-place mutation during the read/hash
+boundary, and FIFO input rejection. This is input-integrity hardening only:
+it adds no new APK observation, native callsite, packet, framing, handshake,
+login, or compatibility evidence.
