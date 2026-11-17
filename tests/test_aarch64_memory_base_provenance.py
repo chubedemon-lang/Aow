@@ -198,7 +198,7 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
     def test_sub_underflow_invalidates_only_destination(self):
         start = 0x5600
         words = (
-            adr(8, start, start + 0x10),
+            adr(8, start, 0x10),
             sub_x(9, 8, 0x20),
             str_w(0, 9),
             str_w(0, 8),
