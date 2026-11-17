@@ -10,18 +10,32 @@ APK build. Keep the JSON file outside the repository: its hexadecimal chunks
 are raw stream bytes and may contain credentials, tokens, player data, or other
 private material. Do not attach it to a public issue or pull request.
 
-The schema is intentionally narrow:
+The schema is intentionally narrow and supports two versions:
 
-- `schema_version`: integer `1`.
+- `schema_version`: exact integer `1` or `2`.
 - `apk_sha256`: lowercase SHA-256 asserted for the tested APK build.
 - `client_unchanged`: boolean `true`.
 - `capture_kind`: `authorized_local_runtime` or
   `authorized_local_packet_fixture`.
 - `streams.server_to_client` and `streams.client_to_server`: ordered arrays
-  of non-empty hexadecimal chunks for each already-reassembled TCP byte
+  of non-empty hexadecimal chunks for each already-reassembled directional byte
   stream. Both arrays must contain at least one chunk; a one-way capture is
   incomplete and is rejected rather than presented as a bidirectional exchange.
   These are stream chunks, not individual PCAP packet payloads.
+- Schema `1` has no cross-direction chronology. Its report explicitly marks
+  exchange order as unavailable.
+- Schema `2` additionally requires `io_events`: an ordered array of exact
+  objects with `direction`, `offset`, and `length`. Each event describes one
+  locally observed I/O range in the concatenated stream for that direction.
+  Offsets must cover each directional stream contiguously, without overlap or
+  gaps, and every byte in both directions must be covered exactly once. This
+  preserves the operator-supplied cross-direction order for later handshake
+  review; it does not identify message boundaries.
+- For schema `2`, event order and range boundaries are operator-supplied
+  provenance assertions. They are not cryptographically authenticated, do not
+  prove capture timestamps, and must not be inferred from PCAP packet
+  segmentation. Use only a local runtime logger or fixture exporter that
+  records the actual ordered application I/O operations.
 - Do not include endpoint addresses, ports, timestamps, usernames, tokens, or
   other identity fields.
 
@@ -39,6 +53,31 @@ Schematic shape only; the placeholders below are not valid fixture bytes:
   }
 }
 ```
+
+Schema `2` schematic shape (placeholders are not valid fixture bytes):
+
+```json
+{
+  "schema_version": 2,
+  "apk_sha256": "<expected unchanged APK SHA-256>",
+  "client_unchanged": true,
+  "capture_kind": "authorized_local_runtime",
+  "streams": {
+    "server_to_client": ["<private ordered hex chunk>"],
+    "client_to_server": ["<private ordered hex chunk>"]
+  },
+  "io_events": [
+    {"direction": "client_to_server", "offset": 0, "length": 12},
+    {"direction": "server_to_client", "offset": 0, "length": 8}
+  ]
+}
+```
+
+The example event ranges are illustrative only and must exactly cover the
+actual private directional streams. The report exposes only event counts and
+direction switches; it never emits event offsets, lengths, or stream bytes.
+Schema `1` remains accepted for older fixtures, but it cannot support any
+cross-direction handshake-order analysis.
 
 ## Run locally
 
@@ -64,7 +103,12 @@ hex chunk is materialized, so the second direction cannot temporarily allocate
 beyond the aggregate cap. This is an audit resource limit, not an AOW protocol
 limit. Only the `server_to_client` direction is passed through the isolated
 receive-length candidate. The `client_to_server` direction is deliberately not decoded because
-Sender/Receiver symmetry has not been established.
+Sender/Receiver symmetry has not been established. Schema `2` also validates
+that ordered I/O ranges cover both directional streams exactly once and reports
+only aggregate event counts. Schema `1` reports that cross-direction order
+was not recorded. Neither schema allows the audit to interpret handshake or
+login messages, and schema `2` event order remains an unauthenticated operator
+assertion rather than independent protocol evidence.
 
 The receive candidate still models only the static four-byte signed
 big-endian count branch and rejects the HTTP marker branch. It does not verify

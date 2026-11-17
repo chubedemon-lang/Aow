@@ -33,9 +33,11 @@ def fixture_bytes(
     apk_sha256=APK_SHA256,
     client_unchanged=True,
     capture_kind="authorized_local_runtime",
+    schema_version=1,
+    io_events=None,
 ):
     document = {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "apk_sha256": apk_sha256,
         "client_unchanged": client_unchanged,
         "capture_kind": capture_kind,
@@ -44,6 +46,8 @@ def fixture_bytes(
             "client_to_server": [chunk.hex() for chunk in client_chunks],
         },
     }
+    if schema_version == 2:
+        document["io_events"] = io_events
     return json.dumps(document, separators=(",", ":")).encode("utf-8")
 
 
@@ -358,6 +362,155 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertNotIn(payload.hex(), output.getvalue())
             self.assertIn('"raw_bytes_emitted": false', output.getvalue())
+
+
+    def test_schema_v1_reports_that_cross_direction_order_was_not_recorded(self):
+        result = self.audit(fixture_bytes([frame(b"server")], [b"client"]))
+        self.assertEqual(
+            result["exchange_order"],
+            {
+                "status": "not_recorded_schema_v1",
+                "event_count": None,
+                "client_to_server_event_count": None,
+                "server_to_client_event_count": None,
+                "direction_switch_count": None,
+            },
+        )
+
+    def test_schema_v2_preserves_ordered_io_ranges_without_emitting_offsets(self):
+        server_stream = frame(b"server")
+        private_client = b"xyz"
+        events = [
+            {"direction": "client_to_server", "offset": 0, "length": 2},
+            {"direction": "server_to_client", "offset": 0, "length": 3},
+            {"direction": "client_to_server", "offset": 2, "length": 1},
+            {
+                "direction": "server_to_client",
+                "offset": 3,
+                "length": len(server_stream) - 3,
+            },
+        ]
+        content = fixture_bytes(
+            [server_stream[:3], server_stream[3:]],
+            [private_client[:2], private_client[2:]],
+            schema_version=2,
+            io_events=events,
+        )
+        result = self.audit(content)
+        self.assertEqual(result["status"], "candidate_analysis_only")
+        self.assertEqual(
+            result["exchange_order"],
+            {
+                "status": "operator_order_preserved_unverified",
+                "event_count": 4,
+                "client_to_server_event_count": 2,
+                "server_to_client_event_count": 2,
+                "direction_switch_count": 3,
+            },
+        )
+        serialized = json.dumps(result)
+        self.assertNotIn(private_client.hex(), serialized)
+        self.assertNotIn('"offset"', serialized)
+        self.assertNotIn('"length"', serialized)
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
+        self.assertFalse(result["authorization_independently_verified"])
+
+    def test_schema_v2_rejects_invalid_or_incomplete_io_event_ranges(self):
+        server_stream = frame(b"s")
+        client_stream = b"xy"
+        valid = [
+            {"direction": "client_to_server", "offset": 0, "length": 2},
+            {"direction": "server_to_client", "offset": 0, "length": len(server_stream)},
+        ]
+        invalid_cases = (
+            (
+                [{"direction": "unknown", "offset": 0, "length": 2}, valid[1]],
+                "invalid direction",
+            ),
+            (
+                [{"direction": "client_to_server", "offset": True, "length": 2}, valid[1]],
+                "offset must be",
+            ),
+            (
+                [{"direction": "client_to_server", "offset": 0, "length": 0}, valid[1]],
+                "length must be",
+            ),
+            (
+                [{"direction": "client_to_server", "offset": 1, "length": 1}, valid[1]],
+                "contiguously",
+            ),
+            (
+                [valid[0], {"direction": "client_to_server", "offset": 0, "length": 1}, valid[1]],
+                "contiguously",
+            ),
+            (
+                [{"direction": "client_to_server", "offset": 0, "length": 3}, valid[1]],
+                "exceeds",
+            ),
+            (
+                [valid[0], {"direction": "server_to_client", "offset": 0, "length": 1}],
+                "every byte",
+            ),
+            (
+                [valid[0], {**valid[1], "extra": "not allowed"}],
+                "invalid object",
+            ),
+            (
+                [valid[0], "not an event"],
+                "invalid object",
+            ),
+        )
+        for events, message in invalid_cases:
+            with self.subTest(events=events), self.assertRaisesRegex(
+                FixtureAuditError, message
+            ):
+                self.audit(
+                    fixture_bytes(
+                        [server_stream],
+                        [client_stream],
+                        schema_version=2,
+                        io_events=events,
+                    )
+                )
+
+    def test_schema_v2_enforces_a_bounded_event_count(self):
+        server_stream = frame(b"s")
+        events = [
+            {"direction": "client_to_server", "offset": 0, "length": 1},
+            {"direction": "server_to_client", "offset": 0, "length": len(server_stream)},
+        ]
+        with patch("tools.protocol_fixture_audit.MAX_IO_EVENTS", 1):
+            with self.assertRaisesRegex(FixtureAuditError, "event limit"):
+                self.audit(
+                    fixture_bytes(
+                        [server_stream],
+                        [b"c"],
+                        schema_version=2,
+                        io_events=events,
+                    )
+                )
+
+    def test_schema_v2_requires_the_timeline_field_and_rejects_unknown_fields(self):
+        base = json.loads(
+            fixture_bytes(
+                [frame(b"s")],
+                [b"c"],
+                schema_version=2,
+                io_events=[
+                    {"direction": "client_to_server", "offset": 0, "length": 1},
+                    {"direction": "server_to_client", "offset": 0, "length": len(frame(b"s"))},
+                ],
+            )
+        )
+        del base["io_events"]
+        with self.assertRaisesRegex(FixtureAuditError, "object shape"):
+            self.audit(json.dumps(base).encode())
+
+        base["io_events"] = []
+        base["unexpected"] = True
+        with self.assertRaisesRegex(FixtureAuditError, "object shape"):
+            self.audit(json.dumps(base).encode())
 
 
 if __name__ == "__main__":
