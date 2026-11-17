@@ -1,11 +1,14 @@
 """Synthetic-only tests for the read-only IL2CPP metadata inventory."""
+import hashlib
 import json
+import os
 import struct
 import tempfile
 import unittest
 import warnings
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 from tools.il2cpp_metadata_inventory import (
     METADATA_MAGIC,
@@ -136,6 +139,90 @@ class Il2CppMetadataInventoryTests(unittest.TestCase):
                 self.skipTest("symlinks unavailable on this platform")
             with self.assertRaises(MetadataInventoryError):
                 inspect_apk(link)
+
+
+    def test_path_replacement_after_open_keeps_metadata_and_hash_on_same_inode(self):
+        if os.name == "nt":
+            self.skipTest("open-file rename semantics differ on Windows")
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "authorized.apk"
+            displaced = Path(directory) / "opened-original.apk"
+            replacement = Path(directory) / "replacement.apk"
+            write_apk(apk, make_metadata(["LoginRequest"]))
+            original_bytes = apk.read_bytes()
+            write_apk(replacement, make_metadata(["SessionRestoreRequest"]))
+            replacement_bytes = replacement.read_bytes()
+            real_zipfile = zipfile.ZipFile
+            replaced = False
+
+            def replace_path_after_open(file, *args, **kwargs):
+                nonlocal replaced
+                if not replaced:
+                    self.assertTrue(hasattr(file, "fileno"))
+                    os.replace(apk, displaced)
+                    apk.write_bytes(replacement_bytes)
+                    replaced = True
+                return real_zipfile(file, *args, **kwargs)
+
+            with mock.patch(
+                "tools.il2cpp_metadata_inventory.zipfile.ZipFile",
+                side_effect=replace_path_after_open,
+            ):
+                result = inspect_apk(apk)
+
+            self.assertTrue(replaced)
+            self.assertEqual(
+                result["apk_sha256"], hashlib.sha256(original_bytes).hexdigest()
+            )
+            self.assertEqual(result["apk_size_bytes"], len(original_bytes))
+            self.assertIn("LoginRequest", result["observed_message_identifier_tokens"])
+            self.assertNotIn(
+                "SessionRestoreRequest", result["observed_message_identifier_tokens"]
+            )
+
+    def test_rejects_in_place_mutation_between_zip_read_and_fingerprint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "authorized.apk"
+            write_apk(apk, make_metadata(["LoginRequest"]))
+            real_zipfile = zipfile.ZipFile
+
+            class MutatingArchive:
+                def __init__(self, stream):
+                    self.archive = real_zipfile(stream)
+
+                def __enter__(self):
+                    self.archive.__enter__()
+                    return self
+
+                def __exit__(self, *args):
+                    result = self.archive.__exit__(*args)
+                    with apk.open("ab") as changed:
+                        changed.write(b"mutation")
+                    return result
+
+                def infolist(self):
+                    return self.archive.infolist()
+
+                def open(self, *args, **kwargs):
+                    return self.archive.open(*args, **kwargs)
+
+            with mock.patch(
+                "tools.il2cpp_metadata_inventory.zipfile.ZipFile",
+                side_effect=lambda stream, *args, **kwargs: MutatingArchive(stream),
+            ):
+                with self.assertRaisesRegex(
+                    MetadataInventoryError, "changed while reading"
+                ):
+                    inspect_apk(apk)
+
+    def test_rejects_fifo_without_blocking(self):
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("FIFO creation is unavailable on this platform")
+        with tempfile.TemporaryDirectory() as directory:
+            fifo = Path(directory) / "input.apk"
+            os.mkfifo(fifo)
+            with self.assertRaises(MetadataInventoryError):
+                inspect_apk(fifo)
 
 
 if __name__ == "__main__":

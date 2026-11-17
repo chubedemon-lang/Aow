@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import stat
 import struct
 import zipfile
 from pathlib import Path
@@ -67,42 +69,108 @@ class MetadataInventoryError(ValueError):
     """The local APK or metadata header is missing, malformed, or unsupported."""
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _file_identity(info: os.stat_result) -> tuple[int, int, int, int]:
+    """Return stable identity fields without treating a pathname rename as mutation."""
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_size,
+        info.st_mtime_ns,
+    )
 
 
 def _read_metadata(path: Path) -> tuple[bytes, int, str]:
-    if path.is_symlink() or not path.is_file():
+    """Read metadata and hash the same no-follow APK descriptor."""
+    if path.is_symlink():
         raise MetadataInventoryError("expected a regular local APK file")
-    apk_size = path.stat().st_size
-    if not 0 < apk_size <= MAX_APK_BYTES:
-        raise MetadataInventoryError("APK size outside safety bounds")
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise MetadataInventoryError(
+            "unable to open a regular local APK file without following links"
+        ) from exc
 
     try:
-        with zipfile.ZipFile(path) as archive:
-            matches = [item for item in archive.infolist()
-                       if item.filename == METADATA_MEMBER]
-            if len(matches) != 1:
-                raise MetadataInventoryError(
-                    "expected exactly one IL2CPP global metadata member"
-                )
-            info = matches[0]
-            if info.flag_bits & 0x1:
-                raise MetadataInventoryError("encrypted metadata member")
-            if not HEADER_MIN_BYTES <= info.file_size <= MAX_METADATA_BYTES:
-                raise MetadataInventoryError("metadata size outside safety bounds")
-            with archive.open(info) as source:
-                metadata = source.read(MAX_METADATA_BYTES + 1)
-            if len(metadata) != info.file_size:
-                raise MetadataInventoryError("metadata member size mismatch")
-    except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
-        raise MetadataInventoryError("not a readable APK ZIP") from exc
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise MetadataInventoryError("expected a regular local APK file")
+        apk_size = before.st_size
+        if not 0 < apk_size <= MAX_APK_BYTES:
+            raise MetadataInventoryError("APK size outside safety bounds")
 
-    return metadata, apk_size, _sha256_file(path)
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1  # The file object now owns the descriptor.
+            try:
+                with zipfile.ZipFile(stream) as archive:
+                    matches = [
+                        item for item in archive.infolist()
+                        if item.filename == METADATA_MEMBER
+                    ]
+                    if len(matches) != 1:
+                        raise MetadataInventoryError(
+                            "expected exactly one IL2CPP global metadata member"
+                        )
+                    info = matches[0]
+                    if info.flag_bits & 0x1:
+                        raise MetadataInventoryError("encrypted metadata member")
+                    if not HEADER_MIN_BYTES <= info.file_size <= MAX_METADATA_BYTES:
+                        raise MetadataInventoryError(
+                            "metadata size outside safety bounds"
+                        )
+                    with archive.open(info) as source:
+                        metadata = source.read(MAX_METADATA_BYTES + 1)
+                    if len(metadata) != info.file_size:
+                        raise MetadataInventoryError(
+                            "metadata member size mismatch"
+                        )
+
+                after_archive = os.fstat(stream.fileno())
+                if _file_identity(before) != _file_identity(after_archive):
+                    raise MetadataInventoryError(
+                        "APK changed while reading its metadata member"
+                    )
+
+                # Hash the already-open descriptor, not the pathname. A rename
+                # or replacement of the path cannot pair metadata from one
+                # inode with a fingerprint from another.
+                stream.seek(0)
+                digest = hashlib.sha256()
+                hashed_bytes = 0
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    hashed_bytes += len(chunk)
+                    if hashed_bytes > apk_size:
+                        raise MetadataInventoryError(
+                            "APK grew while computing its fingerprint"
+                        )
+                    digest.update(chunk)
+
+                after_hash = os.fstat(stream.fileno())
+                if (
+                    hashed_bytes != apk_size
+                    or _file_identity(before) != _file_identity(after_hash)
+                ):
+                    raise MetadataInventoryError(
+                        "APK changed while computing its fingerprint"
+                    )
+                apk_sha256 = digest.hexdigest()
+            except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+                raise MetadataInventoryError("not a readable APK ZIP") from exc
+
+        return metadata, apk_size, apk_sha256
+    except OSError as exc:
+        raise MetadataInventoryError(
+            "unable to read a stable regular local APK file"
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def inspect_apk(path: str | Path) -> dict:
