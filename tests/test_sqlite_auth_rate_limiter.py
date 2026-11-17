@@ -220,5 +220,21 @@ class SqliteAuthRateLimiterTests(unittest.TestCase):
             self.limiter.check_allowed(HostilePrincipal("another-invalid-principal"))
 
 
+    def test_constructor_rejects_sqlite_connection_subclasses_before_hooks(self):
+        class HostileConnection(sqlite3.Connection):
+            @property
+            def in_transaction(self):
+                raise AssertionError("custom transaction-state hook must not run")
+
+        connection = sqlite3.connect(
+            ":memory:", isolation_level=None, factory=HostileConnection
+        )
+        try:
+            with self.assertRaisesRegex(TypeError, "sqlite connection"):
+                SqliteAuthRateLimiter(connection, self.secret)
+        finally:
+            sqlite3.Connection.close(connection)
+
+
 if __name__ == "__main__":
     unittest.main()
