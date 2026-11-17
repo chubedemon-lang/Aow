@@ -127,6 +127,11 @@ on:
       - 'tests/test_sqlite_authorized_player_state_service.py'
       - 'docs/AUTHORIZED_PLAYER_STATE_SERVICE.md'
       - 'docs/IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md'
+      - 'server/sqlite_authorized_player_state_service.py'
+      - 'server/sqlite_authorized_shop_service.py'
+      - 'server/sqlite_character_authorizer.py'
+      - 'tests/test_sqlite_connection_boundaries.py'
+      - 'docs/SQLITE_CONNECTION_TRUST_BOUNDARY.md'
       - '.github/workflows/protocol-tests.yml'
 jobs:
   unit:
@@ -477,3 +482,28 @@ jobs:
         run: python -m py_compile tools/protocol_fixture_audit.py
       - name: Private stream fixture audit tests (synthetic streams only)
         run: python -m unittest discover -s tests -p 'test_protocol_fixture_audit.py' -v
+
+  sqlite-connection-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile exact SQLite authorization boundaries
+        run: |
+          python -m py_compile \
+            server/sqlite_authorized_character_service.py \
+            server/sqlite_authorized_player_state_service.py \
+            server/sqlite_authorized_map_position_service.py \
+            server/sqlite_authorized_combat_service.py \
+            server/sqlite_authorized_shop_service.py \
+            server/sqlite_authorized_player_bootstrap_service.py \
+            server/sqlite_authorized_world_state_service.py \
+            server/sqlite_character_authorizer.py \
+            server/sqlite_authorized_transaction.py
+      - name: SQLite authorization trust-boundary regression tests
+        run: python -m unittest discover -s tests -p 'test_sqlite_connection_boundaries.py' -v
