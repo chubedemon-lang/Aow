@@ -11,7 +11,7 @@ from server.sqlite_session_store import SqliteSessionStore
 
 def require_character_schema(connection: sqlite3.Connection) -> None:
     """Fail before any session/player/map schema is created if ownership is absent."""
-    if not isinstance(connection, sqlite3.Connection):
+    if type(connection) is not sqlite3.Connection:
         raise TypeError("sqlite connection required")
     try:
         connection.execute("SELECT id, account_id FROM characters LIMIT 0")
@@ -32,9 +32,9 @@ class SqliteCharacterAuthorizer:
 
     def __init__(self, connection: sqlite3.Connection,
                  sessions: SqliteSessionStore):
-        if not isinstance(connection, sqlite3.Connection):
+        if type(connection) is not sqlite3.Connection:
             raise TypeError("sqlite connection required")
-        if (not isinstance(sessions, SqliteSessionStore)
+        if (type(sessions) is not SqliteSessionStore
                 or sessions.db is not connection):
             raise ValueError("session store must use the same SQLite connection")
         self.db = connection
