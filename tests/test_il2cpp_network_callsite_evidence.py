@@ -114,6 +114,12 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         self.assertEqual((item["type"], item["method"]), ("Receiver", "Cycle"))
         self.assertEqual(item["entry_window_kind"],
                          "next_distinct_executable_entry_in_section")
+        provenance = item["cfg_memory_base_provenance_observations"]
+        self.assertEqual(
+            provenance["analysis_kind"], "bounded_cfg_memory_base_provenance"
+        )
+        self.assertFalse(provenance["absolute_addresses_emitted"])
+        self.assertFalse(provenance["raw_instructions_emitted"])
 
     def test_network_buffer_support_allowlist_is_explicit(self):
         report = inspect_bytes(

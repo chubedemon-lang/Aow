@@ -454,3 +454,23 @@ does not link any access to `NetworkSettings.HeaderLength`; the receive-length
 candidate, complete framing, compression placement, handshake and LoginRequest
 field order remain unverified. The real APK adapter stays disabled pending a
 provenance-reviewed authorized client-side fixture or local runtime trace.
+
+## Bounded memory-base provenance tooling — 2026-11-17
+
+The redacted callsite report now includes
+`cfg_memory_base_provenance_observations` for each resolved
+method window. This is a separate symbolic pass over supported unsigned-offset
+integer LDR/STR instructions. It tracks ADRP, 64-bit ADD-immediate, unshifted
+64-bit MOV copies, and 64-bit LDR results only when the effective slot matches
+a caller-supplied relative-relocation entry. It reports symbolic provenance
+classes and instruction-relative indexes, not absolute addresses or raw words.
+
+The pass drops state at unknown instructions, calls, backedges and
+multi-predecessor joins. Conditional edges assume both outcomes. It does not
+model stack spills, arbitrary loads, IL2CPP static-field layout or runtime
+values. A relocation-loaded pointer is not a managed-object or field identity.
+Synthetic tests validate the analyzer only; the APK was not re-analyzed by
+this tooling change. This does not identify NetworkSettings.HeaderLength or
+establish framing. The authorized client-side fixture/runtime-trace blocker
+remains unchanged.
+

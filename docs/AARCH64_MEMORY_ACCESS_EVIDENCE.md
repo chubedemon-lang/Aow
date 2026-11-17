@@ -27,12 +27,15 @@ reachability is not proof that an instruction executes at runtime.
 
 ## Interpretation limits
 
-The base register is not resolved to an object, static-fields block, stack
-frame, heap allocation, or data cell. The displacement is **not** a managed
-field offset. The summary does not decode IL2CPP field metadata, static-field
-layout, class initialization, relocation-backed pointer provenance, or values
-loaded/stored. SIMD/FP, sign-extending, unscaled, pre/post-indexed, pair, atomic
-and other memory forms are omitted.
+The base register is not resolved by this access-only summary to an
+object, static-fields block, stack frame, heap allocation, or data cell. The
+displacement is **not** a managed-field offset. A separate bounded,
+redacted base-provenance pass is documented in
+[AARCH64_MEMORY_BASE_PROVENANCE.md](AARCH64_MEMORY_BASE_PROVENANCE.md). That
+pass tracks only ADRP/ADD/MOV and explicitly supplied relative-relocation-backed
+64-bit LDR chains; it does not identify managed fields or resolve arbitrary
+pointer flows. SIMD/FP, sign-extending, unscaled, pre/post-indexed, pair, atomic
+and other memory forms remain omitted.
 
 Synthetic instruction-vector tests validate the decoder, CFG reachability,
 report bounds and redacted output only. No APK analysis is performed by tests.
