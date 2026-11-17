@@ -1,6 +1,6 @@
 """Bounded, redacted AArch64 memory-base provenance observations.
 
-Tracks ADRP/ADD/MOV, stack-pointer-derived addresses and relocation-backed
+Tracks ADR/ADRP/ADD/MOV, stack-pointer-derived addresses and relocation-backed
 64-bit LDR chains inside a conservative intraprocedural CFG. Absolute
 addresses are used internally and never emitted. This is static evidence,
 not a runtime trace or field resolver.
@@ -32,6 +32,20 @@ _NOP = 0xD503201F
 def _sign_extend(value, bits):
     sign_bit = 1 << (bits - 1)
     return value - (1 << bits) if value & sign_bit else value
+
+
+def _decode_adr(word, pc):
+    """Return (destination register, byte address) for ADR, else None."""
+    if (type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+            or type(pc) is not int or not 0 <= pc <= _U64_MAX or pc % 4):
+        return None
+    if (word & 0x9F000000) != 0x10000000:
+        return None
+    immediate = (((word >> 5) & 0x7FFFF) << 2) | ((word >> 29) & 0x3)
+    address = pc + _sign_extend(immediate, 21)
+    if not 0 <= address <= _U64_MAX:
+        return None
+    return word & 0x1F, address
 
 
 def _decode_adrp(word, pc):
@@ -150,6 +164,15 @@ def summarize_control_flow_memory_base_provenance(
         for instruction_index in range(block_start, block_end):
             word = words[instruction_index]
             pc = start_va + instruction_index * 4
+
+            adr = _decode_adr(word, pc)
+            if adr is not None:
+                destination, address = adr
+                if destination != 31:
+                    registers[destination] = (
+                        "adr_derived_address", address, instruction_index, 1
+                    )
+                continue
 
             adrp = _decode_adrp(word, pc)
             if adrp is not None:
