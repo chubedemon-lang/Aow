@@ -8,7 +8,8 @@ relocation slots, relocation targets, or raw instruction words.
 
 ## Supported provenance
 
-- ADRP creates an adrp_derived_address abstract value.
+- ADR creates an `adr_derived_address` value using its signed 21-bit byte offset from the instruction PC.
+- ADRP creates an `adrp_derived_address` value using its signed 21-bit page offset from the instruction PC page.
 - 64-bit ADD (immediate) preserves an existing address and records the latest
   instruction-relative definition.
 - 64-bit `ADD Xd, SP, #imm` marks the destination as `stack_pointer`; later
