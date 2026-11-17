@@ -65,7 +65,7 @@ def _has_foreign_key(connection, table: str, column: str,
 
 def require_character_lifecycle_schema(connection: sqlite3.Connection) -> None:
     """Validate all required tables and ownership/one-to-one constraints first."""
-    if not isinstance(connection, sqlite3.Connection):
+    if type(connection) is not sqlite3.Connection:
         raise TypeError("sqlite connection required")
     try:
         connection.execute("SELECT id FROM accounts LIMIT 0")
@@ -105,7 +105,7 @@ class SqliteAuthorizedCharacterService:
     def __init__(self, connection: sqlite3.Connection, *,
                  default_map_id: str = "test_map",
                  ttl_seconds: int = 900, clock=None):
-        if not isinstance(connection, sqlite3.Connection):
+        if type(connection) is not sqlite3.Connection:
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")
