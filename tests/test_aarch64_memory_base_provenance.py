@@ -4,6 +4,7 @@ import struct
 import unittest
 
 from tools.aarch64_memory_base_provenance import (
+    _decode_adr,
     _decode_adrp,
     summarize_control_flow_memory_base_provenance,
 )
@@ -21,6 +22,19 @@ def adrp(register, pc, target_page):
     immediate = pages & ((1 << 21) - 1)
     return (
         0x90000000
+        | ((immediate & 0x3) << 29)
+        | (((immediate >> 2) & 0x7FFFF) << 5)
+        | register
+    )
+
+
+def adr(register, pc, target):
+    offset = target - pc
+    if not -(1 << 20) <= offset < (1 << 20):
+        raise ValueError("ADR target out of range")
+    immediate = offset & ((1 << 21) - 1)
+    return (
+        0x10000000
         | ((immediate & 0x3) << 29)
         | (((immediate >> 2) & 0x7FFFF) << 5)
         | register
@@ -51,6 +65,54 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
         self.assertEqual(positive, (8, 0x10008000))
         self.assertEqual(negative, (9, 0x0FFF8000))
         self.assertIsNone(_decode_adrp(0xD503201F, pc))
+
+    def test_decodes_positive_and_negative_adr_byte_targets(self):
+        pc = 0x10001234
+        positive = _decode_adr(adr(8, pc, pc + 0x234), pc)
+        negative = _decode_adr(adr(9, pc, pc - 0x345), pc)
+        self.assertEqual(positive, (8, pc + 0x234))
+        self.assertEqual(negative, (9, pc - 0x345))
+        self.assertIsNone(_decode_adr(0xD503201F, pc))
+
+    def test_adr_rejects_unaligned_pc_and_address_wraparound(self):
+        positive = adr(8, 0x1000, 0x1004)
+        negative = adr(8, 0x1000, 0x0FFC)
+        self.assertIsNone(_decode_adr(positive, 0x1001))
+        self.assertIsNone(_decode_adr(positive, 0xFFFFFFFFFFFFFFFC))
+        self.assertIsNone(_decode_adr(negative, 0))
+
+    def test_tracks_adr_into_store_base_and_redacts_address(self):
+        start = 0x5100
+        target = 0x5488
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(adr(8, start, target), str_w(0, 8, 1)), start
+        )
+        access = result["memory_accesses"][0]
+        self.assertEqual(access["base_provenance"], "adr_derived_address")
+        self.assertEqual(access["base_definition_instruction_index"], 0)
+        self.assertEqual(access["base_derivation_depth"], 1)
+        self.assertNotIn(hex(target), json.dumps(result))
+        self.assertFalse(result["absolute_addresses_emitted"])
+
+    def test_tracks_adr_relocation_loaded_pointer_without_emitting_addresses(self):
+        start = 0x5200
+        slot = 0x5480
+        target = 0xA000
+        words = (adr(8, start, slot), ldr_x(9, 8), str_w(0, 9))
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words), start, relocation_targets={slot: target}
+        )
+        self.assertEqual(
+            result["memory_accesses"][0]["base_provenance"],
+            "adr_derived_address",
+        )
+        self.assertEqual(
+            result["memory_accesses"][1]["base_provenance"],
+            "relocation_loaded_pointer",
+        )
+        rendered = json.dumps(result)
+        self.assertNotIn(hex(slot), rendered)
+        self.assertNotIn(hex(target), rendered)
 
     def test_tracks_adrp_add_and_mov_into_store_base(self):
         start = 0x1000
