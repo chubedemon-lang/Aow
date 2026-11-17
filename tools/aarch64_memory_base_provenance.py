@@ -63,6 +63,22 @@ def _decode_adrp(word, pc):
     return word & 0x1F, address
 
 
+def _decode_ldr_literal(word, pc):
+    """Return (destination register, literal-slot address) for 64-bit LDR literal."""
+    if (type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+            or type(pc) is not int or not 0 <= pc <= _U64_MAX or pc % 4):
+        return None
+    # LDR Xt, label has the fixed 64-bit literal encoding 0x58xxxxxx.
+    # Keep LDR Wt, LDRSW and PRFM literal forms outside this pointer analysis.
+    if (word & 0xFF000000) != 0x58000000:
+        return None
+    displacement = _sign_extend((word >> 5) & 0x7FFFF, 19) << 2
+    address = pc + displacement
+    if not 0 <= address <= _U64_MAX:
+        return None
+    return word & 0x1F, address
+
+
 def _decode_add_from_stack_pointer(word):
     """Return (destination, immediate) for 64-bit ADD Xd, SP, #imm."""
     if (type(word) is not int or not 0 <= word <= 0xFFFFFFFF
@@ -140,6 +156,13 @@ def summarize_control_flow_memory_base_provenance(
 
     outgoing_states = {}
     observations = []
+    literal_load_observations = []
+    total_literal_loads = sum(
+        _decode_ldr_literal(word, start_va + index * 4) is not None
+        for index, word in enumerate(words)
+    )
+    reachable_literal_loads = 0
+    relocation_backed_literal_loads = 0
     total_accesses = sum(
         decode_unsigned_immediate_memory_access(word) is not None
         for word in words
@@ -223,6 +246,32 @@ def summarize_control_flow_memory_base_provenance(
                         registers.pop(destination, None)
                 continue
 
+            literal_load = _decode_ldr_literal(word, pc)
+            if literal_load is not None:
+                destination, literal_slot = literal_load
+                relocation_target = relocations.get(literal_slot)
+                reachable_literal_loads += 1
+                if relocation_target is not None:
+                    relocation_backed_literal_loads += 1
+                if len(literal_load_observations) < max_accesses:
+                    literal_load_observations.append({
+                        "instruction_index": instruction_index,
+                        "target_register": "xzr" if destination == 31 else f"x{destination}",
+                        "source": "pc_relative_literal",
+                        "relocation_backed": relocation_target is not None,
+                    })
+                if destination != 31:
+                    if relocation_target is None:
+                        registers.pop(destination, None)
+                    else:
+                        registers[destination] = (
+                            "relocation_loaded_pointer",
+                            relocation_target,
+                            instruction_index,
+                            1,
+                        )
+                continue
+
             access = decode_unsigned_immediate_memory_access(word)
             if access is not None:
                 base = (word >> 5) & 0x1F
@@ -288,6 +337,12 @@ def summarize_control_flow_memory_base_provenance(
     return {
         "analysis_kind": "bounded_cfg_memory_base_provenance",
         "instruction_count": instruction_count,
+        "literal_load_count": total_literal_loads,
+        "statically_reachable_literal_load_count": reachable_literal_loads,
+        "statically_unreachable_literal_load_count": total_literal_loads - reachable_literal_loads,
+        "relocation_backed_literal_load_count": relocation_backed_literal_loads,
+        "literal_loads": literal_load_observations,
+        "literal_loads_truncated": reachable_literal_loads > len(literal_load_observations),
         "memory_access_count": total_accesses,
         "statically_reachable_memory_access_count": reachable_accesses,
         "statically_unreachable_memory_access_count": total_accesses - reachable_accesses,

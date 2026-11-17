@@ -6,6 +6,7 @@ import unittest
 from tools.aarch64_memory_base_provenance import (
     _decode_adr,
     _decode_adrp,
+    _decode_ldr_literal,
     summarize_control_flow_memory_base_provenance,
 )
 
@@ -55,6 +56,14 @@ def ldr_x(destination, base, immediate=0):
 
 def str_w(source, base, immediate=0):
     return (2 << 30) | 0x39000000 | (immediate << 10) | (base << 5) | source
+
+
+def ldr_literal_x(destination, pc, target):
+    displacement = target - pc
+    if displacement % 4 or not -(1 << 20) <= displacement < (1 << 20):
+        raise ValueError("LDR literal target out of range or unaligned")
+    immediate = (displacement >> 2) & ((1 << 19) - 1)
+    return 0x58000000 | (immediate << 5) | destination
 
 
 class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
@@ -235,6 +244,107 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
             result["memory_accesses"][1]["base_provenance"], "unknown"
         )
         self.assertEqual(result["memory_accesses_with_known_base_provenance"], 1)
+
+    def test_decodes_forward_and_backward_64_bit_ldr_literal(self):
+        pc = 0x7000
+        self.assertEqual(
+            _decode_ldr_literal(ldr_literal_x(9, pc, pc + 0x100), pc),
+            (9, pc + 0x100),
+        )
+        self.assertEqual(
+            _decode_ldr_literal(ldr_literal_x(10, pc, pc - 0x80), pc),
+            (10, pc - 0x80),
+        )
+        self.assertIsNone(_decode_ldr_literal(0x18000000, pc))  # LDR Wt literal
+        self.assertIsNone(_decode_ldr_literal(0xD503201F, pc))  # NOP
+
+    def test_ldr_literal_rejects_unaligned_pc_and_address_wraparound(self):
+        pc = 0x7000
+        forward = ldr_literal_x(9, pc, pc + 4)
+        backward = ldr_literal_x(9, pc, pc - 4)
+        self.assertIsNone(_decode_ldr_literal(forward, pc + 1))
+        self.assertIsNone(_decode_ldr_literal(forward, 0xFFFFFFFFFFFFFFFC))
+        self.assertIsNone(_decode_ldr_literal(backward, 0))
+
+    def test_tracks_relocation_backed_literal_pointer_and_redacts_addresses(self):
+        start = 0x7100
+        slot = 0x7200
+        target = 0xA000
+        words = (
+            ldr_literal_x(9, start, slot),
+            str_w(0, 9, 3),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words), start, relocation_targets={slot: target}
+        )
+        self.assertEqual(result["literal_load_count"], 1)
+        self.assertEqual(result["statically_reachable_literal_load_count"], 1)
+        self.assertEqual(result["relocation_backed_literal_load_count"], 1)
+        self.assertEqual(
+            result["literal_loads"][0],
+            {
+                "instruction_index": 0,
+                "target_register": "x9",
+                "source": "pc_relative_literal",
+                "relocation_backed": True,
+            },
+        )
+        self.assertEqual(
+            result["memory_accesses"][0]["base_provenance"],
+            "relocation_loaded_pointer",
+        )
+        rendered = json.dumps(result)
+        self.assertNotIn(hex(slot), rendered)
+        self.assertNotIn(hex(target), rendered)
+
+    def test_unresolved_literal_load_clears_previous_pointer_provenance(self):
+        start = 0x7300
+        prior_slot = 0x7380
+        prior_target = 0xA100
+        unresolved_slot = 0x73A0
+        words = (
+            adr(9, start, prior_slot),
+            ldr_literal_x(9, start + 4, unresolved_slot),
+            str_w(0, 9),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words), start, relocation_targets={prior_slot: prior_target}
+        )
+        self.assertFalse(result["literal_loads"][0]["relocation_backed"])
+        self.assertEqual(
+            result["memory_accesses"][0]["base_provenance"], "unknown"
+        )
+
+    def test_unreachable_literal_load_is_counted_but_not_interpreted(self):
+        start = 0x7400
+        words = (
+            0x14000002,  # B to instruction 2; instruction 1 is unreachable
+            ldr_literal_x(9, start + 4, start + 0x80),
+            str_w(0, 9),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words), start
+        )
+        self.assertEqual(result["literal_load_count"], 1)
+        self.assertEqual(result["statically_reachable_literal_load_count"], 0)
+        self.assertEqual(result["statically_unreachable_literal_load_count"], 1)
+        self.assertEqual(result["literal_loads"], [])
+        self.assertEqual(
+            result["memory_accesses"][0]["base_provenance"], "unknown"
+        )
+
+    def test_literal_load_report_obeys_observation_limit(self):
+        start = 0x7500
+        words = (
+            ldr_literal_x(8, start, start + 0x80),
+            ldr_literal_x(9, start + 4, start + 0x84),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words), start, max_accesses=1
+        )
+        self.assertEqual(result["literal_load_count"], 2)
+        self.assertEqual(len(result["literal_loads"]), 1)
+        self.assertTrue(result["literal_loads_truncated"])
 
     def test_32_bit_add_from_wsp_does_not_create_pointer_provenance(self):
         start = 0x4300
