@@ -26,7 +26,7 @@ def authorized_character_transaction(connection, authorizer, token,
     if type(connection) is not sqlite3.Connection:
         raise TypeError("sqlite connection required")
     if type(authorizer) is not SqliteCharacterAuthorizer:
-        raise TypeError("character authorizer required")
+        raise TypeError("authorizer must support transactional authorization")
     if authorizer.db is not connection:
         raise ValueError("authorizer must use the same SQLite connection")
     session_store = authorizer.sessions
