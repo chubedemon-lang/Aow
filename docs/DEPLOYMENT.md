@@ -63,6 +63,23 @@ It does not create, migrate, repair, or modify the database. A successful result
 means only that the local synthetic prototype passes these checks. It validates the `synthetic-v1` schema contract. It explicitly reports
 `apk_compatible: false` and `production_ready: false`.
 
+## Private SQLite backup
+
+Before experimenting with the local synthetic database, create a verified
+non-overwriting snapshot with
+[the SQLite backup runbook](SQLITE_BACKUP.md):
+
+```sh
+mkdir -p ./backups
+python -m tools.sqlite_backup ./var/aow_mock.sqlite3 ./backups/aow_mock-before-change.sqlite3
+```
+
+The backup tool reads the source in SQLite read-only mode, includes committed
+WAL content through SQLite's online backup API, validates the temporary copy,
+and refuses to replace an existing destination. Keep both source and backup
+outside Git. A successful backup is not a production-readiness or APK-
+compatibility result.
+
 ## Operational cautions
 
 - Back up the SQLite file before experimenting with synthetic data.

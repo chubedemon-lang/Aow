@@ -132,6 +132,9 @@ on:
       - 'server/sqlite_character_authorizer.py'
       - 'tests/test_sqlite_connection_boundaries.py'
       - 'docs/SQLITE_CONNECTION_TRUST_BOUNDARY.md'
+      - 'tools/sqlite_backup.py'
+      - 'tests/test_sqlite_backup.py'
+      - 'docs/SQLITE_BACKUP.md'
       - '.github/workflows/protocol-tests.yml'
 jobs:
   unit:
@@ -507,3 +510,18 @@ jobs:
             server/sqlite_authorized_transaction.py
       - name: SQLite authorization trust-boundary regression tests
         run: python -m unittest discover -s tests -p 'test_sqlite_connection_boundaries.py' -v
+
+  sqlite-online-backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile verified SQLite backup utility
+        run: python -m py_compile tools/sqlite_backup.py
+      - name: SQLite backup safety regression tests (synthetic databases only)
+        run: python -m unittest discover -s tests -p 'test_sqlite_backup.py' -v

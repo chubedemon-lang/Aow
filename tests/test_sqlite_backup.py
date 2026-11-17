@@ -1,12 +1,16 @@
 """Tests for the verified, non-overwriting SQLite backup utility."""
+import json
 import os
+import stat
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.sqlite_backup import BackupError, create_backup
+from tools.sqlite_backup import BackupError, create_backup, main
 
 
 def make_database(path, *, foreign_key_violation=False):
@@ -180,6 +184,47 @@ class SqliteBackupTests(unittest.TestCase):
         report = create_backup(self.source, destination)
         self.assertTrue(destination.is_file())
         self.assertEqual(report.integrity, "ok")
+
+
+    def test_backup_permissions_are_owner_only_on_posix(self):
+        if os.name != "posix":
+            self.skipTest("POSIX permission bits are unavailable")
+        report = create_backup(self.source, self.destination)
+        mode = stat.S_IMODE(self.destination.stat().st_mode)
+        self.assertEqual(mode & 0o077, 0)
+        self.assertEqual(report.integrity, "ok")
+
+    def test_fails_closed_when_atomic_hard_links_are_unavailable(self):
+        destination = self.root / "no-hardlink.sqlite3"
+        with patch("tools.sqlite_backup.os.link", side_effect=OSError("unsupported")):
+            with self.assertRaises(BackupError):
+                create_backup(self.source, destination)
+        self.assertFalse(destination.exists())
+        self.assertEqual(
+            list(self.root.glob(".no-hardlink.sqlite3.*.tmp")),
+            [],
+        )
+
+    def test_cli_emits_aggregate_report_without_database_rows(self):
+        output = StringIO()
+        with redirect_stdout(output):
+            result = main([str(self.source), str(self.destination)])
+        self.assertEqual(result, 0)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["integrity"], "ok")
+        self.assertEqual(report["foreign_key_violations"], 0)
+        self.assertNotIn("alice", output.getvalue())
+        self.assertNotIn("hero", output.getvalue())
+
+    def test_cli_returns_error_and_preserves_existing_destination(self):
+        self.destination.write_bytes(b"preserve-this-file")
+        errors = StringIO()
+        with redirect_stderr(errors):
+            with self.assertRaises(SystemExit) as raised:
+                main([str(self.source), str(self.destination)])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("backup failed", errors.getvalue())
+        self.assertEqual(self.destination.read_bytes(), b"preserve-this-file")
 
 
 if __name__ == "__main__":
