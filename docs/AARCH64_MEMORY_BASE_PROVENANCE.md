@@ -19,6 +19,10 @@ relocation slots, relocation targets, or raw instruction words.
 - A 64-bit unsigned-offset LDR can create a relocation_loaded_pointer only
   when its effective slot exactly matches a caller-supplied
   R_AARCH64_RELATIVE relocation entry.
+- A 64-bit PC-relative `LDR Xt, label` literal load is reported separately.
+  It creates a relocation_loaded_pointer only when its literal-pool slot
+  exactly matches a caller-supplied relative-relocation entry; unresolved
+  literal loads invalidate the destination register's prior abstract value.
 - An access based on SP is labeled stack_pointer; all other unresolved bases
   are unknown.
 
@@ -30,7 +34,7 @@ instructions clear the abstract state.
 
 ## Output and safety
 
-Each retained memory-access observation contains only:
+Each retained unsigned-offset memory-access observation contains only:
 
 - instruction-relative index;
 - load/store operation and access width;
@@ -39,9 +43,10 @@ Each retained memory-access observation contains only:
 - relative definition index and derivation depth.
 
 The report includes total, structurally reachable and structurally
-unreachable access counts. It is capped at 128 observations by default and
-accepts at most 512. The code window is capped at 64 KiB and the supplied
-relocation map at 200,000 entries.
+unreachable unsigned-offset access counts, plus separate PC-relative literal
+load counts and redacted literal-load observations. Each observation list is
+capped at 128 by default and accepts at most 512. The code window is capped at
+64 KiB and the supplied relocation map at 200,000 entries.
 
 Absolute addresses, raw instruction words, APK bytes and packet bytes are not
 emitted. The caller-supplied relocation map is derived from the private ELF
@@ -51,7 +56,7 @@ analysis pass and must remain in memory only.
 
 This is not a full AArch64 emulator, alias analysis, points-to analysis or
 runtime trace. It does not model register spills, stack slots, pair/unscaled/
-pre/post-indexed/SIMD/atomic memory operations, arbitrary loads, class
+pre/post-indexed/SIMD/atomic memory operations, arbitrary data loads, class
 initialization, IL2CPP static-field layout or arbitrary relocation types.
 Unknown instructions intentionally discard state. A relocation-loaded pointer
 does not identify the pointed-to managed object or field. Stack-pointer-derived
