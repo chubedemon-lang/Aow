@@ -7,6 +7,19 @@ from server.synthetic_session_registry import RegistryError, SessionRegistry
 from server.synthetic_session_state import Phase, SessionError
 
 
+class HostileString(str):
+    """String subclass whose hooks must not run during registry validation."""
+
+    def __len__(self):
+        raise AssertionError("length hook must not run")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("strip hook must not run")
+
+    def __hash__(self):
+        raise AssertionError("hash hook must not run")
+
+
 class RegistryTests(unittest.TestCase):
     def test_capacity_and_release(self):
         registry = SessionRegistry(1)
@@ -56,6 +69,22 @@ class RegistryTests(unittest.TestCase):
             with self.assertRaises(RegistryError):
                 registry.open(key)
         self.assertEqual(registry.active_count, 0)
+
+    def test_connection_and_identity_strings_reject_subclasses_before_hooks(self):
+        registry = SessionRegistry()
+        with self.assertRaises(RegistryError):
+            registry.open(HostileString("connection"))
+        self.assertEqual(registry.active_count, 0)
+
+        session = registry.open("connection")
+        with self.assertRaises(SessionError):
+            registry.authenticate("connection", HostileString("account"))
+        self.assertEqual(session.snapshot.phase, Phase.NEW)
+
+        registry.authenticate("connection", "account")
+        with self.assertRaises(SessionError):
+            registry.select_character("connection", HostileString("hero"))
+        self.assertEqual(session.snapshot.phase, Phase.AUTHENTICATED)
 
     def test_failed_auth_does_not_reserve_account(self):
         registry = SessionRegistry()
