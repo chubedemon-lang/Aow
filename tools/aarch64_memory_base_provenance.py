@@ -19,7 +19,7 @@ from tools.aarch64_call_argument_evidence import (
     _is_indirect_call,
 )
 from tools.aarch64_memory_access_evidence import (
-    decode_unsigned_immediate_memory_access,
+    decode_integer_immediate_memory_access,
 )
 
 _MAX_CODE_WINDOW_BYTES = 64 * 1024
@@ -179,7 +179,7 @@ def summarize_control_flow_memory_base_provenance(
     reachable_literal_loads = 0
     relocation_backed_literal_loads = 0
     total_accesses = sum(
-        decode_unsigned_immediate_memory_access(word) is not None
+        decode_integer_immediate_memory_access(word) is not None
         for word in words
     )
     reachable_accesses = 0
@@ -310,7 +310,7 @@ def summarize_control_flow_memory_base_provenance(
                         )
                 continue
 
-            access = decode_unsigned_immediate_memory_access(word)
+            access = decode_integer_immediate_memory_access(word)
             if access is not None:
                 base = (word >> 5) & 0x1F
                 target = word & 0x1F
@@ -336,6 +336,9 @@ def summarize_control_flow_memory_base_provenance(
                         "operation": access["operation"],
                         "access_bytes": access["access_bytes"],
                         "base_register": access["base_register"],
+                        "addressing_mode": access["addressing_mode"],
+                        "byte_offset": access["byte_offset"],
+                        "base_update_bytes": access["base_update_bytes"],
                         "base_provenance": provenance,
                         "base_definition_instruction_index": definition,
                         "base_derivation_depth": depth,
@@ -346,14 +349,32 @@ def summarize_control_flow_memory_base_provenance(
                     if (access["access_bytes"] == 8 and base_state is not None
                             and base_state[1] is not None):
                         effective_address = base_state[1] + access["byte_offset"]
-                        relocated_target = relocations.get(effective_address)
-                        if relocated_target is not None:
-                            registers[target] = (
-                                "relocation_loaded_pointer",
-                                relocated_target,
-                                instruction_index,
-                                1,
+                        if 0 <= effective_address <= _U64_MAX:
+                            relocated_target = relocations.get(effective_address)
+                            if relocated_target is not None:
+                                registers[target] = (
+                                    "relocation_loaded_pointer",
+                                    relocated_target,
+                                    instruction_index,
+                                    1,
+                                )
+
+                # Pre/post-indexed forms update the base after the memory
+                # operation. Preserve only a previously known symbolic origin.
+                writeback = access["base_update_bytes"]
+                if writeback and base != 31:
+                    if base_state is None:
+                        registers.pop(base, None)
+                    else:
+                        kind, value, _definition, depth = base_state
+                        updated_value = None if value is None else value + writeback
+                        if (updated_value is None
+                                or 0 <= updated_value <= _U64_MAX):
+                            registers[base] = (
+                                kind, updated_value, instruction_index, depth + 1
                             )
+                        else:
+                            registers.pop(base, None)
                 continue
 
             if (_decode_bl_target(word, pc) is not None

@@ -70,6 +70,25 @@ def str_w(source, base, immediate=0):
     return (2 << 30) | 0x39000000 | (immediate << 10) | (base << 5) | source
 
 
+
+def unscaled_access(*, size, opc, base, target, immediate, mode=0):
+    return (
+        (size << 30)
+        | 0x38000000
+        | (opc << 22)
+        | ((immediate & 0x1FF) << 12)
+        | (mode << 10)
+        | (base << 5)
+        | target
+    )
+
+
+def ldur_x(destination, base, immediate):
+    return unscaled_access(
+        size=3, opc=1, base=base, target=destination, immediate=immediate
+    )
+
+
 def ldr_literal_x(destination, pc, target):
     displacement = target - pc
     if displacement % 4 or not -(1 << 20) <= displacement < (1 << 20):
@@ -471,6 +490,76 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
         self.assertEqual(result["statically_reachable_memory_access_count"], 2)
         self.assertEqual(len(result["memory_accesses"]), 1)
         self.assertTrue(result["memory_accesses_truncated"])
+
+
+    def test_signed_unscaled_load_resolves_relocation_slot(self):
+        start = 0x1000
+        slot = 0x5038
+        target = 0x9000
+        words = (
+            adrp(8, start, 0x5000),
+            add_x(8, 8, 0x40),
+            ldur_x(9, 8, -8),
+            str_w(0, 9),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words), start, relocation_targets={slot: target}
+        )
+        load, store = result["memory_accesses"]
+        self.assertEqual(load["addressing_mode"], "unscaled")
+        self.assertEqual(load["byte_offset"], -8)
+        self.assertEqual(load["base_provenance"], "adrp_derived_address")
+        self.assertEqual(store["base_provenance"], "relocation_loaded_pointer")
+        rendered = json.dumps(result)
+        self.assertNotIn(hex(slot), rendered)
+        self.assertNotIn(hex(target), rendered)
+
+    def test_pre_index_writeback_updates_known_base_provenance(self):
+        start = 0x8100
+        words = (
+            adr(8, start, 0x9000),
+            unscaled_access(
+                size=2, opc=0, base=8, target=0, immediate=16, mode=3
+            ),
+            str_w(0, 8),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words), start
+        )
+        pre_index, after = result["memory_accesses"][0:2]
+        self.assertEqual(pre_index["addressing_mode"], "pre_index")
+        self.assertEqual(pre_index["byte_offset"], 16)
+        self.assertEqual(pre_index["base_update_bytes"], 16)
+        self.assertEqual(after["base_provenance"], "adr_derived_address")
+        self.assertEqual(after["base_definition_instruction_index"], 1)
+        self.assertEqual(after["base_derivation_depth"], 2)
+
+    def test_post_index_load_uses_old_address_then_updates_base(self):
+        start = 0x8200
+        slot = 0x8300
+        target = 0xA000
+        words = (
+            adr(8, start, slot),
+            unscaled_access(
+                size=3, opc=1, base=8, target=9, immediate=8, mode=1
+            ),
+            str_w(0, 8),
+            str_w(0, 9),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words), start, relocation_targets={slot: target}
+        )
+        load, updated_base_store, loaded_pointer_store = result["memory_accesses"]
+        self.assertEqual(load["addressing_mode"], "post_index")
+        self.assertEqual(load["byte_offset"], 0)
+        self.assertEqual(load["base_update_bytes"], 8)
+        self.assertEqual(
+            updated_base_store["base_definition_instruction_index"], 1
+        )
+        self.assertEqual(
+            loaded_pointer_store["base_provenance"],
+            "relocation_loaded_pointer",
+        )
 
 
 if __name__ == "__main__":
