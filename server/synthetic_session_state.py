@@ -48,7 +48,7 @@ class Session:
 
     @staticmethod
     def _identifier(value):
-        if not isinstance(value, str) or not 1 <= len(value) <= 128 or not value.strip():
+        if type(value) is not str or not 1 <= len(value) <= 128 or not value.strip():
             raise SessionError("invalid identifier")
         return value
 
