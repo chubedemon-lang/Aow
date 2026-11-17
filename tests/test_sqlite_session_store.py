@@ -184,6 +184,40 @@ class SqliteSessionStoreTests(unittest.TestCase):
             1e300,
         )
 
+    def test_resolve_rejects_future_dated_session_after_clock_moves_backwards(self):
+        token = self.store.issue(45)
+        digest = hashlib.sha256(token.encode("ascii")).digest()
+        created_at = self.now + 1
+        expires_at = created_at + 60
+        self.db.execute(
+            "UPDATE durable_sessions SET created_at=?, expires_at=? WHERE token_hash=?",
+            (created_at, expires_at, digest),
+        )
+        self.now -= 1
+
+        with self.assertRaisesRegex(SessionError, "invalid session"):
+            self.store.resolve(token)
+        self.assertFalse(self.db.in_transaction)
+
+        stored = self.db.execute(
+            "SELECT created_at, expires_at FROM durable_sessions WHERE token_hash=?",
+            (digest,),
+        ).fetchone()
+        self.assertEqual(stored, (created_at, expires_at))
+
+        self.db.execute("BEGIN IMMEDIATE")
+        with self.assertRaisesRegex(SessionError, "invalid session"):
+            self.store.resolve_in_transaction(token)
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertFalse(self.db.in_transaction)
+
+        stored_after = self.db.execute(
+            "SELECT created_at, expires_at FROM durable_sessions WHERE token_hash=?",
+            (digest,),
+        ).fetchone()
+        self.assertEqual(stored_after, (created_at, expires_at))
+
     def test_in_transaction_resolve_rejects_corrupt_row_without_taking_over_transaction(self):
         token = self.store.issue(44)
         digest = hashlib.sha256(token.encode("ascii")).digest()
