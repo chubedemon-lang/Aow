@@ -424,3 +424,27 @@ resources were committed, and no official server was contacted.
 
 The helper-boundary parser is documented in AARCH64_EH_FRAME_INDEX.md and is
 covered by synthetic-only tests.
+
+
+## Unsigned-immediate memory-access summaries — tooling only
+
+The native callsite report now includes a bounded, redacted summary of integer
+LDR/STR instructions using unsigned scaled-immediate addressing for selected
+network and login/session serializer entry windows. Each event reports a
+relative instruction index, load/store direction, access width, base/target
+register names and encoded byte displacement. The per-method report is capped
+at 128 events and emits no native address or instruction word.
+
+This is a linear scan of a bounded entry window, not a control-flow graph or
+execution trace. The base register is not resolved, so a displacement cannot
+be identified as a managed field offset or attributed to a static field. Stack,
+object, static, heap and unrelated memory accesses may all appear. SIMD/FP,
+sign-extending, unscaled, pre/post-indexed, pair and atomic forms are omitted.
+
+Synthetic instruction-vector tests validate only the decoder, bounds and
+redacted report shape. No APK pass was run for this tooling change. In
+particular, no new evidence links an access to NetworkSettings.HeaderLength;
+the four-byte receive-length candidate, complete sender/receiver framing,
+compression placement, handshake and LoginRequest field order remain
+unverified. The APK adapter stays disabled pending a provenance-reviewed
+authorized client-side fixture or local runtime trace.
