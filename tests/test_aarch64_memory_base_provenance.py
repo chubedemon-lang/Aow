@@ -133,6 +133,56 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
         )
         self.assertEqual(result["memory_accesses"][0]["base_provenance"], "stack_pointer")
 
+    def test_tracks_stack_pointer_derived_address_through_add_and_mov(self):
+        start = 0x4100
+        # ADD X8, SP, #1, LSL #12; ADD X9, X8, #0x10; MOV X10, X9.
+        add_from_sp_shifted = (
+            0x91000000 | (1 << 22) | (1 << 10) | (31 << 5) | 8
+        )
+        words = (
+            add_from_sp_shifted,
+            add_x(9, 8, 0x10),
+            mov_x(10, 9),
+            str_w(0, 10, 1),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words), start
+        )
+        access = result["memory_accesses"][0]
+        self.assertEqual(access["base_register"], "x10")
+        self.assertEqual(access["base_provenance"], "stack_pointer")
+        self.assertEqual(access["base_definition_instruction_index"], 1)
+        self.assertEqual(access["base_derivation_depth"], 3)
+        self.assertEqual(result["memory_accesses_with_known_base_provenance"], 1)
+
+    def test_stack_pointer_derived_load_never_uses_relocation_absolute_address(self):
+        start = 0x4200
+        words = (
+            add_x(8, 31, 0x20),
+            ldr_x(9, 8),
+            str_w(0, 9),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words), start,
+            relocation_targets={0x20: 0x9000},
+        )
+        self.assertEqual(
+            result["memory_accesses"][0]["base_provenance"], "stack_pointer"
+        )
+        self.assertEqual(
+            result["memory_accesses"][1]["base_provenance"], "unknown"
+        )
+        self.assertEqual(result["memory_accesses_with_known_base_provenance"], 1)
+
+    def test_32_bit_add_from_wsp_does_not_create_pointer_provenance(self):
+        start = 0x4300
+        add_from_wsp = 0x11000000 | (0x20 << 10) | (31 << 5) | 8
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(add_from_wsp, str_w(0, 8)), start
+        )
+        self.assertEqual(result["memory_accesses"][0]["base_provenance"], "unknown")
+        self.assertEqual(result["memory_accesses_with_known_base_provenance"], 0)
+
     def test_rejects_invalid_input_and_relocation_maps(self):
         invalid = (
             (b"abc", 0x1000, None, 128),

@@ -1,8 +1,9 @@
 """Bounded, redacted AArch64 memory-base provenance observations.
 
-Tracks only ADRP/ADD/MOV and relocation-backed 64-bit LDR chains inside a
-conservative intraprocedural CFG. Absolute addresses are used internally and
-never emitted. This is static evidence, not a runtime trace or field resolver.
+Tracks ADRP/ADD/MOV, stack-pointer-derived addresses and relocation-backed
+64-bit LDR chains inside a conservative intraprocedural CFG. Absolute
+addresses are used internally and never emitted. This is static evidence,
+not a runtime trace or field resolver.
 """
 import struct
 
@@ -46,6 +47,24 @@ def _decode_adrp(word, pc):
     if not 0 <= address <= _U64_MAX:
         return None
     return word & 0x1F, address
+
+
+def _decode_add_from_stack_pointer(word):
+    """Return (destination, immediate) for 64-bit ADD Xd, SP, #imm."""
+    if (type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+            or (word & 0x7F800000) != 0x11000000
+            or not (word & 0x80000000)):
+        return None
+    destination = word & 0x1F
+    source = (word >> 5) & 0x1F
+    # In ADD (immediate), Rn=31 denotes SP. Keep Xd=31 out of this
+    # transfer because it writes SP itself rather than a general register.
+    if source != 31 or destination == 31:
+        return None
+    immediate = (word >> 10) & 0xFFF
+    if word & (1 << 22):
+        immediate <<= 12
+    return destination, immediate
 
 
 def _validate_relocation_targets(relocation_targets):
@@ -141,13 +160,24 @@ def summarize_control_flow_memory_base_provenance(
                     )
                 continue
 
+            add_from_sp = _decode_add_from_stack_pointer(word)
+            if add_from_sp is not None:
+                destination, _immediate = add_from_sp
+                # The concrete SP value is intentionally not modeled. Preserve
+                # only its provenance class so it cannot be mistaken for an
+                # absolute address or used for relocation-slot matching.
+                registers[destination] = (
+                    "stack_pointer", None, instruction_index, 1
+                )
+                continue
+
             add = _decode_add_immediate(word)
             if add is not None:
                 destination, source, immediate, width_mask = add
                 if width_mask == _U64_MAX and source in registers:
                     kind, value, _definition, depth = registers[source]
-                    result = value + immediate
-                    if result <= _U64_MAX:
+                    result = None if value is None else value + immediate
+                    if result is None or result <= _U64_MAX:
                         registers[destination] = (
                             kind, result, instruction_index, depth + 1
                         )
@@ -203,7 +233,8 @@ def summarize_control_flow_memory_base_provenance(
 
                 if access["operation"] == "load" and target != 31:
                     registers.pop(target, None)
-                    if access["access_bytes"] == 8 and base_state is not None:
+                    if (access["access_bytes"] == 8 and base_state is not None
+                            and base_state[1] is not None):
                         effective_address = base_state[1] + access["byte_offset"]
                         relocated_target = relocations.get(effective_address)
                         if relocated_target is not None:
