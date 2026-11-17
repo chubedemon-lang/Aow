@@ -69,14 +69,13 @@ class MetadataInventoryError(ValueError):
     """The local APK or metadata header is missing, malformed, or unsupported."""
 
 
-def _file_identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
-    """Return descriptor identity fields used to detect in-place mutation."""
+def _file_identity(info: os.stat_result) -> tuple[int, int, int, int]:
+    """Return stable identity fields without treating a pathname rename as mutation."""
     return (
         info.st_dev,
         info.st_ino,
         info.st_size,
         info.st_mtime_ns,
-        info.st_ctime_ns,
     )
 
 
