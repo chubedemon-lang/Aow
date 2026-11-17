@@ -28,6 +28,7 @@ MAX_BUFFER_BYTES = 2 * 1024 * 1024
 DEFAULT_MAX_PAYLOAD_BYTES = 1024 * 1024
 DEFAULT_MAX_BUFFER_BYTES = DEFAULT_MAX_PAYLOAD_BYTES + 4
 MAX_CANDIDATE_FRAMES = 4096
+MAX_IO_EVENTS = MAX_CHUNKS_PER_DIRECTION * 2
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _HEX_BYTES = re.compile(r"^(?:[0-9a-fA-F]{2})+$")
@@ -35,14 +36,18 @@ _CAPTURE_KINDS = frozenset({
     "authorized_local_runtime",
     "authorized_local_packet_fixture",
 })
-_FIXTURE_KEYS = frozenset({
+_FIXTURE_BASE_KEYS = frozenset({
     "schema_version",
     "apk_sha256",
     "client_unchanged",
     "capture_kind",
     "streams",
 })
+_FIXTURE_V1_KEYS = _FIXTURE_BASE_KEYS
+_FIXTURE_V2_KEYS = _FIXTURE_BASE_KEYS | {"io_events"}
 _STREAM_KEYS = frozenset({"server_to_client", "client_to_server"})
+_IO_EVENT_KEYS = frozenset({"direction", "offset", "length"})
+_STREAM_DIRECTIONS = ("client_to_server", "server_to_client")
 
 
 class FixtureAuditError(ValueError):
@@ -201,6 +206,76 @@ def _decode_chunks(
     return decoded, total
 
 
+def _validate_io_events(value, stream_bytes_by_direction):
+    """Validate an operator-supplied chronological index over both byte streams.
+
+    Each event describes one ordered local I/O observation as a contiguous
+    range in the concatenated stream for its direction. The ranges must cover
+    each direction exactly once, in per-direction byte order. This preserves
+    the supplied cross-direction order without treating event boundaries as
+    message boundaries or authenticating capture provenance.
+    """
+    if type(value) is not list:
+        raise FixtureAuditError("io_events must be a built-in list")
+    if not value:
+        raise FixtureAuditError("io_events must contain observations for both directions")
+    if len(value) > MAX_IO_EVENTS:
+        raise FixtureAuditError("io_events exceeds the configured event limit")
+
+    next_offsets = {direction: 0 for direction in _STREAM_DIRECTIONS}
+    event_counts = {direction: 0 for direction in _STREAM_DIRECTIONS}
+    previous_direction = None
+    direction_switches = 0
+
+    for index, event in enumerate(value):
+        if type(event) is not dict or set(event) != _IO_EVENT_KEYS:
+            raise FixtureAuditError(
+                "io_events contains an invalid object at index " + str(index)
+            )
+        direction = event["direction"]
+        if type(direction) is not str or direction not in next_offsets:
+            raise FixtureAuditError(
+                "io_events contains an invalid direction at index " + str(index)
+            )
+        offset = event["offset"]
+        length = event["length"]
+        if type(offset) is not int or offset < 0:
+            raise FixtureAuditError(
+                "io_events offset must be a non-negative integer"
+            )
+        if type(length) is not int or length <= 0:
+            raise FixtureAuditError("io_events length must be a positive integer")
+        if offset != next_offsets[direction]:
+            raise FixtureAuditError(
+                "io_events must cover each direction contiguously in observed order"
+            )
+        end = offset + length
+        if end > stream_bytes_by_direction[direction]:
+            raise FixtureAuditError(
+                "io_events range exceeds its directional stream"
+            )
+
+        next_offsets[direction] = end
+        event_counts[direction] += 1
+        if previous_direction is not None and direction != previous_direction:
+            direction_switches += 1
+        previous_direction = direction
+
+    for direction in _STREAM_DIRECTIONS:
+        if next_offsets[direction] != stream_bytes_by_direction[direction]:
+            raise FixtureAuditError(
+                "io_events must cover every byte in both stream directions"
+            )
+
+    return {
+        "status": "operator_order_preserved_unverified",
+        "event_count": len(value),
+        "client_to_server_event_count": event_counts["client_to_server"],
+        "server_to_client_event_count": event_counts["server_to_client"],
+        "direction_switch_count": direction_switches,
+    }
+
+
 class _CandidateFrameCountLimit(FrameReaderError):
     """The redacted report reached its fixed candidate-frame count cap."""
 
@@ -321,10 +396,16 @@ def audit_fixture_bytes(
     except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise FixtureAuditError("fixture must be valid UTF-8 JSON") from exc
 
-    if type(document) is not dict or set(document) != _FIXTURE_KEYS:
+    if type(document) is not dict:
         raise FixtureAuditError("fixture has an unsupported object shape")
-    if type(document["schema_version"]) is not int or document["schema_version"] != 1:
+    schema_version = document.get("schema_version")
+    if type(schema_version) is not int or schema_version not in (1, 2):
         raise FixtureAuditError("unsupported fixture schema version")
+    expected_keys = (
+        _FIXTURE_V1_KEYS if schema_version == 1 else _FIXTURE_V2_KEYS
+    )
+    if set(document) != expected_keys:
+        raise FixtureAuditError("fixture has an unsupported object shape")
     fixture_hash = document["apk_sha256"]
     if type(fixture_hash) is not str or _SHA256.fullmatch(fixture_hash) is None:
         raise FixtureAuditError("fixture APK fingerprint is invalid")
@@ -356,6 +437,23 @@ def audit_fixture_bytes(
             "client_to_server must contain at least one chunk"
         )
 
+    if schema_version == 1:
+        exchange_order = {
+            "status": "not_recorded_schema_v1",
+            "event_count": None,
+            "client_to_server_event_count": None,
+            "server_to_client_event_count": None,
+            "direction_switch_count": None,
+        }
+    else:
+        exchange_order = _validate_io_events(
+            document["io_events"],
+            {
+                "server_to_client": server_bytes,
+                "client_to_server": client_bytes,
+            },
+        )
+
     candidate = _inspect_receive_candidate(
         server_chunks,
         max_payload_bytes=max_payload_bytes,
@@ -383,6 +481,7 @@ def audit_fixture_bytes(
             "stream_bytes": client_bytes,
             "analysis": "not_attempted_sender_symmetry_unproven",
         },
+        "exchange_order": exchange_order,
         "wire_contract_verified": False,
         "apk_compatible": False,
         "raw_bytes_emitted": False,
