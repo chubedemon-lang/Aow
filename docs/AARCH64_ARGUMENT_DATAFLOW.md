@@ -89,3 +89,16 @@ malformed association collections, and matches allowlist prefixes only at an
 exact namespace/type boundary. This prevents duplicate, malformed, or
 near-match metadata labels from being promoted to a unique target. The
 regression vectors are synthetic and do not establish any new AOW callsite.
+
+
+## Input object trust boundary
+
+The public analyzer entry point accepts only exact built-in `bytes` for the
+instruction window, an exact built-in `dict` with exact built-in integer
+target keys, and exact built-in tuple/list/set/frozenset prefix collections
+containing exact built-in strings. Ordered target-label associations must be
+exact built-in lists or tuples. Subclasses are rejected or left unresolved
+before their overridden length, iteration, lookup, equality, or conversion
+hooks can participate in analysis. This is defensive input validation for the
+offline tool; it adds no APK, native-callsite, packet, or compatibility
+evidence.
