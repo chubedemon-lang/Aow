@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.sqlite_backup import BackupError, create_backup, main
+from tools.sqlite_backup import BackupError, create_backup, main, verify_backup
 
 
 def make_database(path, *, foreign_key_violation=False):
@@ -225,6 +225,42 @@ class SqliteBackupTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("backup failed", errors.getvalue())
         self.assertEqual(self.destination.read_bytes(), b"preserve-this-file")
+
+
+    def test_verifies_existing_backup_read_only(self):
+        create_backup(self.source, self.destination)
+        before = self.destination.read_bytes()
+        report = verify_backup(self.destination)
+        self.assertEqual(report.integrity, "ok")
+        self.assertEqual(report.foreign_key_violations, 0)
+        self.assertEqual(report.tables, ("accounts", "characters"))
+        self.assertEqual(self.destination.read_bytes(), before)
+
+    def test_verify_rejects_corrupt_file(self):
+        corrupt = self.root / "corrupt-backup.sqlite3"
+        corrupt.write_bytes(b"not sqlite")
+        with self.assertRaises(BackupError):
+            verify_backup(corrupt)
+
+    def test_verify_cli_mode_reports_read_only_success(self):
+        create_backup(self.source, self.destination)
+        before = self.destination.read_bytes()
+        output = StringIO()
+        with redirect_stdout(output):
+            result = main(["--verify-only", str(self.destination)])
+        self.assertEqual(result, 0)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["integrity"], "ok")
+        self.assertEqual(report["foreign_key_violations"], 0)
+        self.assertNotIn("alice", output.getvalue())
+        self.assertEqual(self.destination.read_bytes(), before)
+
+    def test_verify_cli_mode_rejects_extra_destination(self):
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                main(["--verify-only", str(self.source), str(self.destination)])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertFalse(self.destination.exists())
 
 
 if __name__ == "__main__":
