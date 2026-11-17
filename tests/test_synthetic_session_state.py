@@ -4,6 +4,19 @@ import unittest
 from server.synthetic_session_state import Phase, Session, SessionError
 
 
+class HostileString(str):
+    """String subclass whose hooks must not run during identifier validation."""
+
+    def __len__(self):
+        raise AssertionError("length hook must not run")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("strip hook must not run")
+
+    def __hash__(self):
+        raise AssertionError("hash hook must not run")
+
+
 class SessionStateTests(unittest.TestCase):
     def test_happy_path_and_map_reentry(self):
         session = Session()
@@ -82,6 +95,19 @@ class SessionStateTests(unittest.TestCase):
                           session.leave_map):
             with self.assertRaises(SessionError):
                 operation()
+
+    def test_identifier_validation_rejects_string_subclasses_before_hooks(self):
+        session = Session()
+        before = session.snapshot
+        with self.assertRaises(SessionError):
+            session.authenticate(HostileString("account"))
+        self.assertEqual(session.snapshot, before)
+
+        session.authenticate("account")
+        before = session.snapshot
+        with self.assertRaises(SessionError):
+            session.select_character(HostileString("hero"))
+        self.assertEqual(session.snapshot, before)
 
     def test_sessions_are_isolated(self):
         first, second = Session(), Session()
