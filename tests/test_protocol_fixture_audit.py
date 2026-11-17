@@ -28,7 +28,7 @@ def frame(payload):
 
 def fixture_bytes(
     server_chunks,
-    client_chunks=(),
+    client_chunks=(b"\x00",),
     *,
     apk_sha256=APK_SHA256,
     client_unchanged=True,
@@ -236,10 +236,17 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(FixtureAuditError, "both stream directions"):
             self.audit(json.dumps(base).encode())
 
-        base["streams"]["client_to_server"] = []
-        base["streams"]["server_to_client"] = []
-        with self.assertRaisesRegex(FixtureAuditError, "at least one chunk"):
-            self.audit(json.dumps(base).encode())
+        empty_client = fixture_bytes([frame(b"x")], [])
+        with self.assertRaisesRegex(
+            FixtureAuditError, "client_to_server must contain at least one chunk"
+        ):
+            self.audit(empty_client)
+
+        empty_server = fixture_bytes([], [b"\x00"])
+        with self.assertRaisesRegex(
+            FixtureAuditError, "server_to_client must contain at least one chunk"
+        ):
+            self.audit(empty_server)
 
     def test_resource_limits_are_validated_before_candidate_processing(self):
         content = fixture_bytes([frame(b"x")])

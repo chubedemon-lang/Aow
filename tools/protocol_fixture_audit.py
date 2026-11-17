@@ -351,6 +351,10 @@ def audit_fixture_bytes(
         "client_to_server",
         remaining_total_bytes=MAX_TOTAL_STREAM_BYTES - server_bytes,
     )
+    if not client_chunks:
+        raise FixtureAuditError(
+            "client_to_server must contain at least one chunk"
+        )
 
     candidate = _inspect_receive_candidate(
         server_chunks,
