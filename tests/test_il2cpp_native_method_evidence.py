@@ -1328,5 +1328,45 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             _summarize_control_flow_helper_paths(invalid_edge)
 
 
+    def test_control_flow_depth_limit_is_reported_as_truncated(self):
+        summary = {
+            "control_flow_block_count": 3,
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_basic_blocks": [
+                {"block_index": 0, "successors": [1], "terminator": None,
+                 "callsite_observations": [], "reachable": True},
+                {"block_index": 1, "successors": [2], "terminator": "b",
+                 "callsite_observations": [], "reachable": True},
+                {"block_index": 2, "successors": [], "terminator": "return",
+                 "callsite_observations": [], "reachable": True},
+            ],
+        }
+
+        paths = _summarize_control_flow_helper_paths(summary, max_depth=2)
+
+        self.assertEqual(paths["control_flow_path_depth_limit_count"], 1)
+        self.assertTrue(paths["control_flow_paths_truncated"])
+        self.assertEqual(paths["control_flow_path_analysis_status"], "truncated")
+        self.assertEqual(paths["control_flow_paths"][0]["next_block"], 2)
+
+    def test_control_flow_cycle_is_explicit_but_not_mislabeled_as_path_truncation(self):
+        summary = {
+            "control_flow_block_count": 2,
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_basic_blocks": [
+                {"block_index": 0, "successors": [1], "terminator": "b",
+                 "callsite_observations": [], "reachable": True},
+                {"block_index": 1, "successors": [0], "terminator": "b",
+                 "callsite_observations": [], "reachable": True},
+            ],
+        }
+
+        paths = _summarize_control_flow_helper_paths(summary)
+
+        self.assertEqual(paths["control_flow_path_analysis_status"], "bounded_with_cycles")
+        self.assertFalse(paths["control_flow_paths_truncated"])
+        self.assertEqual(paths["control_flow_path_cycle_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
