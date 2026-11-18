@@ -11,6 +11,7 @@ import sqlite3
 from server.sqlite_inventory_store import SqliteInventoryStore
 from server.sqlite_map_position_store import SqliteMapPositionStore
 from server.sqlite_player_state_store import SqlitePlayerStateStore
+from server.sqlite_reward_ledger import SqliteRewardLedger
 
 
 class DomainAuditError(ValueError):
@@ -32,6 +33,11 @@ _STORE_SPECS = (
         "map_position",
         SqliteMapPositionStore,
         {"map_position_snapshots", "map_position_mutations"},
+    ),
+    (
+        "reward_ledger",
+        SqliteRewardLedger,
+        {"reward_balances", "reward_receipts"},
     ),
 )
 
