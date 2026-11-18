@@ -17,6 +17,8 @@ STAGES = (
     "player", "map", "movement", "inventory", "shop", "combat", "quest",
 )
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+MAX_EVIDENCE_RECORDS = 4096
+MAX_APPROVED_EVIDENCE_DIGESTS = 4096
 
 # Static APK inventory/decompilation/native analysis can verify a static fact,
 # but cannot by itself prove the client-facing behavior represented by a stage.
@@ -85,11 +87,20 @@ def evaluate_evidence(
     """
     if type(records) not in (list, tuple):
         raise EvidenceError("records must be a built-in list or tuple")
+    if len(records) > MAX_EVIDENCE_RECORDS:
+        raise EvidenceError(
+            f"records must contain at most {MAX_EVIDENCE_RECORDS} entries"
+        )
     if any(type(record) is not Evidence for record in records):
         raise EvidenceError("all records must be exact Evidence instances")
     if type(approved_evidence_digests) not in (list, tuple, frozenset):
         raise EvidenceError(
             "approved_evidence_digests must be a built-in list, tuple, or frozenset"
+        )
+    if len(approved_evidence_digests) > MAX_APPROVED_EVIDENCE_DIGESTS:
+        raise EvidenceError(
+            "approved_evidence_digests must contain at most "
+            f"{MAX_APPROVED_EVIDENCE_DIGESTS} entries"
         )
     approved = set()
     for digest in approved_evidence_digests:
