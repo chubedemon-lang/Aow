@@ -36,6 +36,9 @@ class SqliteDomainAuditTests(unittest.TestCase):
         positions = SqliteMapPositionStore(connection)
         positions.create("hero")
         positions.enter("hero", "enter-1", 0, 7, 10, -4)
+
+        rewards = SqliteRewardLedger(connection)
+        rewards.grant_once("reward-1", "hero", 7, "gem", 2)
         connection.close()
 
     def test_audits_all_existing_domain_stores(self):
@@ -54,6 +57,11 @@ class SqliteDomainAuditTests(unittest.TestCase):
                     "legacy_unanchored_snapshots": 0,
                 },
                 "map_position": {"snapshots": 1, "mutations": 1},
+                "reward_ledger": {
+                    "balances": 1,
+                    "receipts": 1,
+                    "quest_award_keys": 0,
+                },
             },
         )
 
@@ -98,6 +106,34 @@ class SqliteDomainAuditTests(unittest.TestCase):
         connection.close()
         with self.assertRaisesRegex(
             DomainAuditError, "map_position integrity audit failed"
+        ):
+            inspect_domain_database(self.path)
+
+    def test_partial_reward_ledger_schema_fails_closed(self):
+        partial = Path(self.temp.name) / "partial-reward-ledger.sqlite3"
+        connection = sqlite3.connect(partial)
+        connection.execute(
+            "CREATE TABLE reward_balances ("
+            "player_id TEXT NOT NULL, item_id TEXT NOT NULL, "
+            "quantity INTEGER NOT NULL, PRIMARY KEY(player_id, item_id))"
+        )
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(
+            DomainAuditError, "reward_ledger schema is incomplete"
+        ):
+            inspect_domain_database(partial)
+
+    def test_corrupt_reward_balance_fails_closed(self):
+        connection = sqlite3.connect(self.path)
+        connection.execute(
+            "UPDATE reward_balances SET quantity=3 "
+            "WHERE player_id='hero' AND item_id='gem'"
+        )
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(
+            DomainAuditError, "reward_ledger integrity audit failed"
         ):
             inspect_domain_database(self.path)
 
