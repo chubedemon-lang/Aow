@@ -4,6 +4,7 @@ import unittest
 from server.frame_reader import (
     CallbackFrameReader,
     FrameProbeLimitExceeded,
+    FrameReaderReentrancyError,
     FrameTooLarge,
     InvalidFrameSize,
     TruncatedFrame,
@@ -100,6 +101,26 @@ class CallbackFrameReaderTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "synthetic probe failure"):
             reader.read_frame()
         self.assertEqual(reader.available, 3)
+
+    def test_reentrant_probe_is_rejected_without_consuming_and_guard_resets(self):
+        state = {"reenter": True}
+        reader = None
+
+        def reentrant_probe(prefix):
+            if state["reenter"]:
+                state["reenter"] = False
+                return reader.read_frame()
+            return prefix[0] + 1
+
+        reader = CallbackFrameReader(reentrant_probe)
+        reader.feed(b"\\x01A")
+
+        with self.assertRaises(FrameReaderReentrancyError):
+            reader.read_frame()
+
+        self.assertEqual(reader.available, 2)
+        self.assertEqual(reader.read_frame(), b"\\x01A")
+        self.assertEqual(reader.available, 0)
 
     def test_invalid_limits_are_rejected(self):
         for kwargs in (
