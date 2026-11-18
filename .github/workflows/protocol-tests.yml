@@ -78,6 +78,14 @@ on:
       - 'docs/LOCAL_STREAM_FIXTURE_AUDIT.md'
       - 'docs/TRANSPORT_EVIDENCE_GATE.md'
       - 'docs/PROTOCOL.md'
+      - 'tests/test_authorized_synthetic_vertical_slice.py'
+      - 'docs/AUTHORIZED_SYNTHETIC_VERTICAL_SLICE.md'
+      - 'server/sqlite_account_auth_service.py'
+      - 'server/sqlite_authorized_character_service.py'
+      - 'server/sqlite_authorized_map_service.py'
+      - 'server/sqlite_authorized_inventory_service.py'
+      - 'server/sqlite_authorized_quest_inventory_award_service.py'
+
       - 'server/sqlite_reward_ledger.py'
       - 'server/quest_award_ledger.py'
       - 'tests/test_sqlite_reward_ledger.py'
@@ -510,6 +518,21 @@ jobs:
         run: python -m py_compile tools/protocol_fixture_audit.py
       - name: Private stream fixture audit tests (synthetic streams only)
         run: python -m unittest discover -s tests -p 'test_protocol_fixture_audit.py' -v
+
+  authorized-domain-vertical-slice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile synthetic authorized domain services
+        run: python -m py_compile server/sqlite_account_auth_service.py server/sqlite_authorized_character_service.py server/sqlite_authorized_map_service.py server/sqlite_authorized_inventory_service.py server/sqlite_authorized_quest_inventory_award_service.py
+      - name: Cross-service authorized lifecycle tests (synthetic data only)
+        run: python -m unittest discover -s tests -p 'test_authorized_synthetic_vertical_slice.py' -v
 
   sqlite-connection-boundary:
     runs-on: ubuntu-latest
