@@ -304,6 +304,232 @@ class SqliteShopStore:
         digest = hashlib.sha256(request_id.encode("utf-8")).hexdigest()
         return "shop-" + digest
 
+
+    def verify_integrity(self) -> dict:
+        """Audit purchase receipts against their paired player/inventory mutations.
+
+        The connection must be idle. The method owns a deferred read transaction
+        and always rolls it back. The independent player and inventory audits
+        reconstruct their complete mutation histories; this method links each
+        shop receipt to the exact reserved mutation in both histories.
+        """
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+        self.db.execute("BEGIN")
+        try:
+            return self._verify_integrity_snapshot()
+        finally:
+            if self.db.in_transaction:
+                self.db.rollback()
+
+    def _verify_integrity_snapshot(self) -> dict:
+        """Run the shop receipt audit inside verify_integrity's read snapshot."""
+        try:
+            if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                raise ShopStoreError("SQLite quick_check failed")
+            if self.db.execute("PRAGMA foreign_key_check").fetchall():
+                raise ShopStoreError("shop foreign key check failed")
+
+            tables = {
+                row[0] for row in self.db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            required = {
+                "shop_purchase_receipts",
+                "player_state_snapshots",
+                "player_state_mutations",
+                "inventory_snapshots",
+                "inventory_items",
+                "inventory_mutations",
+            }
+            if not required.issubset(tables):
+                raise ShopStoreError("shop integrity schema is incomplete")
+
+            def reject_constant(_value):
+                raise ValueError("non-finite JSON constant")
+
+            purchase_count = 0
+            seen_mutations = set()
+            rows = self.db.execute(
+                """SELECT request_id, character_id, payload_json, result_json,
+                          player_revision, inventory_revision
+                   FROM shop_purchase_receipts ORDER BY request_id"""
+            )
+            for (request_id, character_id, payload_json, result_json,
+                 player_revision, inventory_revision) in rows:
+                request_id = self._request_id(request_id)
+                character_id = self._character_id(character_id)
+                if (type(payload_json) is not str
+                        or len(payload_json) > 4096
+                        or not payload_json.isascii()):
+                    raise ShopStoreError("invalid shop purchase payload")
+
+                try:
+                    payload = json.loads(
+                        payload_json, parse_constant=reject_constant
+                    )
+                except (TypeError, ValueError, RecursionError) as exc:
+                    raise ShopStoreError(
+                        "invalid shop purchase payload"
+                    ) from exc
+                if (type(payload) is not list or len(payload) != 5
+                        or payload[0] != character_id
+                        or type(payload[1]) is not int
+                        or not 0 <= payload[1] < _MAX_PLAYER_REVISION
+                        or type(payload[2]) is not int
+                        or not 0 <= payload[2] < _MAX_INVENTORY_REVISION
+                        or type(payload[3]) is not str
+                        or not _ID_PATTERN.fullmatch(payload[3])
+                        or type(payload[4]) is not int
+                        or not 1 <= payload[4] <= _MAX_PURCHASE_QUANTITY):
+                    raise ShopStoreError("invalid shop purchase payload fields")
+                if json.dumps(
+                    payload, separators=(",", ":"), ensure_ascii=True
+                ) != payload_json:
+                    raise ShopStoreError("shop purchase payload is not canonical")
+
+                expected_player_revision = payload[1]
+                expected_inventory_revision = payload[2]
+                offer_id = payload[3]
+                quantity = payload[4]
+                if (type(player_revision) is not int
+                        or player_revision != expected_player_revision + 1
+                        or type(inventory_revision) is not int
+                        or inventory_revision != expected_inventory_revision + 1):
+                    raise ShopStoreError("invalid shop purchase revision columns")
+
+                purchase = self._decode_result(
+                    result_json,
+                    replayed=True,
+                    expected_character_id=character_id,
+                    expected_offer_id=offer_id,
+                    expected_quantity=quantity,
+                    expected_player_revision=player_revision,
+                    expected_inventory_revision=inventory_revision,
+                )
+                if (purchase.total % quantity != 0
+                        or self._encode_result(purchase) != result_json):
+                    raise ShopStoreError("shop purchase result is not canonical")
+
+                internal_request_id = self._mutation_id(request_id)
+                if internal_request_id in seen_mutations:
+                    raise ShopStoreError("duplicate shop mutation identity")
+                seen_mutations.add(internal_request_id)
+
+                player_mutation = self.db.execute(
+                    """SELECT character_id, expected_revision, requested_level,
+                              experience_delta, currency_delta, result_level,
+                              result_experience, result_currency, result_revision
+                       FROM player_state_mutations WHERE request_id=?""",
+                    (internal_request_id,),
+                ).fetchone()
+                expected_player_mutation = (
+                    character_id,
+                    expected_player_revision,
+                    None,
+                    0,
+                    -purchase.total,
+                    purchase.player.level,
+                    purchase.player.experience,
+                    purchase.player.currency,
+                    player_revision,
+                )
+                if player_mutation is None or tuple(player_mutation) != expected_player_mutation:
+                    raise ShopStoreError(
+                        "shop purchase does not match its player mutation"
+                    )
+
+                inventory_mutation = self.db.execute(
+                    """SELECT character_id, expected_revision, payload_json,
+                              result_json, result_revision
+                       FROM inventory_mutations WHERE request_id=?""",
+                    (internal_request_id,),
+                ).fetchone()
+                if inventory_mutation is None:
+                    raise ShopStoreError(
+                        "shop purchase inventory mutation is missing"
+                    )
+                (mutation_character_id, mutation_expected_revision,
+                 mutation_payload_json, mutation_result_json,
+                 mutation_result_revision) = inventory_mutation
+                if (mutation_character_id != character_id
+                        or type(mutation_expected_revision) is not int
+                        or mutation_expected_revision != expected_inventory_revision
+                        or type(mutation_result_revision) is not int
+                        or mutation_result_revision != inventory_revision
+                        or type(mutation_payload_json) is not str
+                        or len(mutation_payload_json) > 512 * 1024
+                        or not mutation_payload_json.isascii()):
+                    raise ShopStoreError("invalid shop inventory mutation metadata")
+
+                try:
+                    mutation_payload = json.loads(
+                        mutation_payload_json, parse_constant=reject_constant
+                    )
+                except (TypeError, ValueError, RecursionError) as exc:
+                    raise ShopStoreError(
+                        "invalid shop inventory mutation payload"
+                    ) from exc
+                if (type(mutation_payload) is not list
+                        or len(mutation_payload) != 1
+                        or type(mutation_payload[0]) is not list
+                        or len(mutation_payload[0]) != 2):
+                    raise ShopStoreError("invalid shop inventory mutation payload")
+                item_id, item_quantity = mutation_payload[0]
+                if (type(item_id) is not str
+                        or not _ID_PATTERN.fullmatch(item_id)
+                        or type(item_quantity) is not int
+                        or item_quantity != quantity
+                        or json.dumps(
+                            mutation_payload,
+                            separators=(",", ":"),
+                            ensure_ascii=True,
+                        ) != mutation_payload_json):
+                    raise ShopStoreError("shop inventory mutation payload mismatch")
+
+                try:
+                    mutation_snapshot = SqliteInventoryStore._decode_snapshot(
+                        mutation_result_json,
+                        expected_character_id=character_id,
+                        expected_revision=inventory_revision,
+                    )
+                except (InventoryStoreError, TypeError, ValueError) as exc:
+                    raise ShopStoreError(
+                        "invalid shop inventory mutation result"
+                    ) from exc
+                if (mutation_snapshot != purchase.inventory
+                        or self._encode_inventory_snapshot(mutation_snapshot)
+                        != mutation_result_json):
+                    raise ShopStoreError(
+                        "shop purchase does not match its inventory mutation"
+                    )
+                purchase_count += 1
+
+            reserved_player_mutations = self.db.execute(
+                """SELECT COUNT(*) FROM player_state_mutations
+                   WHERE substr(request_id, 1, 5) = 'shop-'"""
+            ).fetchone()[0]
+            reserved_inventory_mutations = self.db.execute(
+                """SELECT COUNT(*) FROM inventory_mutations
+                   WHERE substr(request_id, 1, 5) = 'shop-'"""
+            ).fetchone()[0]
+            if (type(reserved_player_mutations) is not int
+                    or type(reserved_inventory_mutations) is not int
+                    or reserved_player_mutations != purchase_count
+                    or reserved_inventory_mutations != purchase_count):
+                raise ShopStoreError("unpaired reserved shop mutation")
+
+            return {
+                "purchases": purchase_count,
+                "linked_player_mutations": purchase_count,
+                "linked_inventory_mutations": purchase_count,
+            }
+        except sqlite3.DatabaseError as exc:
+            raise ShopStoreError(
+                "shop purchase integrity check could not complete"
+            ) from exc
+
     def purchase(self, character_id: str, request_id: str,
                  expected_player_revision: int,
                  expected_inventory_revision: int,
