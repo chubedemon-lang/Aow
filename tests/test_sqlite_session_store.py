@@ -281,6 +281,60 @@ class SqliteSessionStoreTests(unittest.TestCase):
             1,
         )
 
+    def test_constructor_rejects_non_callable_clock_before_schema_changes(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        try:
+            with self.assertRaisesRegex(ValueError, "clock must be callable"):
+                SqliteSessionStore(connection, clock=123)
+            tables = {
+                row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            self.assertNotIn("durable_sessions", tables)
+        finally:
+            connection.close()
+
+    def test_clock_exceptions_fail_closed_and_release_public_transactions(self):
+        token = self.store.issue(91)
+
+        def broken_clock():
+            raise RuntimeError("private clock detail")
+
+        self.store.clock = broken_clock
+        operations = (
+            lambda: self.store.issue(92),
+            lambda: self.store.resolve(token),
+            lambda: self.store.purge_expired(),
+        )
+        for operation in operations:
+            with self.subTest(operation=operation):
+                with self.assertRaisesRegex(ValueError, "session clock failed") as raised:
+                    operation()
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertTrue(raised.exception.__suppress_context__)
+                self.assertFalse(self.db.in_transaction)
+
+        self.store.clock = lambda: self.now
+        self.assertEqual(self.store.resolve(token), 91)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            1,
+        )
+
+    def test_clock_failure_preserves_caller_owned_transaction(self):
+        self.db.execute("BEGIN IMMEDIATE")
+        self.store.clock = lambda: (_ for _ in ()).throw(RuntimeError("clock offline"))
+        with self.assertRaisesRegex(ValueError, "session clock failed"):
+            self.store.issue_in_transaction(93)
+        self.assertTrue(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            0,
+        )
+        self.db.rollback()
+        self.assertFalse(self.db.in_transaction)
+
     def test_clock_must_be_finite_epoch_value(self):
         for value in (True, -1, float("nan"), float("inf"), "100", 10**1000):
             store = SqliteSessionStore(self.db, clock=lambda value=value: value)

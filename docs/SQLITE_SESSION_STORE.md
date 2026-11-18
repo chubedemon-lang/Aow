@@ -9,6 +9,8 @@
 - Token entry points accept only an exact built-in `str`; string subclasses are rejected before regular-expression matching, encoding, or dictionary/database lookup. This prevents custom `encode()` or `__hash__()` hooks from running while validating an opaque bearer token.
 - Uses epoch time so expiry survives process restarts; tests inject a deterministic clock.
 - The injected clock must return an exact built-in `int` or `float`; numeric subclasses are rejected before float conversion so custom `__float__` hooks cannot affect expiry validation.
+- A supplied clock must be callable; non-callable values are rejected before the session table or indexes are created.
+- Exceptions raised by the clock are normalized to a generic `ValueError("session clock failed")` without exposing the clock's private exception text. Public operations roll back their own transaction; transaction-scoped issuance leaves the caller's transaction open for the caller to roll back.
 - Rejects finite clock values when adding the requested TTL cannot produce a strictly later, finite expiry timestamp; this avoids leaking a SQLite constraint error for unrepresentable epochs.
 - Uses `BEGIN IMMEDIATE` for issue, resolve/expiry cleanup, revocation and purge operations.
 - Evaluates the clock after acquiring the write lock, so waiting for SQLite does not bypass expiry.
