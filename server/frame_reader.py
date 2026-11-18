@@ -42,7 +42,7 @@ class FrameProbeLimitExceeded(FrameReaderError):
 
 
 class FrameReaderReentrancyError(FrameReaderError):
-    """A frame-size probe attempted to call read_frame recursively."""
+    """A frame-size probe attempted to reenter or mutate its reader."""
 
 
 class TruncatedFrame(FrameReaderError):
@@ -127,10 +127,18 @@ class CallbackFrameReader:
 
     def feed(self, data):
         """Append one transport chunk atomically under the buffer limit."""
+        if self._probing:
+            raise FrameReaderReentrancyError(
+                "frame-size probe must not mutate reader input with feed()"
+            )
         return self._buffer.feed(data)
 
     def close(self):
         """Mark end-of-stream; any incomplete buffered frame becomes an error."""
+        if self._probing:
+            raise FrameReaderReentrancyError(
+                "frame-size probe must not mutate reader state with close()"
+            )
         return self._buffer.close()
 
     def read_frame(self):
