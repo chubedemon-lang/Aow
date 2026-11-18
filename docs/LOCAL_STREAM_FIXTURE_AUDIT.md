@@ -10,9 +10,9 @@ APK build. Keep the JSON file outside the repository: its hexadecimal chunks
 are raw stream bytes and may contain credentials, tokens, player data, or other
 private material. Do not attach it to a public issue or pull request.
 
-The schema is intentionally narrow and supports two versions:
+The schema is intentionally narrow and supports three versions:
 
-- `schema_version`: exact integer `1` or `2`.
+- `schema_version`: exact integer `1`, `2`, or `3`.
 - `apk_sha256`: lowercase SHA-256 asserted for the tested APK build.
 - `client_unchanged`: boolean `true`.
 - `capture_kind`: `authorized_local_runtime` or
@@ -31,13 +31,18 @@ The schema is intentionally narrow and supports two versions:
   gaps, and every byte in both directions must be covered exactly once. This
   preserves the operator-supplied cross-direction order for later handshake
   review; it does not identify message boundaries.
-- For schema `2`, event order and range boundaries are operator-supplied
-  provenance assertions. They are not cryptographically authenticated, do not
-  prove capture timestamps, and must not be inferred from PCAP packet
-  segmentation. Use only a local runtime logger or fixture exporter that
-  records the actual ordered application I/O operations.
-- Do not include endpoint addresses, ports, timestamps, usernames, tokens, or
-  other identity fields.
+- Schema `3` uses the same I/O range contract and adds an exact integer
+  `elapsed_ns` to every event. The first event must be zero; subsequent values
+  must be monotonic non-decreasing and remain within a 24-hour relative span.
+  The report exposes only the total event span and maximum inter-event gap,
+  not individual times or absolute timestamps.
+- For schemas `2` and `3`, event order and range boundaries are
+  operator-supplied provenance assertions. They are not cryptographically
+  authenticated, do not prove capture timestamps, and must not be inferred
+  from PCAP packet segmentation. Use only a local runtime logger or fixture
+  exporter that records the actual ordered application I/O operations.
+- Do not include endpoint addresses, ports, absolute timestamps, usernames,
+  tokens, or other identity fields.
 
 Schematic shape only; the placeholders below are not valid fixture bytes:
 
@@ -74,10 +79,12 @@ Schema `2` schematic shape (placeholders are not valid fixture bytes):
 ```
 
 The example event ranges are illustrative only and must exactly cover the
-actual private directional streams. The report exposes only event counts and
-direction switches; it never emits event offsets, lengths, or stream bytes.
-Schema `1` remains accepted for older fixtures, but it cannot support any
-cross-direction handshake-order analysis.
+actual private directional streams. The report exposes event counts and
+direction switches; schema `3` also exposes a relative timing span and maximum
+inter-event gap. It never emits event offsets, lengths, individual elapsed
+values, absolute timestamps, or stream bytes. Schema `1` remains accepted for
+older fixtures, but it cannot support cross-direction order or I/O-boundary
+correlation.
 
 ## Run locally
 
@@ -103,11 +110,12 @@ hex chunk is materialized, so the second direction cannot temporarily allocate
 beyond the aggregate cap. This is an audit resource limit, not an AOW protocol
 limit. Only the `server_to_client` direction is passed through the isolated
 receive-length candidate. The `client_to_server` direction is deliberately not decoded because
-Sender/Receiver symmetry has not been established. Schema `2` also validates
-that ordered I/O ranges cover both directional streams exactly once and reports
-only aggregate event counts. Schema `1` reports that cross-direction order
-was not recorded. Neither schema allows the audit to interpret handshake or
-login messages, and schema `2` event order remains an unauthenticated operator
+Sender/Receiver symmetry has not been established. Schemas `2` and `3` validate
+that ordered I/O ranges cover both directional streams exactly once. Schema
+`3` additionally validates relative monotonic timing and reports only an
+aggregate span and maximum gap. Schema `1` reports that cross-direction order
+was not recorded. No schema allows the audit to interpret handshake or login
+messages, and schema `2`/`3` event order remains an unauthenticated operator
 assertion rather than independent protocol evidence.
 
 The receive candidate still models only the static four-byte signed
@@ -130,6 +138,25 @@ unclassified; the overall status can still be `candidate_not_recovered` when
 the frame-size report cap was reached. They describe only how much input this
 candidate parser accepted; they do not validate the real AOW frame boundary.
 This is a resource-safety limit for the audit report, not an AOW protocol limit.
+
+## Candidate frame / observed I/O boundary correlation
+
+For schemas `2` and `3`, the redacted report compares cumulative end
+positions of complete frames accepted by the isolated receive-length
+candidate with the ends of server-to-client I/O observations. It reports only
+counts: candidate frame ends aligned with I/O event ends, candidate frame ends
+inside an I/O event, I/O event ends aligned with known candidate frame ends,
+and I/O event ends without a known candidate frame end.
+
+This comparison can distinguish patterns such as one observed read containing
+multiple candidate frames or one candidate frame spanning multiple observed
+reads. It is an aggregate diagnostic only. I/O call boundaries are not packet
+boundaries, and candidate frame boundaries are not verified AOW message
+boundaries. If candidate parsing stops early or reaches the report cap, the
+candidate-boundary count is explicitly marked as a lower bound. No offsets are
+emitted, and the result never sets `wire_contract_verified` or
+`apk_compatible` to true. Schema `1` reports that I/O event boundaries were
+not recorded.
 
 ## Provenance and limits
 
