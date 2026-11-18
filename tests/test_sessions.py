@@ -1,5 +1,6 @@
 """Tests for synthetic session isolation, not APK protocol."""
 import sqlite3
+import threading
 import tempfile
 import unittest
 from pathlib import Path
@@ -69,6 +70,75 @@ class SessionTests(unittest.TestCase):
             with self.subTest(connection=connection):
                 with self.assertRaises(sqlite3.ProgrammingError):
                     connection.execute("SELECT 1")
+
+    def test_revoke_waits_for_inflight_character_ownership_check(self):
+        character_id = self.domain.create_character("alice", "Alice")["id"]
+        with self.domain.connection() as db:
+            account_id = db.execute(
+                "SELECT account_id FROM characters WHERE id=?", (character_id,)
+            ).fetchone()[0]
+        token = self.sessions.issue(account_id)
+
+        original_connect = self.domain.connect
+        connect_started = threading.Event()
+        release_connect = threading.Event()
+        revoke_started = threading.Event()
+        revoke_finished = threading.Event()
+        results = []
+        errors = []
+
+        def blocked_connect():
+            connect_started.set()
+            if not release_connect.wait(timeout=2.0):
+                raise RuntimeError("test connection release timed out")
+            return original_connect()
+
+        self.domain.connect = blocked_connect
+
+        def authorize():
+            try:
+                results.append(
+                    self.sessions.require_character(
+                        token, character_id, self.domain
+                    )
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        def revoke():
+            revoke_started.set()
+            self.sessions.revoke(token)
+            revoke_finished.set()
+
+        authorize_thread = threading.Thread(target=authorize)
+        revoke_thread = threading.Thread(target=revoke)
+        try:
+            authorize_thread.start()
+            self.assertTrue(connect_started.wait(timeout=1.0))
+            revoke_thread.start()
+            self.assertTrue(revoke_started.wait(timeout=1.0))
+
+            # Revocation must not complete in the middle of the ownership
+            # check; it linearizes immediately after that check releases the
+            # session lock.
+            self.assertFalse(revoke_finished.wait(timeout=0.05))
+            release_connect.set()
+            authorize_thread.join(timeout=2.0)
+            revoke_thread.join(timeout=2.0)
+
+            self.assertFalse(authorize_thread.is_alive())
+            self.assertFalse(revoke_thread.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(results, [character_id])
+            self.assertTrue(revoke_finished.is_set())
+            with self.assertRaises(SessionError):
+                self.sessions.resolve(token)
+        finally:
+            release_connect.set()
+            if authorize_thread.is_alive():
+                authorize_thread.join(timeout=1.0)
+            if revoke_thread.is_alive():
+                revoke_thread.join(timeout=1.0)
 
     def test_expiry_revoke_and_purge(self):
         token = self.sessions.issue(1)

@@ -92,15 +92,20 @@ class SessionManager:
         """
         if type(character_id) is not int or character_id < 1:
             raise SessionError("invalid character")
-        account_id = self.resolve(token)
-        with closing(domain.connect()) as db:
-            owned = db.execute(
-                "SELECT 1 FROM characters WHERE id=? AND account_id=?",
-                (character_id, account_id),
-            ).fetchone()
-        if owned is None:
-            raise SessionError("character not owned by session")
-        return character_id
+        # Keep revocation/purge serialized with the complete authorization
+        # check. Resolving under the lock and then releasing it before the
+        # ownership query would let revoke() finish while this method was still
+        # returning an authorization result for that token.
+        with self._lock:
+            account_id = self.resolve(token)
+            with closing(domain.connect()) as db:
+                owned = db.execute(
+                    "SELECT 1 FROM characters WHERE id=? AND account_id=?",
+                    (character_id, account_id),
+                ).fetchone()
+            if owned is None:
+                raise SessionError("character not owned by session")
+            return character_id
 
     def revoke(self, token):
         # Do not invoke attacker-controlled __hash__/__eq__ hooks on str subclasses.
