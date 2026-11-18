@@ -10,6 +10,7 @@ from pathlib import Path
 
 from tools.protocol_fixture_audit import (
     MAX_CANDIDATE_FRAMES,
+    MAX_CAPTURE_ELAPSED_NS,
     MAX_JSON_NESTING,
     FixtureAuditError,
     audit_fixture_bytes,
@@ -46,7 +47,7 @@ def fixture_bytes(
             "client_to_server": [chunk.hex() for chunk in client_chunks],
         },
     }
-    if schema_version == 2:
+    if schema_version in (2, 3):
         document["io_events"] = io_events
     return json.dumps(document, separators=(",", ":")).encode("utf-8")
 
@@ -517,6 +518,133 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         base["unexpected"] = True
         with self.assertRaisesRegex(FixtureAuditError, "object shape"):
             self.audit(json.dumps(base).encode())
+
+
+    def test_schema_v3_reports_relative_monotonic_timing_without_absolute_values(self):
+        server_stream = frame(b"server")
+        client_stream = b"client"
+        events = [
+            {"direction": "client_to_server", "offset": 0, "length": 2, "elapsed_ns": 0},
+            {"direction": "server_to_client", "offset": 0, "length": 3, "elapsed_ns": 0},
+            {"direction": "client_to_server", "offset": 2, "length": len(client_stream) - 2, "elapsed_ns": 2_500_000},
+            {"direction": "server_to_client", "offset": 3, "length": len(server_stream) - 3, "elapsed_ns": 6_000_000},
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [client_stream],
+                schema_version=3,
+                io_events=events,
+            )
+        )
+        self.assertEqual(
+            result["exchange_order"]["timing"],
+            {
+                "status": "relative_monotonic_summary_unverified",
+                "event_span_ns": 6_000_000,
+                "max_inter_event_gap_ns": 3_500_000,
+                "absolute_timestamps_emitted": False,
+            },
+        )
+        serialized = json.dumps(result)
+        self.assertNotIn("elapsed_ns", serialized)
+        self.assertNotIn('"offset"', serialized)
+        self.assertNotIn('"length"', serialized)
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
+        self.assertFalse(result["authorization_independently_verified"])
+
+    def test_schema_v3_rejects_invalid_elapsed_values_and_non_monotonic_order(self):
+        server_stream = frame(b"s")
+        client_stream = b"c"
+        valid_prefix = {
+            "direction": "client_to_server",
+            "offset": 0,
+            "length": 1,
+            "elapsed_ns": 0,
+        }
+        valid_suffix = {
+            "direction": "server_to_client",
+            "offset": 0,
+            "length": len(server_stream),
+            "elapsed_ns": 1,
+        }
+        invalid_cases = (
+            ({**valid_prefix, "elapsed_ns": True}, "elapsed_ns must be"),
+            ({**valid_prefix, "elapsed_ns": -1}, "elapsed_ns must be"),
+            ({**valid_prefix, "elapsed_ns": 1.5}, "elapsed_ns must be"),
+            ({**valid_prefix, "elapsed_ns": MAX_CAPTURE_ELAPSED_NS + 1}, "elapsed_ns must be"),
+            ({**valid_prefix, "elapsed_ns": 1}, "elapsed_ns must start at zero"),
+        )
+        for first, message in invalid_cases:
+            with self.subTest(first=first), self.assertRaisesRegex(
+                FixtureAuditError, message
+            ):
+                self.audit(
+                    fixture_bytes(
+                        [server_stream],
+                        [client_stream],
+                        schema_version=3,
+                        io_events=[first, valid_suffix],
+                    )
+                )
+
+        decreasing_client_stream = b"cc"
+        decreasing = [
+            valid_prefix,
+            {
+                "direction": "server_to_client",
+                "offset": 0,
+                "length": len(server_stream),
+                "elapsed_ns": 10,
+            },
+            {
+                "direction": "client_to_server",
+                "offset": 1,
+                "length": 1,
+                "elapsed_ns": 9,
+            },
+        ]
+        with self.assertRaisesRegex(FixtureAuditError, "monotonic"):
+            self.audit(
+                fixture_bytes(
+                    [server_stream],
+                    [decreasing_client_stream],
+                    schema_version=3,
+                    io_events=decreasing,
+                )
+            )
+
+    def test_schema_v3_requires_elapsed_field_and_rejects_unknown_event_fields(self):
+        server_stream = frame(b"s")
+        client_stream = b"c"
+        missing_elapsed = [
+            {"direction": "client_to_server", "offset": 0, "length": 1},
+            {"direction": "server_to_client", "offset": 0, "length": len(server_stream), "elapsed_ns": 1},
+        ]
+        with self.assertRaisesRegex(FixtureAuditError, "invalid object"):
+            self.audit(
+                fixture_bytes(
+                    [server_stream],
+                    [client_stream],
+                    schema_version=3,
+                    io_events=missing_elapsed,
+                )
+            )
+
+        extra_field = [
+            {"direction": "client_to_server", "offset": 0, "length": 1, "elapsed_ns": 0, "timestamp": "private"},
+            {"direction": "server_to_client", "offset": 0, "length": len(server_stream), "elapsed_ns": 1},
+        ]
+        with self.assertRaisesRegex(FixtureAuditError, "invalid object"):
+            self.audit(
+                fixture_bytes(
+                    [server_stream],
+                    [client_stream],
+                    schema_version=3,
+                    io_events=extra_field,
+                )
+            )
 
 
 if __name__ == "__main__":
