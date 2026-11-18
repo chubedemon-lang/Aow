@@ -16,6 +16,17 @@
 - Rejects underflow, stack overflow, capacity overflow, empty net mutations and oversized batches without changing state.
 - Supports reopening the same private SQLite database file.
 
+
+## Strict caller inputs
+
+Public inventory identifiers must be exact built-in strings. Mutation batches
+and each two-element change row must be exact built-in lists or tuples.
+Subclasses are rejected before truthiness, length, iteration, stripping, or
+regular-expression handling can invoke caller-defined Python hooks. This keeps
+the bounded input contract deterministic; it does not change synthetic item
+semantics or establish any AOW wire format.
+
+
 ## Strict persisted reads
 
 The ordinary `get()` path and the pre-mutation state read now use the same
