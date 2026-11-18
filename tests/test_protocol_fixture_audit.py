@@ -167,6 +167,12 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertTrue(candidate["frame_count_is_lower_bound"])
         self.assertTrue(candidate["frame_sizes_truncated"])
         self.assertEqual(len(candidate["frame_sizes"]), MAX_CANDIDATE_FRAMES)
+        # The overflow-detection read consumes one additional complete frame.
+        # Its size is intentionally omitted from the bounded report, but its
+        # bytes must not be mislabeled as unclassified stream data.
+        self.assertEqual(candidate["candidate_bytes_consumed"], len(over_limit_stream))
+        self.assertEqual(candidate["unclassified_stream_bytes"], 0)
+        self.assertTrue(candidate["candidate_stream_fully_consumed"])
 
     def test_rejects_excessive_json_nesting_before_object_construction(self):
         base = fixture_bytes([frame(b"x")]).decode("utf-8")
