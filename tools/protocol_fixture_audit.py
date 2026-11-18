@@ -375,8 +375,8 @@ def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
 
         reader.close()
         _collect_complete_frames(
-                    reader, frame_sizes, frame_end_offsets, consumed_frame_bytes
-                )
+            reader, frame_sizes, frame_end_offsets, consumed_frame_bytes
+        )
         status = "candidate_frames_recovered"
         reason = None
         truncated = False
