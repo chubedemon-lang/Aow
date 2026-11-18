@@ -13,6 +13,7 @@ from server.sqlite_map_position_store import SqliteMapPositionStore
 from server.sqlite_player_state_store import SqlitePlayerStateStore
 from server.sqlite_quest_inventory_award_store import SqliteQuestInventoryAwardStore
 from server.sqlite_reward_ledger import SqliteRewardLedger
+from server.sqlite_shop_store import SqliteShopStore
 
 
 class DomainAuditError(ValueError):
@@ -127,6 +128,32 @@ def inspect_domain_database(database):
                 "quest_inventory_awards requires complete inventory schema"
             )
 
+        shop_reserved_mutations = 0
+        for table in ("player_state_mutations", "inventory_mutations"):
+            if table in tables:
+                shop_reserved_mutations += connection.execute(
+                    f"""SELECT COUNT(*) FROM {table}
+                        WHERE substr(request_id, 1, 5) = 'shop-'"""
+                ).fetchone()[0]
+
+        shop_active = (
+            "shop_purchase_receipts" in tables or shop_reserved_mutations > 0
+        )
+        shop_required_tables = {
+            "shop_purchase_receipts",
+            "player_state_snapshots",
+            "player_state_mutations",
+            "inventory_snapshots",
+            "inventory_items",
+            "inventory_mutations",
+        }
+        if shop_active and not shop_required_tables.issubset(tables):
+            if "shop_purchase_receipts" not in tables:
+                raise DomainAuditError(
+                    "shop receipt schema is missing for reserved shop mutations"
+                )
+            raise DomainAuditError("shop schema is incomplete")
+
         audits = {}
         for name, store_type, required_tables in _STORE_SPECS:
             present = required_tables & tables
@@ -138,6 +165,14 @@ def inspect_domain_database(database):
                 audits[name] = _audit_existing_store(store_type, connection)
             except (sqlite3.Error, TypeError, ValueError) as exc:
                 raise DomainAuditError(name + " integrity audit failed") from exc
+
+        if shop_active:
+            try:
+                audits["shop"] = _audit_existing_store(
+                    SqliteShopStore, connection
+                )
+            except (sqlite3.Error, TypeError, ValueError) as exc:
+                raise DomainAuditError("shop integrity audit failed") from exc
 
         return {
             "status": "ok" if audits else "no_domain_stores",

@@ -40,9 +40,11 @@ Counts above are illustrative, not data from a production database.
 - Rejects a quest-award table unless the complete inventory snapshot, item and mutation tables are present.
 - Rejects reserved `quest-` inventory mutations when the quest-award table is absent.
 - Verifies canonical quest-award payloads and snapshots against their matching inventory mutation receipt.
+- Verifies each synthetic shop receipt against its paired currency-debit and inventory-grant mutations, including exact revisions, payloads and result snapshots.
 - Rejects orphaned quest-award receipts and unpaired mutation IDs in the reserved `quest-` namespace.
 - Runs SQLite and foreign-key checks before store-level audits.
 - Reports `no_domain_stores` when the file contains none of the recognized domain tables; this is not the same as an audited domain database.
+- Fails closed when shop receipts or reserved `shop-` mutations exist without the complete player/inventory/shop schema, or when either paired mutation is missing or inconsistent.
 - Returns exit code `2` and a compact JSON `blocked` result when an audit cannot be completed.
 
 The tool emits aggregate counts only. It does not print character IDs, item IDs, mutation payloads, tokens or database contents.
@@ -53,6 +55,6 @@ The Protocol Discovery workflow runs a dedicated `sqlite-domain-audit` job for t
 
 ## Scope
 
-These stores are synthetic persistence primitives. A successful audit does not establish AOW item IDs, quest IDs, map IDs, movement rules, packet framing, login semantics or APK compatibility. The audit is a consistency check, not cryptographic tamper evidence, and never repairs data.
+These stores, including the shop purchase ledger, are synthetic persistence primitives. A successful audit does not establish AOW item IDs, quest IDs, map IDs, movement rules, packet framing, login semantics or APK compatibility. The audit is a consistency check, not cryptographic tamper evidence, and never repairs data.
 
 Keep SQLite databases and backups private. Do not commit user data, credentials, APK bytes, extracted assets or packet captures to this public repository.
