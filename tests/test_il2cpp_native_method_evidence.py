@@ -932,7 +932,18 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         blocks = summary["control_flow_basic_blocks"]
         self.assertEqual(summary["control_flow_block_count"], 4)
         self.assertEqual(blocks[0]["successors"], [1, 2])
+        self.assertEqual(
+            blocks[0]["successor_edges"],
+            [
+                {"target_block": 2, "kind": "conditional_taken"},
+                {"target_block": 1, "kind": "conditional_fallthrough"},
+            ],
+        )
         self.assertEqual(blocks[1]["successors"], [3])
+        self.assertEqual(
+            blocks[1]["successor_edges"],
+            [{"target_block": 3, "kind": "branch_target"}],
+        )
         self.assertEqual(blocks[2]["successors"], [3])
         self.assertEqual(blocks[1]["callsite_observations"], [{
             "instruction_index": 1,
@@ -1225,14 +1236,24 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             "control_flow_block_count": 4,
             "control_flow_basic_blocks_truncated": False,
             "control_flow_basic_blocks": [
-                {"block_index": 0, "successors": [1, 2], "terminator": "b_cond",
+                {"block_index": 0, "successors": [1, 2],
+                 "successor_edges": [
+                     {"target_block": 1, "kind": "conditional_taken"},
+                     {"target_block": 2, "kind": "conditional_fallthrough"},
+                 ], "terminator": "b_cond",
                  "callsite_observations": [], "reachable": True},
-                {"block_index": 1, "successors": [3], "terminator": "b",
+                {"block_index": 1, "successors": [3],
+                 "successor_edges": [
+                     {"target_block": 3, "kind": "branch_target"},
+                 ], "terminator": "b",
                  "callsite_observations": [
                      {"instruction_index": 1, "kind": "direct_call",
                       "method": "SimpleSerializer::serializeInt"}
                  ], "reachable": True},
-                {"block_index": 2, "successors": [3], "terminator": "b",
+                {"block_index": 2, "successors": [3],
+                 "successor_edges": [
+                     {"target_block": 3, "kind": "branch_target"},
+                 ], "terminator": "b",
                  "callsite_observations": [
                      {"instruction_index": 2, "kind": "direct_call",
                       "method": "SimpleSerializer::serializeString"}
@@ -1267,10 +1288,83 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             ],
             [[1], [2]],
         )
+        self.assertEqual(
+            [item["edges"] for item in paths["control_flow_paths"]],
+            [
+                [
+                    {"from_block": 0, "to_block": 1, "kind": "conditional_taken"},
+                    {"from_block": 1, "to_block": 3, "kind": "branch_target"},
+                ],
+                [
+                    {"from_block": 0, "to_block": 2, "kind": "conditional_fallthrough"},
+                    {"from_block": 2, "to_block": 3, "kind": "branch_target"},
+                ],
+            ],
+        )
         self.assertTrue(all(
             item["exit_kind"] == "return"
             for item in paths["control_flow_paths"]
         ))
+
+    def test_conditional_target_and_fallthrough_remain_distinct_when_converged(self):
+        start = 0x5100
+        words = (
+            self._encode_b_cond(start, start + 4),
+            0xD65F03C0,  # ret
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code, start, {}, {}
+        )
+
+        blocks = summary["control_flow_basic_blocks"]
+        self.assertEqual(blocks[0]["successors"], [1])
+        self.assertEqual(
+            blocks[0]["successor_edges"],
+            [
+                {"target_block": 1, "kind": "conditional_taken"},
+                {"target_block": 1, "kind": "conditional_fallthrough"},
+            ],
+        )
+
+        paths = _summarize_control_flow_helper_paths(summary)
+        self.assertEqual(paths["control_flow_path_count"], 2)
+        self.assertEqual(
+            [item["block_indexes"] for item in paths["control_flow_paths"]],
+            [[0, 1], [0, 1]],
+        )
+        self.assertEqual(
+            [item["edges"] for item in paths["control_flow_paths"]],
+            [
+                [{"from_block": 0, "to_block": 1, "kind": "conditional_taken"}],
+                [{"from_block": 0, "to_block": 1, "kind": "conditional_fallthrough"}],
+            ],
+        )
+
+    def test_path_summary_rejects_inconsistent_successor_edge_metadata(self):
+        summary = {
+            "control_flow_block_count": 2,
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_basic_blocks": [
+                {
+                    "block_index": 0,
+                    "successors": [1],
+                    "successor_edges": [
+                        {"target_block": 1, "kind": "unknown_edge"},
+                    ],
+                    "callsite_observations": [],
+                },
+                {
+                    "block_index": 1,
+                    "successors": [],
+                    "successor_edges": [],
+                    "callsite_observations": [],
+                    "terminator": "return",
+                },
+            ],
+        }
+        with self.assertRaisesRegex(ValueError, "edge kind"):
+            _summarize_control_flow_helper_paths(summary)
 
     def test_control_flow_paths_record_back_edges_without_unrolling(self):
         summary = {
