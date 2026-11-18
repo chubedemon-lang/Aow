@@ -12,6 +12,12 @@ class AowPrimitiveCodecTests(unittest.TestCase):
             bytes.fromhex("010203040102030405060708"),
         )
 
+    def test_http_marker_uses_big_endian_int32_bytes(self):
+        marker = 0x48545450
+        encoded = AowPrimitiveWriter().write_int(marker).to_bytes()
+        self.assertEqual(encoded, b"HTTP")
+        self.assertEqual(AowPrimitiveReader(encoded).read_int(), marker)
+
     def test_signed_integer_round_trip(self):
         values = (-(1 << 31), -1, 0, 1, (1 << 31) - 1)
         writer = AowPrimitiveWriter()
