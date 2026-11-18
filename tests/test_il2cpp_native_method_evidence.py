@@ -11,7 +11,8 @@ from tools.il2cpp_native_method_evidence import (
     _decode_aarch64_b_target, _decode_aarch64_conditional_branch,
     _summarize_aarch64_calls, _summarize_control_flow_serializer_helper_blocks,
     _summarize_relocated_indirect_calls,
-    _summarize_ordered_serializer_helper_calls, inspect_bytes,
+    _summarize_ordered_serializer_helper_calls,
+    _summarize_control_flow_helper_paths, inspect_bytes,
 )
 
 
@@ -1206,6 +1207,125 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertNotIn("instruction_word", rendered)
         self.assertFalse(network_summary["native_addresses_emitted"])
         self.assertFalse(serializer_summary["raw_instructions_emitted"])
+
+
+    def test_control_flow_paths_preserve_mutually_exclusive_helper_sequences(self):
+        summary = {
+            "control_flow_block_count": 4,
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_basic_blocks": [
+                {"block_index": 0, "successors": [1, 2], "terminator": "b_cond",
+                 "callsite_observations": [], "reachable": True},
+                {"block_index": 1, "successors": [3], "terminator": "b",
+                 "callsite_observations": [
+                     {"instruction_index": 1, "kind": "direct_call",
+                      "method": "SimpleSerializer::serializeInt"}
+                 ], "reachable": True},
+                {"block_index": 2, "successors": [3], "terminator": "b",
+                 "callsite_observations": [
+                     {"instruction_index": 2, "kind": "direct_call",
+                      "method": "SimpleSerializer::serializeString"}
+                 ], "reachable": True},
+                {"block_index": 3, "successors": [], "terminator": "return",
+                 "callsite_observations": [], "reachable": True},
+            ],
+        }
+
+        paths = _summarize_control_flow_helper_paths(summary)
+
+        self.assertEqual(paths["control_flow_path_count"], 2)
+        self.assertFalse(paths["control_flow_paths_truncated"])
+        self.assertEqual(
+            [item["block_indexes"] for item in paths["control_flow_paths"]],
+            [[0, 1, 3], [0, 2, 3]],
+        )
+        self.assertEqual(
+            [
+                [call.get("method") for call in item["helper_callsite_observations"]]
+                for item in paths["control_flow_paths"]
+            ],
+            [
+                ["SimpleSerializer::serializeInt"],
+                ["SimpleSerializer::serializeString"],
+            ],
+        )
+        self.assertTrue(all(
+            item["exit_kind"] == "return"
+            for item in paths["control_flow_paths"]
+        ))
+
+    def test_control_flow_paths_record_back_edges_without_unrolling(self):
+        summary = {
+            "control_flow_block_count": 3,
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_basic_blocks": [
+                {"block_index": 0, "successors": [1, 2], "terminator": "b_cond",
+                 "callsite_observations": [], "reachable": True},
+                {"block_index": 1, "successors": [0], "terminator": "b",
+                 "callsite_observations": [
+                     {"instruction_index": 1, "kind": "direct_call",
+                      "method": "SimpleSerializer::serializeInt"}
+                 ], "reachable": True},
+                {"block_index": 2, "successors": [], "terminator": "return",
+                 "callsite_observations": [], "reachable": True},
+            ],
+        }
+
+        paths = _summarize_control_flow_helper_paths(summary)
+
+        self.assertEqual(paths["control_flow_path_cycle_count"], 1)
+        self.assertEqual(paths["control_flow_path_count"], 2)
+        self.assertEqual(
+            [item["exit_kind"] for item in paths["control_flow_paths"]],
+            ["cycle", "return"],
+        )
+        self.assertEqual(
+            paths["control_flow_paths"][0]["cycle_target_block"], 0
+        )
+        self.assertIn("not unrolled", paths["control_flow_path_semantics"])
+
+    def test_control_flow_path_limit_marks_partial_enumeration(self):
+        summary = {
+            "control_flow_block_count": 4,
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_basic_blocks": [
+                {"block_index": 0, "successors": [1, 2, 3], "terminator": "b_cond",
+                 "callsite_observations": [], "reachable": True},
+                {"block_index": 1, "successors": [], "terminator": "return",
+                 "callsite_observations": [], "reachable": True},
+                {"block_index": 2, "successors": [], "terminator": "return",
+                 "callsite_observations": [], "reachable": True},
+                {"block_index": 3, "successors": [], "terminator": "return",
+                 "callsite_observations": [], "reachable": True},
+            ],
+        }
+
+        paths = _summarize_control_flow_helper_paths(summary, max_paths=2)
+
+        self.assertEqual(paths["control_flow_path_count"], 2)
+        self.assertTrue(paths["control_flow_paths_truncated"])
+        self.assertEqual(paths["control_flow_path_analysis_status"], "truncated")
+
+    def test_control_flow_path_summary_refuses_truncated_cfg_and_bad_edges(self):
+        truncated = {
+            "control_flow_block_count": 2,
+            "control_flow_basic_blocks_truncated": True,
+            "control_flow_basic_blocks": [],
+        }
+        result = _summarize_control_flow_helper_paths(truncated)
+        self.assertEqual(result["control_flow_path_analysis_status"], "cfg_truncated")
+        self.assertEqual(result["control_flow_paths"], [])
+
+        invalid_edge = {
+            "control_flow_block_count": 1,
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_basic_blocks": [
+                {"block_index": 0, "successors": [1], "terminator": "b",
+                 "callsite_observations": [], "reachable": True},
+            ],
+        }
+        with self.assertRaisesRegex(ValueError, "successor index"):
+            _summarize_control_flow_helper_paths(invalid_edge)
 
 
 if __name__ == "__main__":
