@@ -15,9 +15,14 @@ For each selected serializer/deserializer method window, the analyzer:
 2. Starts at block zero and enumerates possible simple paths through the
    reported graph.
 3. Preserves helper-call observations in block/instruction order on each path.
-4. Records a back-edge as a `cycle` exit rather than unrolling it.
-5. Stops after at most 64 paths or 256 blocks per path by default.
-6. Refuses to enumerate when the basic-block report itself was truncated.
+4. Labels each in-window successor edge as `conditional_taken`,
+   `conditional_fallthrough`, `branch_target`, or `fallthrough`.
+5. Keeps conditional-taken and fallthrough edges distinct even when both
+   converge on the same destination block; path records therefore may share
+   block indexes while carrying different edge sequences.
+6. Records a back-edge as a `cycle` exit rather than unrolling it.
+7. Stops after at most 64 paths or 256 blocks per path by default.
+8. Refuses to enumerate when the basic-block report itself was truncated.
 
 The JSON report adds `control_flow_path_*` fields, including each path's
 block indexes, exit kind and helper-callsite observations. Each path-level
@@ -29,7 +34,12 @@ publishing a native address or instruction word.
 ## Interpretation limits
 
 - Conditional edges are both treated as possible; branch conditions are not
-  evaluated.
+  evaluated. The path's `edges` array preserves whether an in-window edge is
+  the taken target or fallthrough; it does not evaluate the condition.
+- When an older synthetic CFG fixture omits `successor_edges`, the path
+  summary labels its edges generically as `successor` rather than inferring
+  branch semantics. Explicit edge metadata is validated against the successor
+  set before enumeration.
 - A conditional target outside the bounded entry window is recorded as a
   separate branch-exit path while any in-window fallthrough path is retained.
 - The analysis is intraprocedural and limited to the bounded entry window.
