@@ -503,7 +503,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile read-only SQLite domain audit
-        run: python -m py_compile tools/sqlite_domain_audit.py
+        run: python -m py_compile tools/sqlite_domain_audit.py server/sqlite_quest_inventory_award_store.py
       - name: Read-only domain audit regression tests (synthetic only)
         run: python -m unittest discover -s tests -p 'test_sqlite_domain_audit.py' -v
 
