@@ -1136,6 +1136,190 @@ def _summarize_control_flow_serializer_helper_blocks(
     }
 
 
+
+def _summarize_control_flow_helper_paths(
+    control_flow_summary, *, max_paths=64, max_depth=256
+):
+    """Enumerate bounded simple paths through a previously built method CFG.
+
+    Conditional edges are treated as possible, not evaluated. A back-edge is
+    recorded as a cycle exit rather than unrolled. This is a path-shape aid for
+    reviewing branch-exclusive helper observations; it is not symbolic
+    execution, a runtime trace, or a recovered serializer field order.
+    """
+    if type(control_flow_summary) is not dict:
+        raise ValueError("control-flow summary must be a built-in dict")
+    if type(max_paths) is not int or not 1 <= max_paths <= 256:
+        raise ValueError("max_paths must be an integer between 1 and 256")
+    if type(max_depth) is not int or not 1 <= max_depth <= 1024:
+        raise ValueError("max_depth must be an integer between 1 and 1024")
+
+    blocks = control_flow_summary.get("control_flow_basic_blocks")
+    if type(blocks) is not list:
+        raise ValueError("control-flow blocks must be a built-in list")
+    block_count = control_flow_summary.get("control_flow_block_count")
+    if type(block_count) is not int or block_count < 0:
+        raise ValueError("control-flow block count is invalid")
+    if (
+        control_flow_summary.get("control_flow_basic_blocks_truncated") is True
+        or len(blocks) != block_count
+    ):
+        return {
+            "control_flow_path_analysis_kind": "bounded_simple_path_enumeration",
+            "control_flow_path_analysis_status": "cfg_truncated",
+            "control_flow_path_semantics": (
+                "simple paths; back-edges are recorded as cycles, not unrolled"
+            ),
+            "control_flow_path_limit": max_paths,
+            "control_flow_path_depth_limit": max_depth,
+            "control_flow_path_count": 0,
+            "control_flow_paths": [],
+            "control_flow_paths_truncated": True,
+            "control_flow_path_cycle_count": 0,
+            "control_flow_path_depth_limit_count": 0,
+        }
+    if not blocks:
+        return {
+            "control_flow_path_analysis_kind": "bounded_simple_path_enumeration",
+            "control_flow_path_analysis_status": "empty",
+            "control_flow_path_semantics": (
+                "simple paths; back-edges are recorded as cycles, not unrolled"
+            ),
+            "control_flow_path_limit": max_paths,
+            "control_flow_path_depth_limit": max_depth,
+            "control_flow_path_count": 0,
+            "control_flow_paths": [],
+            "control_flow_paths_truncated": False,
+            "control_flow_path_cycle_count": 0,
+            "control_flow_path_depth_limit_count": 0,
+        }
+
+    by_index = {}
+    for block in blocks:
+        if type(block) is not dict:
+            raise ValueError("each control-flow block must be a built-in dict")
+        index = block.get("block_index")
+        successors = block.get("successors")
+        observations = block.get("callsite_observations")
+        if type(index) is not int or not 0 <= index < block_count:
+            raise ValueError("control-flow block index is invalid")
+        if index in by_index:
+            raise ValueError("control-flow block indexes contain duplicates")
+        if type(successors) is not list or type(observations) is not list:
+            raise ValueError("control-flow successors and observations must be lists")
+        if any(
+            type(successor) is not int or not 0 <= successor < block_count
+            for successor in successors
+        ):
+            raise ValueError("control-flow successor index is invalid")
+        if any(type(item) is not dict for item in observations):
+            raise ValueError("callsite observations must be built-in dicts")
+        by_index[index] = block
+
+    if set(by_index) != set(range(block_count)):
+        raise ValueError("control-flow block indexes are incomplete")
+    if 0 not in by_index:
+        raise ValueError("control-flow entry block is missing")
+
+    paths = []
+    truncated = False
+    cycle_count = 0
+    depth_limit_count = 0
+    pending = [(0, (0,), frozenset((0,)))]
+
+    def append_path(block_indexes, exit_kind, *, cycle_target=None, next_block=None):
+        nonlocal truncated
+        if len(paths) >= max_paths:
+            truncated = True
+            return False
+        calls = []
+        for block_index in block_indexes:
+            block = by_index[block_index]
+            for observation in block["callsite_observations"]:
+                item = {"block_index": block_index}
+                kind = observation.get("kind")
+                if type(kind) is str:
+                    item["kind"] = kind
+                method = observation.get("method")
+                resolution = observation.get("resolution")
+                if type(method) is str:
+                    item["method"] = method
+                elif type(resolution) is str:
+                    item["resolution"] = resolution
+                calls.append(item)
+        path = {
+            "block_indexes": list(block_indexes),
+            "exit_kind": exit_kind,
+            "helper_callsite_observations": calls,
+        }
+        if cycle_target is not None:
+            path["cycle_target_block"] = cycle_target
+        if next_block is not None:
+            path["next_block"] = next_block
+        paths.append(path)
+        return True
+
+    while pending:
+        block_index, path, visited = pending.pop()
+        block = by_index[block_index]
+        successors = block["successors"]
+        if not successors:
+            terminator = block.get("terminator")
+            if terminator == "return":
+                exit_kind = "return"
+            elif terminator in {
+                "b", "indirect_tail", "indirect_branch",
+                "indirect_branch_unresolved",
+            }:
+                exit_kind = "branch_exit"
+            elif terminator in {"b_cond", "cbz_cbnz", "tbz_tbnz"}:
+                exit_kind = "conditional_window_exit"
+            else:
+                exit_kind = "window_end"
+            if not append_path(path, exit_kind):
+                break
+            continue
+
+        for successor in reversed(successors):
+            if successor in visited:
+                cycle_count += 1
+                if not append_path(
+                    path, "cycle", cycle_target=successor
+                ):
+                    break
+            elif len(path) >= max_depth:
+                depth_limit_count += 1
+                if not append_path(
+                    path, "depth_limit", next_block=successor
+                ):
+                    break
+            else:
+                pending.append((
+                    successor,
+                    path + (successor,),
+                    visited | {successor},
+                ))
+        if truncated:
+            break
+
+    return {
+        "control_flow_path_analysis_kind": "bounded_simple_path_enumeration",
+        "control_flow_path_analysis_status": (
+            "truncated" if truncated or cycle_count or depth_limit_count
+            else "bounded"
+        ),
+        "control_flow_path_semantics": (
+            "simple paths; back-edges are recorded as cycles, not unrolled"
+        ),
+        "control_flow_path_limit": max_paths,
+        "control_flow_path_depth_limit": max_depth,
+        "control_flow_path_count": len(paths),
+        "control_flow_paths": paths,
+        "control_flow_paths_truncated": truncated,
+        "control_flow_path_cycle_count": cycle_count,
+        "control_flow_path_depth_limit_count": depth_limit_count,
+    }
+
 def _summarize_aarch64_calls(code, start_va, helper_targets):
     """Summarize direct calls to allowlisted serializer helpers without addresses."""
     if not isinstance(code, bytes) or len(code) % 4:
@@ -1411,6 +1595,9 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         control_flow_summary = _summarize_control_flow_serializer_helper_blocks(
             code, target, relocations, helper_targets
         )
+        control_flow_path_summary = _summarize_control_flow_helper_paths(
+            control_flow_summary
+        )
         callsite_summary.append({
             "type": method["type"],
             "method": method["method"],
@@ -1423,6 +1610,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             **indirect_summary,
             **ordered_summary,
             **control_flow_summary,
+            **control_flow_path_summary,
             "memory_access_summary": summarize_unsigned_immediate_memory_accesses(code),
         })
     callsite_summary.sort(key=lambda x: (x["type"], x["method"]))
