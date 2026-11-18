@@ -215,3 +215,8 @@ cover pathname replacement after open, in-place mutation during the read/hash
 boundary, and FIFO input rejection. This is input-integrity hardening only:
 it adds no new APK observation, native callsite, packet, framing, handshake,
 login, or compatibility evidence.
+
+
+## IL2CPP v31 native type and compressed default-value cross-check — 2026-11-18
+
+The new offline analyzer resolves metadata type indexes through one unique ARM64 native registration type-pointer table and decodes only allowlisted I4 defaults. For NetworkSettings, both the field and default type resolve to I4; HeaderLength has a static metadata default of 4 and ZipIntermediateBufferSize has a static metadata default of 4096. This corroborates the four-byte Receiver candidate but does not establish runtime field use or a complete frame contract. Raw bytes, native addresses, APK assets and extracted libraries remain private. See [IL2CPP_DEFAULT_VALUE_EVIDENCE.md](IL2CPP_DEFAULT_VALUE_EVIDENCE.md).
