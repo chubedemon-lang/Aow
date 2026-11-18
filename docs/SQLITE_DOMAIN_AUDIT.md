@@ -38,6 +38,7 @@ Counts above are illustrative, not data from a production database.
 - Rejects \`:memory:\`, missing files, directories, symlinks and unreadable/corrupt SQLite files.
 - Rejects a partial schema for any recognized domain store.
 - Rejects a quest-award table unless the complete inventory snapshot, item and mutation tables are present.
+- Rejects reserved \`quest-\` inventory mutations when the quest-award table is absent.
 - Verifies canonical quest-award payloads and snapshots against their matching inventory mutation receipt.
 - Rejects orphaned quest-award receipts and unpaired mutation IDs in the reserved \`quest-\` namespace.
 - Runs SQLite and foreign-key checks before store-level audits.
@@ -48,7 +49,7 @@ The tool emits aggregate counts only. It does not print character IDs, item IDs,
 
 ## CI coverage
 
-The Protocol Discovery workflow runs a dedicated \`sqlite-domain-audit\` job for this tool, its tests, and its documentation. The job compiles the auditor and runs the focused read-only regression suite independently of the broader server test suite.
+The Protocol Discovery workflow runs a dedicated \`sqlite-domain-audit\` job for this tool, its tests, and its documentation. The job compiles the auditor and quest-award store, then runs the focused read-only regression suite independently of the broader server test suite.
 
 ## Scope
 
