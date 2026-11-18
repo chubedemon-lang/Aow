@@ -1252,6 +1252,56 @@ def _summarize_control_flow_helper_paths(
         if any(type(item) is not dict for item in observations):
             raise ValueError("callsite observations must be built-in dicts")
 
+        has_instruction_indexes = [
+            "instruction_index" in item for item in observations
+        ]
+        if any(has_instruction_indexes) and not all(has_instruction_indexes):
+            raise ValueError(
+                "callsite instruction indexes must be present on every observation or none"
+            )
+
+        has_instruction_range = (
+            "instruction_start" in block or "instruction_count" in block
+        )
+        if has_instruction_range:
+            instruction_start = block.get("instruction_start")
+            instruction_count = block.get("instruction_count")
+            if (
+                type(instruction_start) is not int
+                or instruction_start < 0
+                or type(instruction_count) is not int
+                or instruction_count < 1
+            ):
+                raise ValueError("control-flow block instruction range is invalid")
+        else:
+            instruction_start = None
+            instruction_count = None
+
+        previous_instruction_index = None
+        if has_instruction_indexes and all(has_instruction_indexes):
+            for observation in observations:
+                instruction_index = observation["instruction_index"]
+                if type(instruction_index) is not int or instruction_index < 0:
+                    raise ValueError(
+                        "callsite instruction index must be a non-negative integer"
+                    )
+                if has_instruction_range and not (
+                    instruction_start
+                    <= instruction_index
+                    < instruction_start + instruction_count
+                ):
+                    raise ValueError(
+                        "callsite instruction index is outside its block"
+                    )
+                if (
+                    previous_instruction_index is not None
+                    and instruction_index <= previous_instruction_index
+                ):
+                    raise ValueError(
+                        "callsite instruction indexes must be strictly increasing within a block"
+                    )
+                previous_instruction_index = instruction_index
+
         raw_edges = block.get("successor_edges")
         if raw_edges is None:
             # Accept older synthetic summaries, but mark their edge semantics
