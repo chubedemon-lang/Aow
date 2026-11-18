@@ -710,7 +710,7 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertTrue(alignment["candidate_boundary_set_complete"])
         serialized = json.dumps(result)
         self.assertNotIn("_frame_end_offsets", serialized)
-        self.assertNotIn("absolute_offsets", serialized)
+        self.assertFalse(alignment["absolute_offsets_emitted"])
         self.assertFalse(alignment["packet_boundaries_verified"])
 
     def test_schema_v2_reports_one_read_containing_multiple_candidate_frames(self):
