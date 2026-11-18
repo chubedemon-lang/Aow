@@ -109,6 +109,19 @@ class SqliteInventoryStoreTests(unittest.TestCase):
             0,
         )
 
+    def test_constructor_rejects_connection_subclasses_before_hooks(self):
+        class HostileConnection(sqlite3.Connection):
+            @property
+            def in_transaction(self):
+                raise AssertionError("custom transaction-state hook must not run")
+
+        connection = sqlite3.connect(":memory:", factory=HostileConnection)
+        try:
+            with self.assertRaisesRegex(TypeError, "sqlite connection"):
+                SqliteInventoryStore(connection)
+        finally:
+            sqlite3.Connection.close(connection)
+
     def test_create_and_read_empty_inventory(self):
         expected = self.store.create("hero", capacity=3, max_stack=10)
         self.assertEqual(self.store.get("hero"), expected)
