@@ -993,9 +993,20 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             {0x2000: ["SimpleSerializer::serializeInt"]},
         )
         self.assertEqual(summary["control_flow_external_branch_exit_count"], 1)
+        self.assertTrue(summary["control_flow_basic_blocks"][0]["external_branch_exit"])
         self.assertTrue(summary["control_flow_basic_blocks"][1]["reachable"])
         self.assertEqual(
             summary["control_flow_basic_blocks"][1]["callsite_observations"][0]["method"],
+            "SimpleSerializer::serializeInt",
+        )
+
+        paths = _summarize_control_flow_helper_paths(summary)
+        self.assertEqual(
+            [item["exit_kind"] for item in paths["control_flow_paths"]],
+            ["conditional_branch_exit", "return"],
+        )
+        self.assertEqual(
+            paths["control_flow_paths"][1]["helper_callsite_observations"][0]["method"],
             "SimpleSerializer::serializeInt",
         )
 
