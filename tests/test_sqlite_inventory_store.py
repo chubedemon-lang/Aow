@@ -16,6 +16,33 @@ from server.sqlite_inventory_store import (
 )
 
 
+class HostileText(str):
+    def __bool__(self):
+        raise AssertionError("custom text truthiness hook must not run")
+
+    def __len__(self):
+        raise AssertionError("custom text length hook must not run")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("custom text strip hook must not run")
+
+
+class HostileList(list):
+    def __len__(self):
+        raise AssertionError("custom list length hook must not run")
+
+    def __iter__(self):
+        raise AssertionError("custom list iterator must not run")
+
+
+class HostileTuple(tuple):
+    def __len__(self):
+        raise AssertionError("custom tuple length hook must not run")
+
+    def __iter__(self):
+        raise AssertionError("custom tuple iterator must not run")
+
+
 class SqliteInventoryStoreTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -24,6 +51,76 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         self.db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
         self.store = SqliteInventoryStore(self.db)
         self.addCleanup(self.db.close)
+
+    def test_rejects_text_subclasses_before_custom_hooks(self):
+        self.store.create("hero")
+        hostile = HostileText("hero")
+        operations = (
+            lambda: self.store.create(hostile),
+            lambda: self.store.get(hostile),
+            lambda: self.store.apply(hostile, "request", 0, [("potion", 1)]),
+            lambda: self.store.apply("hero", HostileText("request"), 0,
+                                     [("potion", 1)]),
+            lambda: self.store.apply("hero", "item-request", 0,
+                                     [(HostileText("potion"), 1)]),
+        )
+        for index, operation in enumerate(operations):
+            with self.subTest(operation=index):
+                with self.assertRaises(InventoryStoreError):
+                    operation()
+
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(self.store.get("hero").items, ())
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM inventory_mutations").fetchone()[0],
+            0,
+        )
+
+    def test_rejects_collection_subclasses_before_custom_hooks(self):
+        self.store.create("hero")
+        hostile_changes = (
+            HostileList([("potion", 1)]),
+            HostileTuple([("potion", 1)]),
+        )
+        for index, changes in enumerate(hostile_changes):
+            with self.subTest(collection=index):
+                with self.assertRaisesRegex(
+                    InventoryStoreError, "bounded sequence"
+                ):
+                    self.store.apply("hero", "collection-" + str(index), 0, changes)
+
+        hostile_entries = (
+            HostileList(["potion", 1]),
+            HostileTuple(["potion", 1]),
+        )
+        for index, entry in enumerate(hostile_entries):
+            with self.subTest(entry=index):
+                with self.assertRaisesRegex(
+                    InventoryStoreError, "invalid inventory change"
+                ):
+                    self.store.apply(
+                        "hero", "entry-" + str(index), 0, [entry]
+                    )
+
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(self.store.get("hero").items, ())
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM inventory_mutations").fetchone()[0],
+            0,
+        )
+
+    def test_constructor_rejects_connection_subclasses_before_hooks(self):
+        class HostileConnection(sqlite3.Connection):
+            @property
+            def in_transaction(self):
+                raise AssertionError("custom transaction-state hook must not run")
+
+        connection = sqlite3.connect(":memory:", factory=HostileConnection)
+        try:
+            with self.assertRaisesRegex(TypeError, "sqlite connection"):
+                SqliteInventoryStore(connection)
+        finally:
+            sqlite3.Connection.close(connection)
 
     def test_create_and_read_empty_inventory(self):
         expected = self.store.create("hero", capacity=3, max_stack=10)

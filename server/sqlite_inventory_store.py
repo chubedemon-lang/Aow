@@ -68,7 +68,7 @@ class SqliteInventoryStore:
     """
 
     def __init__(self, connection: sqlite3.Connection):
-        if not isinstance(connection, sqlite3.Connection):
+        if type(connection) is not sqlite3.Connection:
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")
@@ -117,31 +117,31 @@ class SqliteInventoryStore:
 
     @staticmethod
     def _character_id(value):
-        if (not isinstance(value, str) or not value
+        if (type(value) is not str or not value
                 or len(value) > 128 or value != value.strip()):
             raise InventoryStoreError("invalid character identifier")
         return value
 
     @staticmethod
     def _request_id(value):
-        if (not isinstance(value, str) or not value
+        if (type(value) is not str or not value
                 or len(value) > 128 or value != value.strip()):
             raise InventoryStoreError("invalid request identifier")
         return value
 
     @staticmethod
     def _item_id(value):
-        if not isinstance(value, str) or not _ID_PATTERN.fullmatch(value):
+        if type(value) is not str or not _ID_PATTERN.fullmatch(value):
             raise InventoryStoreError("invalid item identifier")
         return value
 
     @classmethod
     def _normalise_changes(cls, changes):
-        if not isinstance(changes, (list, tuple)) or len(changes) > _MAX_BATCH:
+        if type(changes) not in (list, tuple) or len(changes) > _MAX_BATCH:
             raise InventoryStoreError("changes must be a bounded sequence")
         totals = {}
         for entry in changes:
-            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+            if type(entry) not in (list, tuple) or len(entry) != 2:
                 raise InventoryStoreError("invalid inventory change")
             item_id = cls._item_id(entry[0])
             delta = entry[1]
