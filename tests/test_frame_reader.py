@@ -113,13 +113,13 @@ class CallbackFrameReaderTests(unittest.TestCase):
             return prefix[0] + 1
 
         reader = CallbackFrameReader(reentrant_probe)
-        reader.feed(b"\\x01A")
+        reader.feed(b"\x01A")
 
         with self.assertRaises(FrameReaderReentrancyError):
             reader.read_frame()
 
         self.assertEqual(reader.available, 2)
-        self.assertEqual(reader.read_frame(), b"\\x01A")
+        self.assertEqual(reader.read_frame(), b"\x01A")
         self.assertEqual(reader.available, 0)
 
     def test_invalid_limits_are_rejected(self):
