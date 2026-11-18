@@ -220,3 +220,46 @@ login, or compatibility evidence.
 ## IL2CPP v31 native type and compressed default-value cross-check — 2026-11-18
 
 The new offline analyzer resolves metadata type indexes through one unique ARM64 native registration type-pointer table and decodes only allowlisted I4 defaults. For NetworkSettings, both the field and default type resolve to I4; HeaderLength has a static metadata default of 4 and ZipIntermediateBufferSize has a static metadata default of 4096. This corroborates the four-byte Receiver candidate but does not establish runtime field use or a complete frame contract. Raw bytes, native addresses, APK assets and extracted libraries remain private. See [IL2CPP_DEFAULT_VALUE_EVIDENCE.md](IL2CPP_DEFAULT_VALUE_EVIDENCE.md).
+
+
+## Primitive int32 byte-order static revalidation — 2026-11-18
+
+A fresh private offline re-read of the unchanged APK reproduced the established
+SHA-256, ZIP integrity, IL2CPP v31 metadata and ARM64 ELF identity. A bounded
+relocation-backed native entrypoint pass associated 165/165 metadata images
+with codegen modules and resolved 164,023 unique method entrypoints.
+
+The selected native method windows provide static evidence consistent with
+big-endian 32-bit primitive encoding:
+
+- `SimpleDeserializer.deserializeInt` calls `deserializeShort` twice and
+  inserts the first returned half-word into bits 16–31 of the result.
+- `SimpleDeserializer.deserializeShort` obtains two byte values and places
+  the first in bits 8–15, leaving the second in bits 0–7.
+- `SimpleSerializer.serializeInt` passes the upper 16 bits to
+  `serializeChar` before passing the lower 16 bits.
+- `SimpleSerializer.serializeChar` passes the high byte before the low byte
+  to its byte-writing virtual slot.
+
+This static composition supports big-endian `Int32` payload primitives and
+matches the existing synthetic `AowPrimitiveWriter/Reader` implementation.
+The Receiver path compares its first decoded integer with
+`0x48545450` (the big-endian bytes `HTTP`); the non-marker branch uses the
+integer as the subsequent stream-buffer read count. The selected Sender path
+contains two `serializeInt` callsites, a `ZipCompression` callsite and two
+stream-write callsites. These observations do not establish Sender/Receiver
+framing symmetry or the full packet contract.
+
+The selected `LoginRequestSTSerializer.serialize` and
+`LoginRequestSTDeserializer.deserialize` native entrypoints both resolve,
+but their complete field order and version-dependent branches are not
+recovered. Direct primitive callsite counts are not treated as field counts
+or execution counts. The later Receiver integer's internal helper owner and
+semantic identity remain unresolved.
+
+This is static native-code evidence only. It does not prove runtime execution,
+effective `HeaderLength` use, compression activation, encryption, a complete
+frame boundary, handshake sequence, LoginRequest wire field order, or
+unchanged-APK compatibility. No runtime trace or authorized client-side byte
+fixture was available. The APK, metadata, native library, addresses,
+instruction bytes and extracted assets remain private.
