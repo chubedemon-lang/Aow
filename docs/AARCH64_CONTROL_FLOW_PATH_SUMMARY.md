@@ -30,6 +30,9 @@ native addresses or instruction words.
 - The analysis is intraprocedural and limited to the bounded entry window.
 - Loops are not executed or unrolled. A detected back-edge is represented as
   a cycle exit.
+- A cycle exit does not by itself mark path enumeration as truncated. Hitting
+  the path-count or depth limit does; inspect `control_flow_paths_truncated`
+  and `control_flow_path_depth_limit_count`.
 - Indirect calls are included only when the existing relocation-backed
   analysis resolves them uniquely. Unknown or ambiguous targets remain
   unresolved.
