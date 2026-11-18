@@ -74,7 +74,7 @@ class SqliteSessionStore:
         try:
             value = self.clock()
         except Exception as exc:
-            raise ValueError("session clock failed") from exc
+            raise ValueError("session clock failed") from None
         # Accept only exact built-in numeric values. Numeric subclasses can
         # override __float__ and execute caller code during expiry validation.
         if type(value) not in (int, float):
