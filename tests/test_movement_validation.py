@@ -78,6 +78,41 @@ class MovementValidationTests(unittest.TestCase):
             Position(3, 4),
         )
 
+    def test_numeric_subclasses_are_rejected_before_float_hooks(self):
+        class HostileFloat(float):
+            def __float__(self):
+                raise AssertionError("custom float hook must not run")
+
+        class HostileInt(int):
+            def __float__(self):
+                raise AssertionError("custom integer float hook must not run")
+
+        for value in (HostileFloat(1), HostileInt(1)):
+            with self.subTest(value_type=type(value).__name__):
+                with self.assertRaises(ValueError):
+                    Position(value, 0)
+                with self.assertRaises(ValueError):
+                    MovementValidator(value)
+                with self.assertRaises(MovementError):
+                    self.validator.validate(Position(0, 0), Position(0, 0), value)
+
+    def test_position_subclasses_are_rejected_before_attribute_hooks(self):
+        class HostilePosition(Position):
+            def __post_init__(self):
+                # Deliberately bypass the base validation for this test object.
+                pass
+
+            def __getattribute__(self, name):
+                if name in ("x", "y"):
+                    raise AssertionError("custom coordinate access must not run")
+                return super().__getattribute__(name)
+
+        hostile = HostilePosition(0, 0)
+        with self.assertRaises(TypeError):
+            self.validator.validate(hostile, Position(0, 0), 1)
+        with self.assertRaises(TypeError):
+            self.validator.validate(Position(0, 0), hostile, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,8 +4,10 @@ import math
 
 
 def _finite_float(value):
-    """Return a finite float for an int/float input, or None when unsafe."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    """Return a finite float for an exact built-in int/float, or None."""
+    # Do not invoke caller-defined __float__ methods on numeric subclasses.
+    # bool is excluded implicitly because its exact type is not int.
+    if type(value) not in (int, float):
         return None
     try:
         converted = float(value)
@@ -40,8 +42,10 @@ class MovementValidator:
         self.epsilon = tolerance
 
     def validate(self, old: Position, new: Position, elapsed_seconds: float) -> Position:
-        if not isinstance(old, Position) or not isinstance(new, Position):
-            raise TypeError("positions required")
+        # Exact instances avoid subclass attribute-access hooks during the
+        # authoritative comparison. Persisted/API rows must be decoded first.
+        if type(old) is not Position or type(new) is not Position:
+            raise TypeError("exact Position instances required")
         elapsed = _finite_float(elapsed_seconds)
         if elapsed is None or elapsed <= 0:
             raise MovementError("invalid elapsed time")
