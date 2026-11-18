@@ -1302,10 +1302,12 @@ def _summarize_control_flow_helper_paths(
         if truncated:
             break
 
+    partial = truncated or depth_limit_count > 0
     return {
         "control_flow_path_analysis_kind": "bounded_simple_path_enumeration",
         "control_flow_path_analysis_status": (
-            "truncated" if truncated or cycle_count or depth_limit_count
+            "truncated" if partial
+            else "bounded_with_cycles" if cycle_count
             else "bounded"
         ),
         "control_flow_path_semantics": (
@@ -1315,7 +1317,7 @@ def _summarize_control_flow_helper_paths(
         "control_flow_path_depth_limit": max_depth,
         "control_flow_path_count": len(paths),
         "control_flow_paths": paths,
-        "control_flow_paths_truncated": truncated,
+        "control_flow_paths_truncated": partial,
         "control_flow_path_cycle_count": cycle_count,
         "control_flow_path_depth_limit_count": depth_limit_count,
     }
