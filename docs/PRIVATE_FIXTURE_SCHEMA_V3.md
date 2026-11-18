@@ -25,10 +25,14 @@ The redacted report adds only:
 
 - `event_span_ns`: last elapsed value minus the first
 - `max_inter_event_gap_ns`: largest gap between adjacent observations
+- `per_direction`: event count, elapsed span, and largest same-direction gap
+  for each stream direction
 - `absolute_timestamps_emitted: false`
 
-It does not emit per-event offsets, lengths, elapsed values, wall-clock times,
-fixture paths, or payload bytes. The timing summary is explicitly
+The per-direction values are durations only. They do not expose first/last
+elapsed values or any per-event timing. The report does not emit per-event
+offsets, lengths, elapsed values, wall-clock times, fixture paths, or payload
+bytes. The timing summary is explicitly
 `relative_monotonic_summary_unverified`.
 
 ## Interpretation boundary

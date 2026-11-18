@@ -552,6 +552,18 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
                 "status": "relative_monotonic_summary_unverified",
                 "event_span_ns": 6_000_000,
                 "max_inter_event_gap_ns": 3_500_000,
+                "per_direction": {
+                    "client_to_server": {
+                        "event_count": 2,
+                        "event_span_ns": 2_500_000,
+                        "max_inter_event_gap_ns": 2_500_000,
+                    },
+                    "server_to_client": {
+                        "event_count": 2,
+                        "event_span_ns": 6_000_000,
+                        "max_inter_event_gap_ns": 6_000_000,
+                    },
+                },
                 "absolute_timestamps_emitted": False,
             },
         )
@@ -572,6 +584,58 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertFalse(result["wire_contract_verified"])
         self.assertFalse(result["apk_compatible"])
         self.assertFalse(result["authorization_independently_verified"])
+
+    def test_schema_v3_reports_directional_timing_only_as_relative_durations(self):
+        server_stream = frame(b"server")
+        client_stream = b"client-data"
+        events = [
+            {"direction": "client_to_server", "offset": 0, "length": 2, "elapsed_ns": 0},
+            {"direction": "server_to_client", "offset": 0, "length": 3, "elapsed_ns": 1},
+            {"direction": "client_to_server", "offset": 2, "length": 3, "elapsed_ns": 4},
+            {
+                "direction": "server_to_client",
+                "offset": 3,
+                "length": len(server_stream) - 3,
+                "elapsed_ns": 7,
+            },
+            {
+                "direction": "client_to_server",
+                "offset": 5,
+                "length": len(client_stream) - 5,
+                "elapsed_ns": 9,
+            },
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [client_stream],
+                schema_version=3,
+                io_events=events,
+            )
+        )
+        timing = result["exchange_order"]["timing"]
+        self.assertEqual(
+            timing["per_direction"],
+            {
+                "client_to_server": {
+                    "event_count": 3,
+                    "event_span_ns": 9,
+                    "max_inter_event_gap_ns": 5,
+                },
+                "server_to_client": {
+                    "event_count": 2,
+                    "event_span_ns": 6,
+                    "max_inter_event_gap_ns": 6,
+                },
+            },
+        )
+        serialized = json.dumps(result)
+        self.assertNotIn("elapsed_ns", serialized)
+        self.assertNotIn('"offset"', serialized)
+        self.assertNotIn('"length"', serialized)
+        self.assertFalse(timing["absolute_timestamps_emitted"])
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
 
     def test_schema_v3_rejects_invalid_elapsed_values_and_non_monotonic_order(self):
         server_stream = frame(b"s")

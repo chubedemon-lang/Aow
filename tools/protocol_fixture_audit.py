@@ -217,8 +217,8 @@ def _validate_io_events(
     Each event describes one local I/O observation as a contiguous range in
     that direction's concatenated stream. Event boundaries are observations,
     not packet/message boundaries. Schema v3 additionally carries elapsed
-    monotonic nanoseconds relative to the first observation; only a bounded
-    span and maximum inter-observation gap are returned.
+    monotonic nanoseconds relative to the first observation; only bounded
+    overall and per-direction spans and maximum gaps are returned.
     """
     if type(value) is not list:
         raise FixtureAuditError("io_events must be a built-in list")
@@ -235,6 +235,14 @@ def _validate_io_events(
     first_elapsed_ns = None
     previous_elapsed_ns = None
     max_inter_event_gap_ns = 0
+    direction_timing = {
+        direction: {
+            "first_elapsed_ns": None,
+            "last_elapsed_ns": None,
+            "max_inter_event_gap_ns": 0,
+        }
+        for direction in _STREAM_DIRECTIONS
+    }
 
     for index, event in enumerate(value):
         if type(event) is not dict or set(event) != expected_event_keys:
@@ -290,6 +298,16 @@ def _validate_io_events(
                 )
             previous_elapsed_ns = elapsed_ns
 
+            directional = direction_timing[direction]
+            if directional["last_elapsed_ns"] is None:
+                directional["first_elapsed_ns"] = elapsed_ns
+            else:
+                directional["max_inter_event_gap_ns"] = max(
+                    directional["max_inter_event_gap_ns"],
+                    elapsed_ns - directional["last_elapsed_ns"],
+                )
+            directional["last_elapsed_ns"] = elapsed_ns
+
         next_offsets[direction] = end
         event_counts[direction] += 1
         if previous_direction is not None and direction != previous_direction:
@@ -314,6 +332,19 @@ def _validate_io_events(
             "status": "relative_monotonic_summary_unverified",
             "event_span_ns": previous_elapsed_ns - first_elapsed_ns,
             "max_inter_event_gap_ns": max_inter_event_gap_ns,
+            "per_direction": {
+                direction: {
+                    "event_count": event_counts[direction],
+                    "event_span_ns": (
+                        direction_timing[direction]["last_elapsed_ns"]
+                        - direction_timing[direction]["first_elapsed_ns"]
+                    ),
+                    "max_inter_event_gap_ns": direction_timing[direction][
+                        "max_inter_event_gap_ns"
+                    ],
+                }
+                for direction in _STREAM_DIRECTIONS
+            },
             "absolute_timestamps_emitted": False,
         }
     return summary
