@@ -525,7 +525,7 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         client_stream = b"client"
         events = [
             {"direction": "client_to_server", "offset": 0, "length": 2, "elapsed_ns": 0},
-            {"direction": "server_to_client", "offset": 0, "length": 3, "elapsed_ns": 1_000_000},
+            {"direction": "server_to_client", "offset": 0, "length": 3, "elapsed_ns": 0},
             {"direction": "client_to_server", "offset": 2, "length": len(client_stream) - 2, "elapsed_ns": 2_500_000},
             {"direction": "server_to_client", "offset": 3, "length": len(server_stream) - 3, "elapsed_ns": 6_000_000},
         ]
@@ -589,15 +589,27 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
                     )
                 )
 
+        decreasing_client_stream = b"cc"
         decreasing = [
             valid_prefix,
-            {**valid_suffix, "elapsed_ns": 0},
+            {
+                "direction": "server_to_client",
+                "offset": 0,
+                "length": len(server_stream),
+                "elapsed_ns": 10,
+            },
+            {
+                "direction": "client_to_server",
+                "offset": 1,
+                "length": 1,
+                "elapsed_ns": 9,
+            },
         ]
         with self.assertRaisesRegex(FixtureAuditError, "monotonic"):
             self.audit(
                 fixture_bytes(
                     [server_stream],
-                    [client_stream],
+                    [decreasing_client_stream],
                     schema_version=3,
                     io_events=decreasing,
                 )
