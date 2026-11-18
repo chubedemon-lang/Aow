@@ -12,6 +12,7 @@ from server.sqlite_map_position_store import SqliteMapPositionStore
 from server.sqlite_player_state_store import SqlitePlayerStateStore
 from server.sqlite_quest_inventory_award_store import SqliteQuestInventoryAwardStore
 from server.sqlite_reward_ledger import SqliteRewardLedger
+from server.sqlite_shop_store import ShopOffer, SqliteShopStore
 from tools.sqlite_domain_audit import (
     DomainAuditError,
     inspect_domain_database,
@@ -42,6 +43,18 @@ class SqliteDomainAuditTests(unittest.TestCase):
 
         rewards = SqliteRewardLedger(connection)
         rewards.grant_once("reward-1", "hero", 7, "gem", 2)
+
+        shop = SqliteShopStore(
+            connection,
+            {"potion-pack": ShopOffer("potion-pack", "potion", 3)},
+        )
+        shop.purchase(
+            "hero", "shop-purchase-1",
+            expected_player_revision=1,
+            expected_inventory_revision=2,
+            offer_id="potion-pack",
+            quantity=2,
+        )
         connection.close()
 
     def test_audits_all_existing_domain_stores(self):
@@ -69,8 +82,71 @@ class SqliteDomainAuditTests(unittest.TestCase):
                     "receipts": 1,
                     "quest_award_keys": 0,
                 },
+                "shop": {
+                    "purchases": 1,
+                    "linked_player_mutations": 1,
+                    "linked_inventory_mutations": 1,
+                },
             },
         )
+
+    def test_corrupt_shop_receipt_amount_fails_closed(self):
+        connection = sqlite3.connect(self.path)
+        row = connection.execute(
+            "SELECT result_json FROM shop_purchase_receipts "
+            "WHERE request_id='shop-purchase-1'"
+        ).fetchone()
+        receipt = json.loads(row[0])
+        receipt["total"] = 8
+        connection.execute(
+            "UPDATE shop_purchase_receipts SET result_json=? "
+            "WHERE request_id='shop-purchase-1'",
+            (json.dumps(receipt, sort_keys=True, separators=(",", ":")),),
+        )
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(
+            DomainAuditError, "shop integrity audit failed"
+        ):
+            inspect_domain_database(self.path)
+
+    def test_orphan_shop_receipt_mutations_fail_closed(self):
+        connection = sqlite3.connect(self.path)
+        connection.execute(
+            "DELETE FROM shop_purchase_receipts WHERE request_id='shop-purchase-1'"
+        )
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(
+            DomainAuditError, "shop integrity audit failed"
+        ):
+            inspect_domain_database(self.path)
+
+    def test_missing_shop_receipt_table_rejects_reserved_mutations(self):
+        missing = Path(self.temp.name) / "missing-shop-receipts.sqlite3"
+        connection = sqlite3.connect(missing)
+        source = sqlite3.connect(self.path)
+        source.backup(connection)
+        source.close()
+        connection.execute("DROP TABLE shop_purchase_receipts")
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(
+            DomainAuditError,
+            "shop receipt schema is missing for reserved shop mutations",
+        ):
+            inspect_domain_database(missing)
+
+    def test_partial_shop_schema_fails_closed(self):
+        partial = Path(self.temp.name) / "partial-shop.sqlite3"
+        connection = sqlite3.connect(partial)
+        connection.execute(
+            "CREATE TABLE shop_purchase_receipts (request_id TEXT PRIMARY KEY)"
+        )
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(DomainAuditError, "shop schema is incomplete"):
+            inspect_domain_database(partial)
 
     def test_audit_is_read_only_at_file_level(self):
         before = self.path.read_bytes()
