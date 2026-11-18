@@ -280,11 +280,18 @@ class _CandidateFrameCountLimit(FrameReaderError):
     """The redacted report reached its fixed candidate-frame count cap."""
 
 
-def _collect_complete_frames(reader, frame_sizes):
+def _collect_complete_frames(reader, frame_sizes, consumed_frame_bytes):
+    """Collect bounded frame-size details while accounting for every consumed frame.
+
+    The reader consumes a complete frame before returning it. When the report
+    cap is reached, the one extra frame used to detect truncation has therefore
+    already been consumed and must still be included in byte accounting.
+    """
     while True:
         frame = reader.read_frame()
         if frame is None:
             return
+        consumed_frame_bytes[0] += len(frame)
         if len(frame_sizes) >= MAX_CANDIDATE_FRAMES:
             raise _CandidateFrameCountLimit(
                 "candidate frame report reached its configured count limit"
@@ -301,21 +308,22 @@ def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
         max_buffer_bytes=max_buffer_bytes,
     )
     frame_sizes = []
+    consumed_frame_bytes = [0]
     try:
         for chunk in chunks:
             offset = 0
             while offset < len(chunk):
-                _collect_complete_frames(reader, frame_sizes)
+                _collect_complete_frames(reader, frame_sizes, consumed_frame_bytes)
                 available_room = reader.max_buffer_bytes - reader.available
                 if available_room <= 0:
                     raise FrameReaderError("candidate reader cannot make progress")
                 amount = min(available_room, len(chunk) - offset)
                 reader.feed(chunk[offset:offset + amount])
                 offset += amount
-                _collect_complete_frames(reader, frame_sizes)
+                _collect_complete_frames(reader, frame_sizes, consumed_frame_bytes)
 
         reader.close()
-        _collect_complete_frames(reader, frame_sizes)
+        _collect_complete_frames(reader, frame_sizes, consumed_frame_bytes)
         status = "candidate_frames_recovered"
         reason = None
         truncated = False
@@ -329,7 +337,7 @@ def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
         status = "candidate_not_recovered"
         reason = "CandidateFrameCountLimit" if truncated else type(exc).__name__
 
-    candidate_bytes_consumed = sum(frame_sizes)
+    candidate_bytes_consumed = consumed_frame_bytes[0]
     unclassified_stream_bytes = stream_bytes - candidate_bytes_consumed
     return {
         "status": status,
@@ -340,9 +348,7 @@ def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
         "frame_sizes": frame_sizes,
         "candidate_bytes_consumed": candidate_bytes_consumed,
         "unclassified_stream_bytes": unclassified_stream_bytes,
-        "candidate_stream_fully_consumed": (
-            status == "candidate_frames_recovered" and unclassified_stream_bytes == 0
-        ),
+        "candidate_stream_fully_consumed": unclassified_stream_bytes == 0,
     }
 
 
