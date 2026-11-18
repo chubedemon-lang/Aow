@@ -24,6 +24,7 @@ METADATA_MAGIC = 0xFAB11BAF
 METADATA_VERSION = 31
 HEADER_MIN_BYTES = 0x100
 MAX_TABLE_RECORDS = 1_000_000
+MAX_REQUESTED_TYPE_INDEXES = 4096
 TYPE_NAMES = {
     0x00: "END", 0x01: "VOID", 0x02: "BOOLEAN", 0x03: "CHAR",
     0x04: "I1", 0x05: "U1", 0x06: "I2", 0x07: "U2",
@@ -114,12 +115,22 @@ def _resolve_type_codes_from_tables(elf, sections, relocations, requested_indexe
         raise DefaultValueEvidenceError("ELF input must be exact immutable bytes")
     if type(sections) is not dict or type(relocations) is not dict:
         raise DefaultValueEvidenceError("ELF sections and relocations must be exact dicts")
+    if type(requested_indexes) not in (list, tuple):
+        raise DefaultValueEvidenceError(
+            "requested type indexes must be a built-in list or tuple"
+        )
+    if not 1 <= len(requested_indexes) <= MAX_REQUESTED_TYPE_INDEXES:
+        raise DefaultValueEvidenceError(
+            "requested type index count is outside configured bounds"
+        )
     indexes = tuple(requested_indexes)
-    if not indexes or any(
+    if any(
         type(index) is not int or not 0 <= index < MAX_TABLE_RECORDS
         for index in indexes
     ):
         raise DefaultValueEvidenceError("requested type indexes are invalid")
+    if len(set(indexes)) != len(indexes):
+        raise DefaultValueEvidenceError("requested type indexes contain duplicates")
     maximum_index = max(indexes)
 
     writable_sections = {

@@ -10,7 +10,8 @@ The analyzer:
 2. Locates the native registration type-pointer table through its count/pointer pair and AArch64 relative relocations.
 3. Requires one unique candidate table, a matching registration count, a complete contiguous pointer run, and valid IL2CPP type records for every entry.
 4. Resolves the field type index and the default-value type index independently.
-5. Decodes only the two allowlisted NetworkSettings I4 defaults using the observed compressed signed-integer representation (compressed unsigned integer followed by zigzag decoding).
+5. Accepts only an exact built-in list or tuple of 1–4,096 unique requested type indexes; arbitrary iterators, subclasses, duplicates and oversized requests are rejected before native-table scanning.
+6. Decodes only the two allowlisted NetworkSettings I4 defaults using the observed compressed signed-integer representation (compressed unsigned integer followed by zigzag decoding).
 
 The native type-pointer table contains 124,985 entries. The report emits the table count and symbolic type names only; it does not emit native addresses or raw bytes.
 
