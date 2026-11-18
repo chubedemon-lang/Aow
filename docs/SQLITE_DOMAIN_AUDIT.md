@@ -17,7 +17,8 @@ Example shape of a successful report:
   "audits": {
     "inventory": {"items": 2, "mutations": 4, "snapshots": 1},
     "map_position": {"mutations": 3, "snapshots": 1},
-    "player_state": {"mutations": 2, "snapshots": 1}
+    "player_state": {"mutations": 2, "snapshots": 1},
+    "reward_ledger": {"balances": 1, "receipts": 2, "quest_award_keys": 0}
   },
   "foreign_key_violations": 0,
   "sqlite_integrity": "ok",
