@@ -9,14 +9,18 @@ APK compatibility.
 - Registry records must be exact instances of `Evidence`; subclasses are
   rejected before any record fields are read.
 - Gate input must be an exact built-in `list` or `tuple`, containing only
-  exact `Evidence` instances.
+  exact `Evidence` instances, with at most 4,096 records per evaluation.
+- The approved-digest allowlist must be an exact built-in `list`, `tuple`, or
+  `frozenset`, with at most 4,096 entries.
 - Artifact fingerprints must be exact built-in lowercase SHA-256 strings.
 - Evidence digest input must be exact immutable `bytes`.
 
 These constraints prevent caller-defined subclasses from running custom
 attribute, iteration, conversion, or equality hooks while evidence is being
-accepted or evaluated. They also keep the registry and ordered gates on the
-same narrow input contract.
+accepted or evaluated. The collection caps also bound the work and temporary
+memory used to validate records, build the fingerprint set, and materialize
+the approved-digest allowlist. They also keep the registry and ordered gates
+on the same narrow input contract.
 
 ## Static verification versus protocol readiness
 

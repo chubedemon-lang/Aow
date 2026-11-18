@@ -98,6 +98,16 @@ class EvidenceGateTests(unittest.TestCase):
                 with self.assertRaises(EvidenceError):
                     evaluate_evidence(invalid)
 
+    def test_rejects_oversized_evidence_record_collection_before_scanning(self):
+        records = [object()] * 4097
+        with self.assertRaisesRegex(EvidenceError, "at most 4096"):
+            evaluate_evidence(records)
+
+    def test_rejects_oversized_approval_allowlist_before_digest_validation(self):
+        digests = ["not-a-digest"] * 4097
+        with self.assertRaisesRegex(EvidenceError, "at most 4096"):
+            evaluate_evidence([], approved_evidence_digests=digests)
+
     def test_input_order_does_not_change_results(self):
         items = [evidence("handshake"), evidence("transport"),
                  evidence("framing"), evidence("serialization")]
