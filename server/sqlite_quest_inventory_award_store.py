@@ -109,6 +109,139 @@ class SqliteQuestInventoryAwardStore:
         digest = hashlib.sha256(request_id.encode("utf-8")).hexdigest()
         return "quest-" + digest
 
+    def verify_integrity(self) -> dict:
+        """Audit award receipts against their inventory mutations.
+
+        The connection must be idle. The method owns one deferred read
+        transaction and always rolls it back. The inventory store's own audit
+        separately verifies the full inventory mutation history; this method
+        proves that every quest award is linked to the exact reserved mutation
+        and that no unpaired mutation remains in that reserved namespace.
+        """
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+        self.db.execute("BEGIN")
+        try:
+            return self._verify_integrity_snapshot()
+        finally:
+            if self.db.in_transaction:
+                self.db.rollback()
+
+    def _verify_integrity_snapshot(self) -> dict:
+        """Run the award audit while verify_integrity owns the read snapshot."""
+        try:
+            if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                raise QuestInventoryAwardError("SQLite quick_check failed")
+            if self.db.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise QuestInventoryAwardError(
+                    "quest inventory award foreign key check failed"
+                )
+
+            duplicate_checks = (
+                (
+                    "SELECT 1 FROM quest_inventory_awards "
+                    "GROUP BY request_id HAVING COUNT(*) > 1 LIMIT 1",
+                    "duplicate quest inventory award request id",
+                ),
+                (
+                    "SELECT 1 FROM quest_inventory_awards "
+                    "GROUP BY character_id, quest_id, item_id "
+                    "HAVING COUNT(*) > 1 LIMIT 1",
+                    "duplicate quest inventory award identity",
+                ),
+            )
+            for query, message in duplicate_checks:
+                if self.db.execute(query).fetchone() is not None:
+                    raise QuestInventoryAwardError(message)
+
+            award_count = 0
+            rows = self.db.execute(
+                """SELECT request_id, character_id, quest_id, item_id, quantity,
+                          expected_inventory_revision, payload_json, result_json,
+                          result_revision
+                   FROM quest_inventory_awards ORDER BY request_id"""
+            )
+            for (request_id, character_id, quest_id, item_id, quantity,
+                 expected_revision, payload_json, result_json,
+                 result_revision) in rows:
+                request_id = self._request_id(request_id)
+                character_id = SqliteInventoryStore._character_id(character_id)
+                item_id = self._item_id(item_id)
+                if (type(quest_id) is not int
+                        or not 0 <= quest_id <= _MAX_SQLITE_INTEGER):
+                    raise QuestInventoryAwardError(
+                        "invalid stored quest inventory award identifier"
+                    )
+                if (type(quantity) is not int
+                        or not 1 <= quantity <= _MAX_ITEM_QUANTITY):
+                    raise QuestInventoryAwardError(
+                        "invalid stored quest inventory award quantity"
+                    )
+                if (type(expected_revision) is not int
+                        or not 0 <= expected_revision < _MAX_SQLITE_INTEGER
+                        or type(result_revision) is not int
+                        or result_revision != expected_revision + 1):
+                    raise QuestInventoryAwardError(
+                        "invalid stored quest inventory award revision"
+                    )
+
+                expected_payload = json.dumps(
+                    [character_id, quest_id, item_id, quantity,
+                     expected_revision],
+                    separators=(",", ":"), ensure_ascii=True,
+                )
+                if type(payload_json) is not str or payload_json != expected_payload:
+                    raise QuestInventoryAwardError(
+                        "quest inventory award payload is not canonical"
+                    )
+
+                snapshot = self._decode_snapshot(
+                    result_json,
+                    expected_character_id=character_id,
+                    expected_revision=result_revision,
+                )
+                if SqliteInventoryStore._encode_snapshot(snapshot) != result_json:
+                    raise QuestInventoryAwardError(
+                        "quest inventory award result is not canonical"
+                    )
+
+                mutation_payload = json.dumps(
+                    [[item_id, quantity]],
+                    separators=(",", ":"), ensure_ascii=True,
+                )
+                mutation = self.db.execute(
+                    """SELECT character_id, expected_revision, payload_json,
+                              result_json, result_revision
+                       FROM inventory_mutations WHERE request_id=?""",
+                    (self._mutation_id(request_id),),
+                ).fetchone()
+                if mutation is None or tuple(mutation) != (
+                    character_id, expected_revision, mutation_payload,
+                    result_json, result_revision,
+                ):
+                    raise QuestInventoryAwardError(
+                        "quest inventory award does not match its inventory mutation"
+                    )
+                award_count += 1
+
+            reserved_mutations = self.db.execute(
+                """SELECT COUNT(*) FROM inventory_mutations
+                   WHERE substr(request_id, 1, 6) = 'quest-'"""
+            ).fetchone()[0]
+            if type(reserved_mutations) is not int or reserved_mutations != award_count:
+                raise QuestInventoryAwardError(
+                    "unpaired reserved quest inventory mutation"
+                )
+
+            return {
+                "awards": award_count,
+                "linked_inventory_mutations": award_count,
+            }
+        except sqlite3.DatabaseError as exc:
+            raise QuestInventoryAwardError(
+                "quest inventory award integrity check could not complete"
+            ) from exc
+
     def grant_once(self, character_id: str, request_id: str,
                    expected_inventory_revision: int, quest_id: int,
                    item_id: str, quantity: int) -> QuestInventoryAward:
