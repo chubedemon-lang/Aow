@@ -98,9 +98,10 @@ class FieldRefEvidenceTests(unittest.TestCase):
             with zipfile.ZipFile(apk, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 archive.writestr(METADATA_MEMBER, metadata)
             expected_digest = hashlib.sha256(apk.read_bytes()).hexdigest()
+            expected_size = apk.stat().st_size
             report = inspect_apk(apk, [1])
         self.assertEqual(report["apk_sha256"], expected_digest)
-        self.assertEqual(report["apk_size_bytes"], apk.stat().st_size if apk.exists() else len(apk.read_bytes()) if apk.exists() else report["apk_size_bytes"])
+        self.assertEqual(report["apk_size_bytes"], expected_size)
         self.assertEqual(report["field_ref_count"], 2)
         self.assertEqual(report["requested_field_refs"][0]["field_ref_index"], 1)
 
