@@ -41,6 +41,10 @@ class FrameProbeLimitExceeded(FrameReaderError):
         )
 
 
+class FrameReaderReentrancyError(FrameReaderError):
+    """A frame-size probe attempted to call read_frame recursively."""
+
+
 class TruncatedFrame(FrameReaderError):
     """EOF arrived before a complete frame could be identified or read."""
 
@@ -102,6 +106,7 @@ class CallbackFrameReader:
         self._max_frame_bytes = max_frame_bytes
         self._max_probe_bytes = max_probe_bytes
         self._buffer = BoundedStreamBuffer(max_buffer_bytes=max_buffer_bytes)
+        self._probing = False
 
     @property
     def available(self):
@@ -134,13 +139,22 @@ class CallbackFrameReader:
         Probe errors, invalid sizes, oversized frames, and truncated EOF leave
         buffered bytes untouched so the caller can inspect or terminate safely.
         """
+        if self._probing:
+            raise FrameReaderReentrancyError(
+                "frame-size probe must not call read_frame recursively"
+            )
+
         available = self._buffer.available
         if available == 0:
             return None
 
         prefix_size = min(available, self._max_probe_bytes)
         prefix = self._buffer.peek(prefix_size)
-        frame_size = self._probe(prefix)
+        self._probing = True
+        try:
+            frame_size = self._probe(prefix)
+        finally:
+            self._probing = False
 
         if frame_size is None:
             if self._buffer.closed:
