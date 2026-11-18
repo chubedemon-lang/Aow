@@ -7,10 +7,11 @@ not select or infer any AOW wire format.
 ## Contract
 
 - The caller constructs `CallbackFrameReader` with an independently reviewed
-  pure frame-size probe and explicit resource limits. Recursive calls to
-  `read_frame()` from inside a probe are rejected with
-  `FrameReaderReentrancyError`; the buffered bytes remain available and the
-  guard is cleared even when the probe raises.
+  pure frame-size probe and explicit resource limits. A probe cannot call
+  `read_frame()`, `feed()`, or `close()` on its reader; these reentrant
+  operations are rejected with `FrameReaderReentrancyError`. Buffered bytes
+  and the open/closed state remain unchanged, and the guard is cleared even
+  when the probe raises.
 - The callback receives a positive maximum byte count and must return immutable
   `bytes` no longer than that count.
 - `InterruptedError` is retried without changing buffered input.
@@ -32,9 +33,9 @@ compression, encryption, authentication, handshake, or login. Its limits are
 generic caller-selected resource bounds, not recovered AOW limits.
 
 Tests use a deliberately synthetic one-byte length probe. They demonstrate
-fragmentation, coalescing, interrupted reads, EOF handling, and invalid
-callback results only. They are not packet fixtures and do not establish APK
-compatibility.
+fragmentation, coalescing, interrupted reads, EOF handling, invalid callback
+results, and rejection of probe-triggered reader mutation only. They are not
+packet fixtures and do not establish APK compatibility.
 
 Run the focused tests:
 
