@@ -309,8 +309,10 @@ class SqliteSessionStoreTests(unittest.TestCase):
         )
         for operation in operations:
             with self.subTest(operation=operation):
-                with self.assertRaisesRegex(ValueError, "session clock failed"):
+                with self.assertRaisesRegex(ValueError, "session clock failed") as raised:
                     operation()
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertTrue(raised.exception.__suppress_context__)
                 self.assertFalse(self.db.in_transaction)
 
         self.store.clock = lambda: self.now
