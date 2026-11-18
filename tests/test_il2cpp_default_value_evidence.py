@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.il2cpp_codegen_inventory import (
     ARM64_IL2CPP_MEMBER,
@@ -184,6 +185,48 @@ class NativeTypeTableTests(unittest.TestCase):
         )
         self.assertEqual(count, 4)
         self.assertEqual(result, {0: 0x08, 3: 0x02})
+
+    def test_accepts_a_bounded_builtin_tuple_of_requested_indexes(self):
+        elf, sections, relocations = make_type_tables()
+        result, count = _resolve_type_codes_from_tables(
+            elf, sections, relocations, (0, 3)
+        )
+        self.assertEqual(count, 4)
+        self.assertEqual(result, {0: 0x08, 3: 0x02})
+
+    def test_rejects_arbitrary_iterators_and_sequence_subclasses_before_iteration(self):
+        class HostileIndexes(list):
+            def __len__(self):
+                raise AssertionError("custom length hook must not run")
+
+            def __iter__(self):
+                raise AssertionError("custom iterator hook must not run")
+
+        elf, sections, relocations = make_type_tables()
+        invalid_inputs = (iter((0, 3)), HostileIndexes([0, 3]))
+        for indexes in invalid_inputs:
+            with self.subTest(input_type=type(indexes).__name__):
+                with self.assertRaisesRegex(
+                    DefaultValueEvidenceError, "built-in list or tuple"
+                ):
+                    _resolve_type_codes_from_tables(
+                        elf, sections, relocations, indexes
+                    )
+
+    def test_rejects_duplicate_and_over_limit_requested_indexes(self):
+        elf, sections, relocations = make_type_tables()
+        with self.assertRaisesRegex(DefaultValueEvidenceError, "duplicates"):
+            _resolve_type_codes_from_tables(
+                elf, sections, relocations, [0, 0]
+            )
+
+        with patch(
+            "tools.il2cpp_default_value_evidence.MAX_REQUESTED_TYPE_INDEXES", 1
+        ):
+            with self.assertRaisesRegex(DefaultValueEvidenceError, "count"):
+                _resolve_type_codes_from_tables(
+                    elf, sections, relocations, [0, 3]
+                )
 
     def test_rejects_registration_count_mismatch(self):
         elf, sections, relocations = make_type_tables()
