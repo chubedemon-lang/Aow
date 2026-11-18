@@ -1,6 +1,8 @@
 # Read-only SQLite domain audit
 
-`tools.sqlite_domain_audit` checks existing synthetic inventory, player-state and map-position stores in one pass.
+`tools.sqlite_domain_audit` checks existing synthetic inventory, player-state, map-position and reward-ledger stores in one pass.
+
+The reward ledger is a separate synthetic grant/receipt prototype. It is not the same persistence model as the inventory-backed quest-award store and is not assumed to be wired into gameplay.
 
 It opens the database using SQLite `mode=ro` and enables `PRAGMA query_only`. It does not construct stores through their normal constructors: those constructors contain `CREATE TABLE/INDEX IF NOT EXISTS` statements and commit, so the audit deliberately bypasses them and invokes only each store's read-only `verify_integrity()` method.
 
