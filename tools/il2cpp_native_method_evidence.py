@@ -1242,6 +1242,9 @@ def _summarize_control_flow_helper_paths(
             block = by_index[block_index]
             for observation in block["callsite_observations"]:
                 item = {"block_index": block_index}
+                instruction_index = observation.get("instruction_index")
+                if type(instruction_index) is int and instruction_index >= 0:
+                    item["instruction_index"] = instruction_index
                 kind = observation.get("kind")
                 if type(kind) is str:
                     item["kind"] = kind

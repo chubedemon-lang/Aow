@@ -1260,6 +1260,13 @@ class NativeMethodEvidenceTests(unittest.TestCase):
                 ["SimpleSerializer::serializeString"],
             ],
         )
+        self.assertEqual(
+            [
+                [call.get("instruction_index") for call in item["helper_callsite_observations"]]
+                for item in paths["control_flow_paths"]
+            ],
+            [[1], [2]],
+        )
         self.assertTrue(all(
             item["exit_kind"] == "return"
             for item in paths["control_flow_paths"]

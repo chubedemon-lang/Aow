@@ -20,8 +20,11 @@ For each selected serializer/deserializer method window, the analyzer:
 6. Refuses to enumerate when the basic-block report itself was truncated.
 
 The JSON report adds `control_flow_path_*` fields, including each path's
-block indexes, exit kind and helper-callsite observations. It does not emit
-native addresses or instruction words.
+block indexes, exit kind and helper-callsite observations. Each path-level
+helper observation also retains its zero-based `instruction_index` within the
+bounded method window, when that index is a non-negative built-in integer.
+This lets reviewers distinguish repeated calls within one block without
+publishing a native address or instruction word.
 
 ## Interpretation limits
 
