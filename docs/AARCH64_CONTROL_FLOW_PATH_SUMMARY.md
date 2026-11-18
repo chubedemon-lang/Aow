@@ -29,7 +29,12 @@ block indexes, exit kind and helper-callsite observations. Each path-level
 helper observation also retains its zero-based `instruction_index` within the
 bounded method window, when that index is a non-negative built-in integer.
 This lets reviewers distinguish repeated calls within one block without
-publishing a native address or instruction word.
+publishing a native address or instruction word. When block instruction ranges
+are present, every indexed callsite must fall inside its owning block and
+indexes must be strictly increasing. A block cannot mix indexed and unindexed
+observations. Legacy summaries that omit all callsite indexes remain accepted;
+malformed indexed summaries are rejected rather than silently presenting a
+misordered helper sequence.
 
 ## Interpretation limits
 
