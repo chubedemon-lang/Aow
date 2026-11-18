@@ -40,6 +40,10 @@ standalone stores. REAL values are not truncated to integers and BLOB item IDs
 are not converted to Python string representations. Corrupt persisted state
 fails closed without a debit, item grant, revision change, or receipt.
 
+## Read-only integrity audit
+
+`SqliteShopStore.verify_integrity()` verifies every purchase receipt against the exact reserved `shop-` player-state and inventory mutations. It checks canonical request/result payloads, matching character and revision identities, currency debit, item grant payload, and matching result snapshots. It also rejects orphaned reserved mutations. The domain audit runs this check only when a shop receipt or reserved shop mutation is present and requires the complete dependent schemas. The audit never repairs records.
+
 ## Boundaries and deployment
 
 - Offer IDs, item IDs, prices, currency limits and purchase quantity limits
