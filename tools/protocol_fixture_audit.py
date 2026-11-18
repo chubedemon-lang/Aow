@@ -323,12 +323,14 @@ class _CandidateFrameCountLimit(FrameReaderError):
     """The redacted report reached its fixed candidate-frame count cap."""
 
 
-def _collect_complete_frames(reader, frame_sizes, consumed_frame_bytes):
-    """Collect bounded frame-size details while accounting for every consumed frame.
+def _collect_complete_frames(
+    reader, frame_sizes, frame_end_offsets, consumed_frame_bytes
+):
+    """Collect bounded sizes and cumulative end offsets for complete candidate frames.
 
-    The reader consumes a complete frame before returning it. When the report
-    cap is reached, the one extra frame used to detect truncation has therefore
-    already been consumed and must still be included in byte accounting.
+    End offsets remain private to the audit calculation. They are used only to
+    compare candidate frame boundaries with operator-supplied server-to-client
+    I/O event ends; no offsets or bytes are emitted in the report.
     """
     while True:
         frame = reader.read_frame()
@@ -340,6 +342,7 @@ def _collect_complete_frames(reader, frame_sizes, consumed_frame_bytes):
                 "candidate frame report reached its configured count limit"
             )
         frame_sizes.append(len(frame))
+        frame_end_offsets.append(consumed_frame_bytes[0])
 
 
 def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
@@ -351,22 +354,29 @@ def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
         max_buffer_bytes=max_buffer_bytes,
     )
     frame_sizes = []
+    frame_end_offsets = []
     consumed_frame_bytes = [0]
     try:
         for chunk in chunks:
             offset = 0
             while offset < len(chunk):
-                _collect_complete_frames(reader, frame_sizes, consumed_frame_bytes)
+                _collect_complete_frames(
+                    reader, frame_sizes, frame_end_offsets, consumed_frame_bytes
+                )
                 available_room = reader.max_buffer_bytes - reader.available
                 if available_room <= 0:
                     raise FrameReaderError("candidate reader cannot make progress")
                 amount = min(available_room, len(chunk) - offset)
                 reader.feed(chunk[offset:offset + amount])
                 offset += amount
-                _collect_complete_frames(reader, frame_sizes, consumed_frame_bytes)
+                _collect_complete_frames(
+                    reader, frame_sizes, frame_end_offsets, consumed_frame_bytes
+                )
 
         reader.close()
-        _collect_complete_frames(reader, frame_sizes, consumed_frame_bytes)
+        _collect_complete_frames(
+                    reader, frame_sizes, frame_end_offsets, consumed_frame_bytes
+                )
         status = "candidate_frames_recovered"
         reason = None
         truncated = False
@@ -389,9 +399,70 @@ def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
         "frame_count_is_lower_bound": truncated,
         "frame_sizes_truncated": truncated,
         "frame_sizes": frame_sizes,
+        "_frame_end_offsets": frame_end_offsets,
         "candidate_bytes_consumed": candidate_bytes_consumed,
         "unclassified_stream_bytes": unclassified_stream_bytes,
         "candidate_stream_fully_consumed": unclassified_stream_bytes == 0,
+    }
+
+
+def _summarize_receive_candidate_io_alignment(
+    candidate, frame_end_offsets, io_events, *, schema_version
+):
+    """Correlate redacted candidate frame ends with observed S2C I/O event ends.
+
+    I/O event boundaries describe local read/write observations, not packet
+    boundaries. The summary emits counts only and never exposes stream offsets.
+    """
+    candidate_complete = (
+        candidate["status"] == "candidate_frames_recovered"
+        and candidate["candidate_stream_fully_consumed"]
+        and not candidate["frame_count_is_lower_bound"]
+    )
+    frame_end_set = set(frame_end_offsets)
+    if schema_version == 1:
+        return {
+            "status": "io_event_boundaries_not_recorded_schema_v1",
+            "candidate_frame_boundary_count": len(frame_end_offsets),
+            "candidate_frame_boundary_count_is_lower_bound": not candidate_complete,
+            "server_to_client_io_event_boundary_count": None,
+            "candidate_frame_boundaries_aligned_with_io_event_ends": None,
+            "candidate_frame_boundaries_not_aligned_with_io_event_ends": None,
+            "io_event_ends_aligned_with_known_candidate_frame_boundaries": None,
+            "io_event_ends_without_known_candidate_frame_boundary": None,
+            "candidate_boundary_set_complete": candidate_complete,
+            "absolute_offsets_emitted": False,
+            "packet_boundaries_verified": False,
+        }
+
+    server_event_ends = tuple(
+        event["offset"] + event["length"]
+        for event in io_events
+        if event["direction"] == "server_to_client"
+    )
+    server_event_end_set = set(server_event_ends)
+    aligned_frame_ends = sum(
+        end_offset in server_event_end_set for end_offset in frame_end_offsets
+    )
+    aligned_io_ends = sum(
+        end_offset in frame_end_set for end_offset in server_event_ends
+    )
+    return {
+        "status": "unverified_candidate_io_boundary_correlation",
+        "candidate_frame_boundary_count": len(frame_end_offsets),
+        "candidate_frame_boundary_count_is_lower_bound": not candidate_complete,
+        "server_to_client_io_event_boundary_count": len(server_event_ends),
+        "candidate_frame_boundaries_aligned_with_io_event_ends": aligned_frame_ends,
+        "candidate_frame_boundaries_not_aligned_with_io_event_ends": (
+            len(frame_end_offsets) - aligned_frame_ends
+        ),
+        "io_event_ends_aligned_with_known_candidate_frame_boundaries": aligned_io_ends,
+        "io_event_ends_without_known_candidate_frame_boundary": (
+            len(server_event_ends) - aligned_io_ends
+        ),
+        "candidate_boundary_set_complete": candidate_complete,
+        "absolute_offsets_emitted": False,
+        "packet_boundaries_verified": False,
     }
 
 
@@ -511,6 +582,13 @@ def audit_fixture_bytes(
         max_payload_bytes=max_payload_bytes,
         max_buffer_bytes=max_buffer_bytes,
     )
+    frame_end_offsets = candidate.pop("_frame_end_offsets")
+    receive_candidate_io_alignment = _summarize_receive_candidate_io_alignment(
+        candidate,
+        frame_end_offsets,
+        document.get("io_events", ()),
+        schema_version=schema_version,
+    )
     candidate_status = candidate["status"]
     return {
         "status": (
@@ -534,6 +612,7 @@ def audit_fixture_bytes(
             "analysis": "not_attempted_sender_symmetry_unproven",
         },
         "exchange_order": exchange_order,
+        "receive_candidate_io_alignment": receive_candidate_io_alignment,
         "wire_contract_verified": False,
         "apk_compatible": False,
         "raw_bytes_emitted": False,
