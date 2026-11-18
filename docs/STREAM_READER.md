@@ -7,7 +7,10 @@ not select or infer any AOW wire format.
 ## Contract
 
 - The caller constructs `CallbackFrameReader` with an independently reviewed
-  pure frame-size probe and explicit resource limits.
+  pure frame-size probe and explicit resource limits. Recursive calls to
+  `read_frame()` from inside a probe are rejected with
+  `FrameReaderReentrancyError`; the buffered bytes remain available and the
+  guard is cleared even when the probe raises.
 - The callback receives a positive maximum byte count and must return immutable
   `bytes` no longer than that count.
 - `InterruptedError` is retried without changing buffered input.
