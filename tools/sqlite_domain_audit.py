@@ -11,6 +11,7 @@ import sqlite3
 from server.sqlite_inventory_store import SqliteInventoryStore
 from server.sqlite_map_position_store import SqliteMapPositionStore
 from server.sqlite_player_state_store import SqlitePlayerStateStore
+from server.sqlite_quest_inventory_award_store import SqliteQuestInventoryAwardStore
 from server.sqlite_reward_ledger import SqliteRewardLedger
 
 
@@ -23,6 +24,11 @@ _STORE_SPECS = (
         "inventory",
         SqliteInventoryStore,
         {"inventory_snapshots", "inventory_items", "inventory_mutations"},
+    ),
+    (
+        "quest_inventory_awards",
+        SqliteQuestInventoryAwardStore,
+        {"quest_inventory_awards"},
     ),
     (
         "player_state",
@@ -97,6 +103,29 @@ def inspect_domain_database(database):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
+
+        # The quest- prefix is reserved by SqliteQuestInventoryAwardStore.
+        # If such an inventory mutation exists, its award table must exist too.
+        if ("inventory_mutations" in tables
+                and "quest_inventory_awards" not in tables):
+            reserved_count = connection.execute(
+                """SELECT COUNT(*) FROM inventory_mutations
+                   WHERE substr(request_id, 1, 6) = 'quest-'"""
+            ).fetchone()[0]
+            if reserved_count:
+                raise DomainAuditError(
+                    "quest inventory award schema is missing for reserved inventory mutations"
+                )
+
+        # Quest awards are linked to the inventory mutation receipt created in
+        # the same transaction. Never report them as audited without that full
+        # inventory schema being present.
+        if "quest_inventory_awards" in tables and not {
+            "inventory_snapshots", "inventory_items", "inventory_mutations"
+        }.issubset(tables):
+            raise DomainAuditError(
+                "quest_inventory_awards requires complete inventory schema"
+            )
 
         audits = {}
         for name, store_type, required_tables in _STORE_SPECS:

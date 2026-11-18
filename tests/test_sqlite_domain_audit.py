@@ -10,6 +10,7 @@ from pathlib import Path
 from server.sqlite_inventory_store import SqliteInventoryStore
 from server.sqlite_map_position_store import SqliteMapPositionStore
 from server.sqlite_player_state_store import SqlitePlayerStateStore
+from server.sqlite_quest_inventory_award_store import SqliteQuestInventoryAwardStore
 from server.sqlite_reward_ledger import SqliteRewardLedger
 from tools.sqlite_domain_audit import (
     DomainAuditError,
@@ -32,6 +33,8 @@ class SqliteDomainAuditTests(unittest.TestCase):
         inventory = SqliteInventoryStore(connection)
         inventory.create("hero", capacity=8, max_stack=20)
         inventory.apply("hero", "grant-1", 0, [("potion", 3)])
+        awards = SqliteQuestInventoryAwardStore(connection, inventory)
+        awards.grant_once("hero", "quest-award-1", 1, 7, "gem", 2)
 
         positions = SqliteMapPositionStore(connection)
         positions.create("hero")
@@ -49,7 +52,11 @@ class SqliteDomainAuditTests(unittest.TestCase):
         self.assertEqual(
             result["audits"],
             {
-                "inventory": {"snapshots": 1, "items": 1, "mutations": 1},
+                "inventory": {"snapshots": 1, "items": 2, "mutations": 2},
+                "quest_inventory_awards": {
+                    "awards": 1,
+                    "linked_inventory_mutations": 1,
+                },
                 "player_state": {
                     "snapshots": 1,
                     "mutations": 1,
@@ -136,6 +143,61 @@ class SqliteDomainAuditTests(unittest.TestCase):
             DomainAuditError, "reward_ledger integrity audit failed"
         ):
             inspect_domain_database(self.path)
+
+    def test_partial_quest_award_schema_requires_inventory_receipts(self):
+        partial = Path(self.temp.name) / "partial-quest-awards.sqlite3"
+        connection = sqlite3.connect(partial)
+        connection.execute(
+            "CREATE TABLE quest_inventory_awards (request_id TEXT PRIMARY KEY)"
+        )
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(
+            DomainAuditError,
+            "quest_inventory_awards requires complete inventory schema",
+        ):
+            inspect_domain_database(partial)
+
+    def test_corrupt_quest_award_payload_fails_closed(self):
+        connection = sqlite3.connect(self.path)
+        connection.execute(
+            "UPDATE quest_inventory_awards SET payload_json=? "
+            "WHERE request_id='quest-award-1'",
+            ('["hero",7,"other",2,1]',),
+        )
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(
+            DomainAuditError,
+            "quest_inventory_awards integrity audit failed",
+        ):
+            inspect_domain_database(self.path)
+
+    def test_orphan_quest_inventory_mutation_fails_closed(self):
+        connection = sqlite3.connect(self.path)
+        connection.execute(
+            "DELETE FROM quest_inventory_awards WHERE request_id='quest-award-1'"
+        )
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(
+            DomainAuditError,
+            "quest_inventory_awards integrity audit failed",
+        ):
+            inspect_domain_database(self.path)
+
+    def test_missing_quest_award_table_rejects_reserved_inventory_mutation(self):
+        missing_awards = Path(self.temp.name) / "missing-quest-awards.sqlite3"
+        connection = sqlite3.connect(missing_awards, isolation_level=None)
+        inventory = SqliteInventoryStore(connection)
+        inventory.create("hero")
+        inventory.apply("hero", "quest-orphan", 0, [("gem", 1)])
+        connection.close()
+        with self.assertRaisesRegex(
+            DomainAuditError,
+            "quest inventory award schema is missing for reserved inventory mutations",
+        ):
+            inspect_domain_database(missing_awards)
 
     def test_rejects_corrupt_database_file(self):
         corrupt = Path(self.temp.name) / "corrupt.sqlite3"
