@@ -186,6 +186,19 @@ class SqliteDomainAuditTests(unittest.TestCase):
         ):
             inspect_domain_database(self.path)
 
+    def test_missing_quest_award_table_rejects_reserved_inventory_mutation(self):
+        missing_awards = Path(self.temp.name) / "missing-quest-awards.sqlite3"
+        connection = sqlite3.connect(missing_awards, isolation_level=None)
+        inventory = SqliteInventoryStore(connection)
+        inventory.create("hero")
+        inventory.apply("hero", "quest-orphan", 0, [("gem", 1)])
+        connection.close()
+        with self.assertRaisesRegex(
+            DomainAuditError,
+            "quest inventory award schema is missing for reserved inventory mutations",
+        ):
+            inspect_domain_database(missing_awards)
+
     def test_rejects_corrupt_database_file(self):
         corrupt = Path(self.temp.name) / "corrupt.sqlite3"
         corrupt.write_bytes(b"not a sqlite database")
