@@ -14,6 +14,9 @@ on:
       - 'tests/test_il2cpp_native_method_evidence.py'
       - 'tools/il2cpp_network_callsite_evidence.py'
       - 'tools/il2cpp_metadata_usage_evidence.py'
+      - 'tools/il2cpp_field_ref_evidence.py'
+      - 'tests/test_il2cpp_field_ref_evidence.py'
+      - 'docs/IL2CPP_FIELD_REF_EVIDENCE.md'
       - 'tests/test_il2cpp_metadata_usage_evidence.py'
       - 'tools/aarch64_call_argument_evidence.py'
       - 'tests/test_aarch64_call_argument_evidence.py'
@@ -183,6 +186,7 @@ jobs:
             tools/il2cpp_native_method_evidence.py \
             tools/il2cpp_network_callsite_evidence.py \
             tools/il2cpp_metadata_usage_evidence.py \
+            tools/il2cpp_field_ref_evidence.py \
             tools/aarch64_call_argument_evidence.py \
             tools/aarch64_memory_access_evidence.py \
             tools/aarch64_memory_base_provenance.py \
@@ -622,3 +626,18 @@ jobs:
         run: python -m py_compile tools/il2cpp_default_value_evidence.py
       - name: IL2CPP v31 default-value tests (synthetic fixtures only)
         run: python -m unittest discover -s tests -p 'test_il2cpp_default_value_evidence.py' -v
+
+  il2cpp-field-ref-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile IL2CPP v31 FieldRef inventory
+        run: python -m py_compile tools/il2cpp_field_ref_evidence.py
+      - name: IL2CPP v31 FieldRef tests (synthetic fixtures only)
+        run: python -m unittest discover -s tests -p 'test_il2cpp_field_ref_evidence.py' -v
