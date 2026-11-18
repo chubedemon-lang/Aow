@@ -27,6 +27,8 @@ native addresses or instruction words.
 
 - Conditional edges are both treated as possible; branch conditions are not
   evaluated.
+- A conditional target outside the bounded entry window is recorded as a
+  separate branch-exit path while any in-window fallthrough path is retained.
 - The analysis is intraprocedural and limited to the bounded entry window.
 - Loops are not executed or unrolled. A detected back-edge is represented as
   a cycle exit.
