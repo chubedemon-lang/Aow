@@ -383,6 +383,15 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
                 "direction_switch_count": None,
             },
         )
+        alignment = result["receive_candidate_io_alignment"]
+        self.assertEqual(
+            alignment["status"],
+            "io_event_boundaries_not_recorded_schema_v1",
+        )
+        self.assertEqual(alignment["candidate_frame_boundary_count"], 1)
+        self.assertIsNone(alignment["server_to_client_io_event_boundary_count"])
+        self.assertFalse(alignment["absolute_offsets_emitted"])
+        self.assertFalse(alignment["packet_boundaries_verified"])
 
     def test_schema_v2_preserves_ordered_io_ranges_without_emitting_offsets(self):
         server_stream = frame(b"server")
@@ -546,6 +555,16 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
                 "absolute_timestamps_emitted": False,
             },
         )
+        alignment = result["receive_candidate_io_alignment"]
+        self.assertEqual(alignment["candidate_frame_boundary_count"], 1)
+        self.assertEqual(alignment["server_to_client_io_event_boundary_count"], 2)
+        self.assertEqual(
+            alignment["candidate_frame_boundaries_aligned_with_io_event_ends"], 1
+        )
+        self.assertEqual(
+            alignment["io_event_ends_without_known_candidate_frame_boundary"], 1
+        )
+        self.assertTrue(alignment["candidate_boundary_set_complete"])
         serialized = json.dumps(result)
         self.assertNotIn("elapsed_ns", serialized)
         self.assertNotIn('"offset"', serialized)
@@ -645,6 +664,155 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
                     io_events=extra_field,
                 )
             )
+
+
+    def test_schema_v2_correlates_candidate_frame_ends_with_io_event_ends(self):
+        first = frame(b"A")
+        second = frame(b"BC")
+        server_stream = first + second
+        client_stream = b"c"
+        events = [
+            {"direction": "client_to_server", "offset": 0, "length": 1},
+            {"direction": "server_to_client", "offset": 0, "length": len(first)},
+            {
+                "direction": "server_to_client",
+                "offset": len(first),
+                "length": len(second),
+            },
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [client_stream],
+                schema_version=2,
+                io_events=events,
+            )
+        )
+        alignment = result["receive_candidate_io_alignment"]
+        self.assertEqual(
+            alignment["status"],
+            "unverified_candidate_io_boundary_correlation",
+        )
+        self.assertEqual(alignment["candidate_frame_boundary_count"], 2)
+        self.assertEqual(alignment["server_to_client_io_event_boundary_count"], 2)
+        self.assertEqual(
+            alignment["candidate_frame_boundaries_aligned_with_io_event_ends"], 2
+        )
+        self.assertEqual(
+            alignment["candidate_frame_boundaries_not_aligned_with_io_event_ends"], 0
+        )
+        self.assertEqual(
+            alignment["io_event_ends_aligned_with_known_candidate_frame_boundaries"], 2
+        )
+        self.assertEqual(
+            alignment["io_event_ends_without_known_candidate_frame_boundary"], 0
+        )
+        self.assertTrue(alignment["candidate_boundary_set_complete"])
+        serialized = json.dumps(result)
+        self.assertNotIn("_frame_end_offsets", serialized)
+        self.assertFalse(alignment["absolute_offsets_emitted"])
+        self.assertFalse(alignment["packet_boundaries_verified"])
+
+    def test_schema_v2_reports_one_read_containing_multiple_candidate_frames(self):
+        first = frame(b"A")
+        second = frame(b"B")
+        server_stream = first + second
+        events = [
+            {"direction": "client_to_server", "offset": 0, "length": 1},
+            {
+                "direction": "server_to_client",
+                "offset": 0,
+                "length": len(server_stream),
+            },
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [b"c"],
+                schema_version=2,
+                io_events=events,
+            )
+        )
+        alignment = result["receive_candidate_io_alignment"]
+        self.assertEqual(alignment["candidate_frame_boundary_count"], 2)
+        self.assertEqual(alignment["server_to_client_io_event_boundary_count"], 1)
+        self.assertEqual(
+            alignment["candidate_frame_boundaries_aligned_with_io_event_ends"], 1
+        )
+        self.assertEqual(
+            alignment["candidate_frame_boundaries_not_aligned_with_io_event_ends"], 1
+        )
+        self.assertEqual(
+            alignment["io_event_ends_aligned_with_known_candidate_frame_boundaries"], 1
+        )
+        self.assertEqual(
+            alignment["io_event_ends_without_known_candidate_frame_boundary"], 0
+        )
+
+    def test_schema_v2_reports_io_event_boundary_inside_candidate_frame(self):
+        server_stream = frame(b"payload")
+        events = [
+            {"direction": "client_to_server", "offset": 0, "length": 1},
+            {"direction": "server_to_client", "offset": 0, "length": 4},
+            {
+                "direction": "server_to_client",
+                "offset": 4,
+                "length": len(server_stream) - 4,
+            },
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [b"c"],
+                schema_version=2,
+                io_events=events,
+            )
+        )
+        alignment = result["receive_candidate_io_alignment"]
+        self.assertEqual(alignment["candidate_frame_boundary_count"], 1)
+        self.assertEqual(alignment["server_to_client_io_event_boundary_count"], 2)
+        self.assertEqual(
+            alignment["candidate_frame_boundaries_aligned_with_io_event_ends"], 1
+        )
+        self.assertEqual(
+            alignment["io_event_ends_aligned_with_known_candidate_frame_boundaries"], 1
+        )
+        self.assertEqual(
+            alignment["io_event_ends_without_known_candidate_frame_boundary"], 1
+        )
+
+    def test_partial_candidate_parse_marks_boundary_counts_as_lower_bound(self):
+        complete = frame(b"ok")
+        tail = b"HTTP"
+        server_stream = complete + tail
+        events = [
+            {"direction": "client_to_server", "offset": 0, "length": 1},
+            {"direction": "server_to_client", "offset": 0, "length": len(complete)},
+            {
+                "direction": "server_to_client",
+                "offset": len(complete),
+                "length": len(tail),
+            },
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [b"c"],
+                schema_version=2,
+                io_events=events,
+            )
+        )
+        alignment = result["receive_candidate_io_alignment"]
+        self.assertEqual(alignment["candidate_frame_boundary_count"], 1)
+        self.assertTrue(alignment["candidate_frame_boundary_count_is_lower_bound"])
+        self.assertFalse(alignment["candidate_boundary_set_complete"])
+        self.assertEqual(
+            alignment["candidate_frame_boundaries_aligned_with_io_event_ends"], 1
+        )
+        self.assertEqual(
+            alignment["io_event_ends_without_known_candidate_frame_boundary"], 1
+        )
+
 
 
 if __name__ == "__main__":
