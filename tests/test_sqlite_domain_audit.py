@@ -65,14 +65,14 @@ class SqliteDomainAuditTests(unittest.TestCase):
         self.assertEqual(
             result["audits"],
             {
-                "inventory": {"snapshots": 1, "items": 2, "mutations": 2},
+                "inventory": {"snapshots": 1, "items": 2, "mutations": 3},
                 "quest_inventory_awards": {
                     "awards": 1,
                     "linked_inventory_mutations": 1,
                 },
                 "player_state": {
                     "snapshots": 1,
-                    "mutations": 1,
+                    "mutations": 2,
                     "anchored_snapshots": 1,
                     "legacy_unanchored_snapshots": 0,
                 },
