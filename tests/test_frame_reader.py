@@ -122,6 +122,32 @@ class CallbackFrameReaderTests(unittest.TestCase):
         self.assertEqual(reader.read_frame(), b"\x01A")
         self.assertEqual(reader.available, 0)
 
+    def test_probe_cannot_feed_or_close_reader_and_guard_resets(self):
+        for operation in ("feed", "close"):
+            with self.subTest(operation=operation):
+                state = {"mutate": True}
+                reader = None
+
+                def probe(prefix):
+                    if state["mutate"]:
+                        if operation == "feed":
+                            reader.feed(b"X")
+                        else:
+                            reader.close()
+                    return prefix[0] + 1
+
+                reader = CallbackFrameReader(probe)
+                reader.feed(b"\x01A")
+
+                with self.assertRaises(FrameReaderReentrancyError):
+                    reader.read_frame()
+
+                self.assertEqual(reader.available, 2)
+                self.assertFalse(reader.closed)
+                state["mutate"] = False
+                self.assertEqual(reader.read_frame(), b"\x01A")
+                self.assertEqual(reader.available, 0)
+
     def test_invalid_limits_are_rejected(self):
         for kwargs in (
             {"max_frame_bytes": 0},
