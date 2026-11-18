@@ -37,6 +37,8 @@ class SqliteSessionStore:
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")
         self._validate_ttl(ttl_seconds)
+        if clock is not None and not callable(clock):
+            raise ValueError("clock must be callable")
         self.db = connection
         self.ttl_seconds = ttl_seconds
         self.clock = clock if clock is not None else time.time
@@ -69,7 +71,10 @@ class SqliteSessionStore:
             raise ValueError("invalid session purge batch size")
 
     def _now(self):
-        value = self.clock()
+        try:
+            value = self.clock()
+        except Exception as exc:
+            raise ValueError("session clock failed") from exc
         # Accept only exact built-in numeric values. Numeric subclasses can
         # override __float__ and execute caller code during expiry validation.
         if type(value) not in (int, float):
