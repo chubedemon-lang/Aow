@@ -29,6 +29,7 @@ DEFAULT_MAX_PAYLOAD_BYTES = 1024 * 1024
 DEFAULT_MAX_BUFFER_BYTES = DEFAULT_MAX_PAYLOAD_BYTES + 4
 MAX_CANDIDATE_FRAMES = 4096
 MAX_IO_EVENTS = MAX_CHUNKS_PER_DIRECTION * 2
+MAX_CAPTURE_ELAPSED_NS = 24 * 60 * 60 * 1_000_000_000
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _HEX_BYTES = re.compile(r"^(?:[0-9a-fA-F]{2})+$")
@@ -45,8 +46,10 @@ _FIXTURE_BASE_KEYS = frozenset({
 })
 _FIXTURE_V1_KEYS = _FIXTURE_BASE_KEYS
 _FIXTURE_V2_KEYS = _FIXTURE_BASE_KEYS | {"io_events"}
+_FIXTURE_V3_KEYS = _FIXTURE_V2_KEYS
 _STREAM_KEYS = frozenset({"server_to_client", "client_to_server"})
 _IO_EVENT_KEYS = frozenset({"direction", "offset", "length"})
+_IO_EVENT_V3_KEYS = _IO_EVENT_KEYS | {"elapsed_ns"}
 _STREAM_DIRECTIONS = ("client_to_server", "server_to_client")
 
 
@@ -206,14 +209,16 @@ def _decode_chunks(
     return decoded, total
 
 
-def _validate_io_events(value, stream_bytes_by_direction):
-    """Validate an operator-supplied chronological index over both byte streams.
+def _validate_io_events(
+    value, stream_bytes_by_direction, *, include_timing=False
+):
+    """Validate ordered I/O ranges, optionally with relative monotonic timing.
 
-    Each event describes one ordered local I/O observation as a contiguous
-    range in the concatenated stream for its direction. The ranges must cover
-    each direction exactly once, in per-direction byte order. This preserves
-    the supplied cross-direction order without treating event boundaries as
-    message boundaries or authenticating capture provenance.
+    Each event describes one local I/O observation as a contiguous range in
+    that direction's concatenated stream. Event boundaries are observations,
+    not packet/message boundaries. Schema v3 additionally carries elapsed
+    monotonic nanoseconds relative to the first observation; only a bounded
+    span and maximum inter-observation gap are returned.
     """
     if type(value) is not list:
         raise FixtureAuditError("io_events must be a built-in list")
@@ -222,13 +227,17 @@ def _validate_io_events(value, stream_bytes_by_direction):
     if len(value) > MAX_IO_EVENTS:
         raise FixtureAuditError("io_events exceeds the configured event limit")
 
+    expected_event_keys = _IO_EVENT_V3_KEYS if include_timing else _IO_EVENT_KEYS
     next_offsets = {direction: 0 for direction in _STREAM_DIRECTIONS}
     event_counts = {direction: 0 for direction in _STREAM_DIRECTIONS}
     previous_direction = None
     direction_switches = 0
+    first_elapsed_ns = None
+    previous_elapsed_ns = None
+    max_inter_event_gap_ns = 0
 
     for index, event in enumerate(value):
-        if type(event) is not dict or set(event) != _IO_EVENT_KEYS:
+        if type(event) is not dict or set(event) != expected_event_keys:
             raise FixtureAuditError(
                 "io_events contains an invalid object at index " + str(index)
             )
@@ -255,6 +264,32 @@ def _validate_io_events(value, stream_bytes_by_direction):
                 "io_events range exceeds its directional stream"
             )
 
+        if include_timing:
+            elapsed_ns = event["elapsed_ns"]
+            if (
+                type(elapsed_ns) is not int
+                or not 0 <= elapsed_ns <= MAX_CAPTURE_ELAPSED_NS
+            ):
+                raise FixtureAuditError(
+                    "io_events elapsed_ns must be a bounded non-negative integer"
+                )
+            if previous_elapsed_ns is None:
+                if elapsed_ns != 0:
+                    raise FixtureAuditError(
+                        "io_events elapsed_ns must start at zero"
+                    )
+                first_elapsed_ns = elapsed_ns
+            elif elapsed_ns < previous_elapsed_ns:
+                raise FixtureAuditError(
+                    "io_events elapsed_ns must be monotonic non-decreasing"
+                )
+            if previous_elapsed_ns is not None:
+                max_inter_event_gap_ns = max(
+                    max_inter_event_gap_ns,
+                    elapsed_ns - previous_elapsed_ns,
+                )
+            previous_elapsed_ns = elapsed_ns
+
         next_offsets[direction] = end
         event_counts[direction] += 1
         if previous_direction is not None and direction != previous_direction:
@@ -267,13 +302,21 @@ def _validate_io_events(value, stream_bytes_by_direction):
                 "io_events must cover every byte in both stream directions"
             )
 
-    return {
+    summary = {
         "status": "operator_order_preserved_unverified",
         "event_count": len(value),
         "client_to_server_event_count": event_counts["client_to_server"],
         "server_to_client_event_count": event_counts["server_to_client"],
         "direction_switch_count": direction_switches,
     }
+    if include_timing:
+        summary["timing"] = {
+            "status": "relative_monotonic_summary_unverified",
+            "event_span_ns": previous_elapsed_ns - first_elapsed_ns,
+            "max_inter_event_gap_ns": max_inter_event_gap_ns,
+            "absolute_timestamps_emitted": False,
+        }
+    return summary
 
 
 class _CandidateFrameCountLimit(FrameReaderError):
@@ -405,10 +448,12 @@ def audit_fixture_bytes(
     if type(document) is not dict:
         raise FixtureAuditError("fixture has an unsupported object shape")
     schema_version = document.get("schema_version")
-    if type(schema_version) is not int or schema_version not in (1, 2):
+    if type(schema_version) is not int or schema_version not in (1, 2, 3):
         raise FixtureAuditError("unsupported fixture schema version")
     expected_keys = (
-        _FIXTURE_V1_KEYS if schema_version == 1 else _FIXTURE_V2_KEYS
+        _FIXTURE_V1_KEYS if schema_version == 1
+        else _FIXTURE_V3_KEYS if schema_version == 3
+        else _FIXTURE_V2_KEYS
     )
     if set(document) != expected_keys:
         raise FixtureAuditError("fixture has an unsupported object shape")
@@ -458,6 +503,7 @@ def audit_fixture_bytes(
                 "server_to_client": server_bytes,
                 "client_to_server": client_bytes,
             },
+            include_timing=schema_version == 3,
         )
 
     candidate = _inspect_receive_candidate(
