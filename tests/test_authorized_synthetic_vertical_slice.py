@@ -138,7 +138,6 @@ class AuthorizedSyntheticVerticalSliceTests(unittest.TestCase):
         )
         character_id = bootstrap.character.character_id
         self.inventory.create(self.alice.token, character_id)
-        self.maps.create_position(self.alice.token, character_id)
 
         with self.assertRaises(SessionError):
             self.maps.get_position(self.bob.token, character_id)
