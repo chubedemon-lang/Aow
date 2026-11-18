@@ -949,20 +949,45 @@ def _summarize_control_flow_serializer_helper_blocks(
         block_end = block["instruction_start"] + block["instruction_count"]
         terminator = branch_at.get(block_end - 1)
         successors = []
+        successor_edges = []
         if terminator is None:
             if block_end < instruction_count:
-                successors.append(block_for_instruction[block_end])
+                target_block = block_for_instruction[block_end]
+                successors.append(target_block)
+                successor_edges.append({
+                    "target_block": target_block,
+                    "kind": "fallthrough",
+                })
         elif terminator["conditional"]:
             target_slot = terminator["target_index"]
             if target_slot is not None:
-                successors.append(block_for_instruction[target_slot])
+                target_block = block_for_instruction[target_slot]
+                successors.append(target_block)
+                successor_edges.append({
+                    "target_block": target_block,
+                    "kind": "conditional_taken",
+                })
             if block_end < instruction_count:
-                successors.append(block_for_instruction[block_end])
+                target_block = block_for_instruction[block_end]
+                successors.append(target_block)
+                successor_edges.append({
+                    "target_block": target_block,
+                    "kind": "conditional_fallthrough",
+                })
         else:
             target_slot = terminator["target_index"]
             if target_slot is not None:
-                successors.append(block_for_instruction[target_slot])
+                target_block = block_for_instruction[target_slot]
+                successors.append(target_block)
+                successor_edges.append({
+                    "target_block": target_block,
+                    "kind": "branch_target",
+                })
         block["successors"] = sorted(set(successors))
+        # Keep edge semantics separately from the deduplicated successor set.
+        # A conditional target may equal its fallthrough block; both outcomes
+        # remain observable even though they share one destination block.
+        block["successor_edges"] = successor_edges
         block["terminator"] = (
             None if terminator is None else terminator["kind"]
         )
@@ -1200,6 +1225,11 @@ def _summarize_control_flow_helper_paths(
         }
 
     by_index = {}
+    edges_by_index = {}
+    allowed_edge_kinds = {
+        "fallthrough", "conditional_taken", "conditional_fallthrough",
+        "branch_target",
+    }
     for block in blocks:
         if type(block) is not dict:
             raise ValueError("each control-flow block must be a built-in dict")
@@ -1217,8 +1247,41 @@ def _summarize_control_flow_helper_paths(
             for successor in successors
         ):
             raise ValueError("control-flow successor index is invalid")
+        if len(set(successors)) != len(successors):
+            raise ValueError("control-flow successors contain duplicates")
         if any(type(item) is not dict for item in observations):
             raise ValueError("callsite observations must be built-in dicts")
+
+        raw_edges = block.get("successor_edges")
+        if raw_edges is None:
+            # Accept older synthetic summaries, but mark their edge semantics
+            # as generic rather than inventing branch/fallthrough provenance.
+            normalized_edges = [
+                {"target_block": successor, "kind": "successor"}
+                for successor in successors
+            ]
+        else:
+            if type(raw_edges) is not list:
+                raise ValueError("control-flow successor edges must be a built-in list")
+            normalized_edges = []
+            seen_edges = set()
+            for edge in raw_edges:
+                if type(edge) is not dict:
+                    raise ValueError("each control-flow successor edge must be a built-in dict")
+                target = edge.get("target_block")
+                kind = edge.get("kind")
+                if type(target) is not int or target not in successors:
+                    raise ValueError("control-flow successor edge target is invalid")
+                if type(kind) is not str or kind not in allowed_edge_kinds:
+                    raise ValueError("control-flow successor edge kind is invalid")
+                identity = (target, kind)
+                if identity in seen_edges:
+                    raise ValueError("control-flow successor edges contain duplicates")
+                seen_edges.add(identity)
+                normalized_edges.append({"target_block": target, "kind": kind})
+            if {edge["target_block"] for edge in normalized_edges} != set(successors):
+                raise ValueError("control-flow successor edges do not cover successors")
+        edges_by_index[index] = normalized_edges
         by_index[index] = block
 
     if set(by_index) != set(range(block_count)):
@@ -1230,9 +1293,11 @@ def _summarize_control_flow_helper_paths(
     truncated = False
     cycle_count = 0
     depth_limit_count = 0
-    pending = [(0, (0,), frozenset((0,)))]
+    pending = [(0, (0,), frozenset((0,)), ())]
 
-    def append_path(block_indexes, exit_kind, *, cycle_target=None, next_block=None):
+    def append_path(
+        block_indexes, exit_kind, *, edges=(), cycle_target=None, next_block=None
+    ):
         nonlocal truncated
         if len(paths) >= max_paths:
             truncated = True
@@ -1257,6 +1322,10 @@ def _summarize_control_flow_helper_paths(
                 calls.append(item)
         path = {
             "block_indexes": list(block_indexes),
+            "edges": [
+                {"from_block": source, "to_block": target, "kind": kind}
+                for source, target, kind in edges
+            ],
             "exit_kind": exit_kind,
             "helper_callsite_observations": calls,
         }
@@ -1268,50 +1337,62 @@ def _summarize_control_flow_helper_paths(
         return True
 
     while pending:
-        block_index, path, visited = pending.pop()
+        block_index, path, visited, path_edges = pending.pop()
         block = by_index[block_index]
         successors = block["successors"]
         if not successors:
             terminator = block.get("terminator")
             if terminator == "return":
                 exit_kind = "return"
-                if not append_path(path, exit_kind):
+                if not append_path(path, exit_kind, edges=path_edges):
                     break
             elif terminator in {
                 "b", "indirect_tail", "indirect_branch",
                 "indirect_branch_unresolved",
             }:
-                if not append_path(path, "branch_exit"):
+                if not append_path(path, "branch_exit", edges=path_edges):
                     break
             elif terminator in {"b_cond", "cbz_cbnz", "tbz_tbnz"}:
                 if block.get("external_branch_exit") is True:
-                    if not append_path(path, "conditional_branch_exit"):
+                    if not append_path(
+                        path, "conditional_branch_exit", edges=path_edges
+                    ):
                         break
-                    if not append_path(path, "conditional_fallthrough_exit"):
+                    if not append_path(
+                        path, "conditional_fallthrough_exit", edges=path_edges
+                    ):
                         break
-                elif not append_path(path, "conditional_window_exit"):
+                elif not append_path(
+                    path, "conditional_window_exit", edges=path_edges
+                ):
                     break
-            elif not append_path(path, "window_end"):
+            elif not append_path(path, "window_end", edges=path_edges):
                 break
             continue
 
         # A conditional target outside this bounded window is a distinct
         # possible exit in addition to any in-window fallthrough successor.
         if block.get("external_branch_exit") is True:
-            if not append_path(path, "conditional_branch_exit"):
+            if not append_path(
+                path, "conditional_branch_exit", edges=path_edges
+            ):
                 break
 
-        for successor in reversed(successors):
+        for edge in reversed(edges_by_index[block_index]):
+            successor = edge["target_block"]
+            path_edge = (block_index, successor, edge["kind"])
             if successor in visited:
                 cycle_count += 1
                 if not append_path(
-                    path, "cycle", cycle_target=successor
+                    path, "cycle", edges=path_edges + (path_edge,),
+                    cycle_target=successor,
                 ):
                     break
             elif len(path) >= max_depth:
                 depth_limit_count += 1
                 if not append_path(
-                    path, "depth_limit", next_block=successor
+                    path, "depth_limit", edges=path_edges + (path_edge,),
+                    next_block=successor,
                 ):
                     break
             else:
@@ -1319,6 +1400,7 @@ def _summarize_control_flow_helper_paths(
                     successor,
                     path + (successor,),
                     visited | {successor},
+                    path_edges + (path_edge,),
                 ))
         if truncated:
             break
