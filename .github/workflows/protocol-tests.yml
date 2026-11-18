@@ -127,6 +127,10 @@ on:
       - 'tests/test_sqlite_authorized_player_state_service.py'
       - 'docs/AUTHORIZED_PLAYER_STATE_SERVICE.md'
       - 'docs/IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md'
+      - 'tools/il2cpp_default_value_evidence.py'
+      - 'tests/test_il2cpp_default_value_evidence.py'
+      - 'docs/IL2CPP_DEFAULT_VALUE_EVIDENCE.md'
+      - 'docs/RECEIVER_LENGTH_PREFIX_CANDIDATE.md'
       - 'server/sqlite_authorized_player_state_service.py'
       - 'server/sqlite_authorized_shop_service.py'
       - 'server/sqlite_character_authorizer.py'
@@ -164,6 +168,7 @@ jobs:
             tools/protocol_candidates.py \
             tools/il2cpp_metadata_inventory.py \
             tools/il2cpp_type_inventory.py \
+            tools/il2cpp_default_value_evidence.py \
             tools/il2cpp_native_method_evidence.py \
             tools/il2cpp_network_callsite_evidence.py \
             tools/il2cpp_metadata_usage_evidence.py \
@@ -560,3 +565,19 @@ jobs:
         run: python -m py_compile tools/sqlite_backup.py
       - name: SQLite backup safety regression tests (synthetic databases only)
         run: python -m unittest discover -s tests -p 'test_sqlite_backup.py' -v
+
+
+  il2cpp-default-value-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile IL2CPP compressed default-value analyzer
+        run: python -m py_compile tools/il2cpp_default_value_evidence.py
+      - name: IL2CPP v31 default-value tests (synthetic fixtures only)
+        run: python -m unittest discover -s tests -p 'test_il2cpp_default_value_evidence.py' -v

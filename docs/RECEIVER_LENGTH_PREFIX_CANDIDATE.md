@@ -45,3 +45,13 @@ The synthetic override `0x13572468` is not an AOW marker. A separate regression
 test checks the default against the static `HTTP` marker constant. No APK bytes, native library, endpoint, packet capture, credential or proprietary asset is stored in this repository.
 
 Before using this candidate in an APK-facing adapter, independently verify the marker value, complete sender/receiver relationship, active transport branch, compression/encryption placement and frame boundary with an authorized redacted client-side byte fixture or local runtime trace for the exact APK build. Until then, keep the adapter disabled.
+
+
+## NetworkSettings metadata default cross-check — 2026-11-18
+
+A fresh private offline analysis resolved the IL2CPP native registration type-pointer table (124,985 entries) and independently mapped both the NetworkSettings field type and its default-value type to I4. The v31 compressed signed-integer decoder reports:
+
+- NetworkSettings.HeaderLength static metadata default: 4.
+- NetworkSettings.ZipIntermediateBufferSize static metadata default: 4096.
+
+This is static metadata evidence and is consistent with the four-byte Receiver.Cycle read candidate. It does not prove that HeaderLength is applied at runtime, read by the active Receiver path, or defines the complete frame contract. Sender symmetry, gameplay branch selection, compression/encryption placement and end-to-end client verification remain open. See [IL2CPP default-value evidence](IL2CPP_DEFAULT_VALUE_EVIDENCE.md) for the bounded method and non-claims.
