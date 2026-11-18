@@ -104,6 +104,19 @@ def inspect_domain_database(database):
             )
         }
 
+        # The quest- prefix is reserved by SqliteQuestInventoryAwardStore.
+        # If such an inventory mutation exists, its award table must exist too.
+        if ("inventory_mutations" in tables
+                and "quest_inventory_awards" not in tables):
+            reserved_count = connection.execute(
+                """SELECT COUNT(*) FROM inventory_mutations
+                   WHERE substr(request_id, 1, 6) = 'quest-'"""
+            ).fetchone()[0]
+            if reserved_count:
+                raise DomainAuditError(
+                    "quest inventory award schema is missing for reserved inventory mutations"
+                )
+
         # Quest awards are linked to the inventory mutation receipt created in
         # the same transaction. Never report them as audited without that full
         # inventory schema being present.
