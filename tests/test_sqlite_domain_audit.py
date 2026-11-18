@@ -10,6 +10,7 @@ from pathlib import Path
 from server.sqlite_inventory_store import SqliteInventoryStore
 from server.sqlite_map_position_store import SqliteMapPositionStore
 from server.sqlite_player_state_store import SqlitePlayerStateStore
+from server.sqlite_reward_ledger import SqliteRewardLedger
 from tools.sqlite_domain_audit import (
     DomainAuditError,
     inspect_domain_database,
