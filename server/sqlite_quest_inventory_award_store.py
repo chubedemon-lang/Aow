@@ -77,14 +77,14 @@ class SqliteQuestInventoryAwardStore:
 
     @staticmethod
     def _request_id(value):
-        if (not isinstance(value, str) or not value
+        if (type(value) is not str or not value
                 or len(value) > 128 or value != value.strip()):
             raise QuestInventoryAwardError("invalid request identifier")
         return value
 
     @staticmethod
     def _item_id(value):
-        if not isinstance(value, str) or not _ID_PATTERN.fullmatch(value):
+        if type(value) is not str or not _ID_PATTERN.fullmatch(value):
             raise QuestInventoryAwardError("invalid item identifier")
         return value
 

@@ -106,6 +106,9 @@ on:
       - 'server/sqlite_inventory_store.py'
       - 'tests/test_sqlite_inventory_store.py'
       - 'docs/SQLITE_INVENTORY_STORE.md'
+      - 'server/sqlite_quest_inventory_award_store.py'
+      - 'tests/test_sqlite_quest_inventory_award_store.py'
+      - 'docs/SQLITE_QUEST_INVENTORY_AWARD_STORE.md'
       - 'tools/sqlite_domain_audit.py'
       - 'tests/test_sqlite_domain_audit.py'
       - 'docs/SQLITE_DOMAIN_AUDIT.md'
@@ -366,6 +369,21 @@ jobs:
         run: python -m py_compile server/sqlite_inventory_store.py
       - name: Durable inventory persistence regression tests (synthetic only)
         run: python -m unittest discover -s tests -p 'test_sqlite_inventory_store.py' -v
+
+  quest-inventory-award-store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile durable quest inventory award store
+        run: python -m py_compile server/sqlite_quest_inventory_award_store.py
+      - name: Durable quest inventory award regression tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_sqlite_quest_inventory_award_store.py' -v
 
   shop-store:
     runs-on: ubuntu-latest

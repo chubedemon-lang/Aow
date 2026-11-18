@@ -12,6 +12,20 @@ from server.sqlite_quest_inventory_award_store import (
 )
 
 
+class HostileText(str):
+    def __bool__(self):
+        raise AssertionError("custom text truthiness hook must not run")
+
+    def __len__(self):
+        raise AssertionError("custom text length hook must not run")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("custom text strip hook must not run")
+
+    def encode(self, *args, **kwargs):
+        raise AssertionError("custom text encode hook must not run")
+
+
 class SqliteQuestInventoryAwardStoreTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -29,6 +43,29 @@ class SqliteQuestInventoryAwardStoreTests(unittest.TestCase):
     def grant_for(self, character_id, request_id):
         return self.awards.grant_once(
             character_id, request_id, 0, 42, "potion", 2
+        )
+
+    def test_rejects_text_subclasses_before_custom_hooks(self):
+        operations = (
+            lambda: self.awards.grant_once(
+                "hero", HostileText("quest-request"), 0, 42, "potion", 2
+            ),
+            lambda: self.awards.grant_once(
+                "hero", "quest-request", 0, 42, HostileText("potion"), 2
+            ),
+        )
+        for index, operation in enumerate(operations):
+            with self.subTest(identifier=index):
+                with self.assertRaises(QuestInventoryAwardError):
+                    operation()
+
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(self.inventory.get("hero").items, ())
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM quest_inventory_awards"
+            ).fetchone()[0],
+            0,
         )
 
     def tamper_result(self, request_id, raw):

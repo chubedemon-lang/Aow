@@ -27,6 +27,15 @@ Quest IDs, item IDs, quantities and award semantics here are synthetic
 configuration. Do not substitute them for original AOW values without
 authorized evidence.
 
+## Identifier input boundary
+
+The `request_id` and `item_id` parameters accept exact built-in
+strings only. String subclasses are rejected before truthiness, length,
+whitespace, encoding, or regular-expression operations can invoke caller-defined
+behavior. This matches the inventory store's character/item/request identifier
+boundary. The restriction is an input-safety rule for this synthetic persistence
+primitive; it does not define AOW item identifiers or quest semantics.
+
 ## Tests
 
 Run the focused tests and full suite:
