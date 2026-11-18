@@ -555,6 +555,16 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
                 "absolute_timestamps_emitted": False,
             },
         )
+        alignment = result["receive_candidate_io_alignment"]
+        self.assertEqual(alignment["candidate_frame_boundary_count"], 1)
+        self.assertEqual(alignment["server_to_client_io_event_boundary_count"], 2)
+        self.assertEqual(
+            alignment["candidate_frame_boundaries_aligned_with_io_event_ends"], 1
+        )
+        self.assertEqual(
+            alignment["io_event_ends_without_known_candidate_frame_boundary"], 1
+        )
+        self.assertTrue(alignment["candidate_boundary_set_complete"])
         serialized = json.dumps(result)
         self.assertNotIn("elapsed_ns", serialized)
         self.assertNotIn('"offset"', serialized)
