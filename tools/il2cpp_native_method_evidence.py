@@ -966,6 +966,11 @@ def _summarize_control_flow_serializer_helper_blocks(
         block["terminator"] = (
             None if terminator is None else terminator["kind"]
         )
+        block["external_branch_exit"] = bool(
+            terminator is not None
+            and terminator["conditional"]
+            and terminator["target_index"] is None
+        )
 
     reachable = set()
     pending = [0]
@@ -1267,18 +1272,31 @@ def _summarize_control_flow_helper_paths(
             terminator = block.get("terminator")
             if terminator == "return":
                 exit_kind = "return"
+                if not append_path(path, exit_kind):
+                    break
             elif terminator in {
                 "b", "indirect_tail", "indirect_branch",
                 "indirect_branch_unresolved",
             }:
-                exit_kind = "branch_exit"
+                if not append_path(path, "branch_exit"):
+                    break
             elif terminator in {"b_cond", "cbz_cbnz", "tbz_tbnz"}:
-                exit_kind = "conditional_window_exit"
-            else:
-                exit_kind = "window_end"
-            if not append_path(path, exit_kind):
+                if block.get("external_branch_exit") is True:
+                    if not append_path(path, "conditional_branch_exit"):
+                        break
+                    if not append_path(path, "conditional_fallthrough_exit"):
+                        break
+                elif not append_path(path, "conditional_window_exit"):
+                    break
+            elif not append_path(path, "window_end"):
                 break
             continue
+
+        # A conditional target outside this bounded window is a distinct
+        # possible exit in addition to any in-window fallthrough successor.
+        if block.get("external_branch_exit") is True:
+            if not append_path(path, "conditional_branch_exit"):
+                break
 
         for successor in reversed(successors):
             if successor in visited:
