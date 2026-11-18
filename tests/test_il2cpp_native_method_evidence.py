@@ -1231,6 +1231,102 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertFalse(serializer_summary["raw_instructions_emitted"])
 
 
+    def test_path_summary_validates_callsite_instruction_indexes_against_block_range(self):
+        def summary(observations):
+            return {
+                "control_flow_block_count": 1,
+                "control_flow_basic_blocks_truncated": False,
+                "control_flow_basic_blocks": [{
+                    "block_index": 0,
+                    "instruction_start": 10,
+                    "instruction_count": 2,
+                    "successors": [],
+                    "terminator": "return",
+                    "callsite_observations": observations,
+                }],
+            }
+
+        valid = _summarize_control_flow_helper_paths(summary([
+            {
+                "instruction_index": 10,
+                "kind": "direct_call",
+                "method": "SimpleSerializer::serializeInt",
+            },
+            {
+                "instruction_index": 11,
+                "kind": "direct_call",
+                "method": "SimpleSerializer::serializeString",
+            },
+        ]))
+        self.assertEqual(
+            [
+                item["instruction_index"]
+                for item in valid["control_flow_paths"][0]["helper_callsite_observations"]
+            ],
+            [10, 11],
+        )
+
+        invalid_cases = (
+            (
+                [{"instruction_index": 12, "kind": "direct_call"}],
+                "outside its block",
+            ),
+            (
+                [
+                    {"instruction_index": 11, "kind": "direct_call"},
+                    {"instruction_index": 10, "kind": "direct_call"},
+                ],
+                "strictly increasing",
+            ),
+            (
+                [
+                    {"instruction_index": 10, "kind": "direct_call"},
+                    {"instruction_index": 10, "kind": "direct_call"},
+                ],
+                "strictly increasing",
+            ),
+            (
+                [
+                    {"instruction_index": 10, "kind": "direct_call"},
+                    {"kind": "direct_call"},
+                ],
+                "present on every observation",
+            ),
+            (
+                [{"instruction_index": True, "kind": "direct_call"}],
+                "non-negative integer",
+            ),
+        )
+        for observations, message in invalid_cases:
+            with self.subTest(observations=observations), self.assertRaisesRegex(
+                ValueError, message
+            ):
+                _summarize_control_flow_helper_paths(summary(observations))
+
+    def test_path_summary_accepts_legacy_callsite_observations_without_indexes(self):
+        summary = {
+            "control_flow_block_count": 1,
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_basic_blocks": [{
+                "block_index": 0,
+                "successors": [],
+                "terminator": "return",
+                "callsite_observations": [
+                    {"kind": "direct_call", "method": "SimpleSerializer::serializeInt"},
+                ],
+            }],
+        }
+        result = _summarize_control_flow_helper_paths(summary)
+        self.assertEqual(result["control_flow_path_count"], 1)
+        self.assertEqual(
+            result["control_flow_paths"][0]["helper_callsite_observations"],
+            [{
+                "block_index": 0,
+                "kind": "direct_call",
+                "method": "SimpleSerializer::serializeInt",
+            }],
+        )
+
     def test_control_flow_paths_preserve_mutually_exclusive_helper_sequences(self):
         summary = {
             "control_flow_block_count": 4,
