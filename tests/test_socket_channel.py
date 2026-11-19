@@ -43,6 +43,7 @@ def make_channel(
     max_buffer_bytes=64,
     max_read_chunk_bytes=16,
     max_write_bytes=32,
+    frame_timeout=None,
 ):
     local, peer = socket.socketpair()
     reader = CallbackFrameReader(
@@ -57,6 +58,7 @@ def make_channel(
         io_timeout_seconds=timeout,
         max_read_chunk_bytes=max_read_chunk_bytes,
         max_write_bytes=max_write_bytes,
+        frame_timeout_seconds=frame_timeout,
     )
     return channel, peer, reader
 
@@ -104,6 +106,50 @@ class SocketFrameChannelTests(unittest.TestCase):
 
             peer.sendall(b"\x01A")
             self.assertEqual(channel.receive_frame(), b"\x01A")
+        finally:
+            channel.close()
+            peer.close()
+
+    def test_frame_deadline_persists_across_partial_reads_and_retries(self):
+        channel, peer, reader = make_channel(timeout=1.0, frame_timeout=0.1)
+        try:
+            # The synthetic probe expects four total bytes. Two are already
+            # buffered; one arrives before the total deadline, one remains late.
+            reader.feed(b"\x03a")
+            peer.sendall(b"b")
+            with patch(
+                "server.socket_channel.time.monotonic",
+                side_effect=[10.0, 10.02, 10.11],
+            ), patch(
+                "server.socket_channel.select.select",
+                return_value=([channel._socket], [], []),
+            ):
+                with self.assertRaises(socket.timeout):
+                    channel.receive_frame()
+
+            self.assertEqual(reader.peek(3), b"\x03ab")
+            self.assertEqual(channel._pending_frame_deadline, 10.1)
+
+            # A later receive call must not restart the deadline for the same
+            # incomplete frame; the retained suffix remains inspectable.
+            with patch("server.socket_channel.time.monotonic", return_value=10.12):
+                with self.assertRaises(socket.timeout):
+                    channel.receive_frame()
+            self.assertEqual(reader.peek(3), b"\x03ab")
+        finally:
+            channel.close()
+            peer.close()
+
+    def test_frame_deadline_before_any_bytes_does_not_pin_a_frame(self):
+        channel, peer, _reader = make_channel(timeout=1.0, frame_timeout=0.1)
+        try:
+            with patch(
+                "server.socket_channel.time.monotonic",
+                side_effect=[20.0, 20.11],
+            ):
+                with self.assertRaises(socket.timeout):
+                    channel.receive_frame()
+            self.assertIsNone(channel._pending_frame_deadline)
         finally:
             channel.close()
             peer.close()
@@ -291,6 +337,14 @@ class SocketFrameChannelTests(unittest.TestCase):
             for timeout in (0.0, -1.0, float("inf"), float("nan"), 1, True):
                 with self.subTest(timeout=timeout), self.assertRaises(ValueError):
                     SocketFrameChannel(local, reader, io_timeout_seconds=timeout)
+
+            for frame_timeout in (
+                0.0, -1.0, float("inf"), float("nan"), 1, True, "1",
+            ):
+                with self.subTest(frame_timeout=frame_timeout), self.assertRaises(ValueError):
+                    SocketFrameChannel(
+                        local, reader, frame_timeout_seconds=frame_timeout
+                    )
 
             for kwargs in (
                 {"max_read_chunk_bytes": 0},

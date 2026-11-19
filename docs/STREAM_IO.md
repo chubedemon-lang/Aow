@@ -49,8 +49,15 @@ The channel accepts exact built-in `socket.socket` and
 `CallbackFrameReader` instances only; subclasses are rejected so overridden
 methods or properties cannot run inside the I/O state machine. It takes
 ownership of the socket, applies a finite per-operation socket timeout,
-serializes concurrent writes, and permits only one active reader. A receive
-timeout propagates without closing the reader or discarding buffered input. A truncated EOF raises `TruncatedFrame` and preserves the
+serializes concurrent writes, and permits only one active reader. An optional
+`frame_timeout_seconds` adds a monotonic total deadline for one incomplete
+frame. The deadline spans fragmented reads and remains pinned across later
+`receive_frame()` calls while partial bytes remain, so retrying cannot restart
+the budget for that same frame. A timeout before any bytes arrive clears the
+pending frame deadline. After a partial-frame deadline expires, the caller
+should close the channel rather than retrying the incomplete frame. With this
+option omitted, only the per-operation idle timeout applies. Receive timeouts
+propagate without closing the reader or discarding buffered input. A truncated EOF raises `TruncatedFrame` and preserves the
 incomplete suffix for diagnosis. Either peer may half-close its write direction
 while the opposite direction remains usable. Local `shutdown_write()` waits
 for an in-progress write, is idempotent, and prevents subsequent sends while

@@ -6,8 +6,10 @@ compatibility. The caller supplies the frame reader and owns protocol policy.
 """
 
 import math
+import select
 import socket
 import threading
+import time
 
 from server.frame_reader import CallbackFrameReader, TruncatedFrame
 from server.stream_reader import read_next_frame
@@ -27,8 +29,9 @@ class SocketFrameChannel:
 
     The channel takes ownership of the supplied connected stream socket and
     closes it when close() is called. io_timeout_seconds is applied to the
-    socket and is an idle timeout for each underlying blocking I/O operation,
-    not a total frame deadline.
+    socket and is an idle timeout for each underlying blocking I/O operation.
+    An optional frame_timeout_seconds adds one monotonic deadline for an
+    incomplete frame; the deadline survives retries while partial bytes remain.
 
     reader must be configured by the caller with an explicit probe. This
     class does not define a frame header, length encoding, message ID, AOW
@@ -49,6 +52,7 @@ class SocketFrameChannel:
         reader,
         *,
         io_timeout_seconds=10.0,
+        frame_timeout_seconds=None,
         max_read_chunk_bytes=65536,
         max_write_bytes=1024 * 1024,
     ):
@@ -65,6 +69,14 @@ class SocketFrameChannel:
             or io_timeout_seconds <= 0
         ):
             raise ValueError("io_timeout_seconds must be a finite positive float")
+        if frame_timeout_seconds is not None and (
+            type(frame_timeout_seconds) is not float
+            or not math.isfinite(frame_timeout_seconds)
+            or frame_timeout_seconds <= 0
+        ):
+            raise ValueError(
+                "frame_timeout_seconds must be None or a finite positive float"
+            )
         if type(max_read_chunk_bytes) is not int or max_read_chunk_bytes <= 0:
             raise ValueError("max_read_chunk_bytes must be a positive integer")
         if type(max_write_bytes) is not int or max_write_bytes <= 0:
@@ -85,6 +97,8 @@ class SocketFrameChannel:
         self._reader = reader
         self._max_read_chunk_bytes = max_read_chunk_bytes
         self._max_write_bytes = max_write_bytes
+        self._frame_timeout_seconds = frame_timeout_seconds
+        self._pending_frame_deadline = None
         self._state_lock = threading.Lock()
         self._read_lock = threading.Lock()
         self._write_lock = threading.Lock()
@@ -114,9 +128,13 @@ class SocketFrameChannel:
         """Return one caller-defined frame, None on clean peer EOF.
 
         Socket timeouts and other receive errors propagate without closing the
-        reader or discarding buffered bytes. A truncated final frame marks the
-        read direction as EOF and raises TruncatedFrame; the caller can inspect
-        its original reader to diagnose the retained suffix.
+        reader or discarding buffered bytes. If frame_timeout_seconds is set,
+        its monotonic deadline spans all chunks of one incomplete frame and is
+        retained across calls after a partial-frame timeout. The caller should
+        close the channel after that deadline expires. A timeout before any
+        bytes arrive does not pin a frame deadline. A truncated final frame
+        marks the read direction as EOF and raises TruncatedFrame; the caller
+        can inspect its original reader to diagnose the retained suffix.
         """
         with self._read_lock:
             with self._state_lock:
@@ -125,18 +143,54 @@ class SocketFrameChannel:
                 if self._read_eof:
                     return None
 
+            recv = self._socket.recv
+            if self._frame_timeout_seconds is not None:
+                if self._pending_frame_deadline is None:
+                    self._pending_frame_deadline = (
+                        time.monotonic() + self._frame_timeout_seconds
+                    )
+                deadline = self._pending_frame_deadline
+
+                def recv_before_deadline(max_bytes):
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise socket.timeout("frame receive deadline exceeded")
+                        try:
+                            readable, _writable, _exceptional = select.select(
+                                [self._socket], [], [], remaining
+                            )
+                        except InterruptedError:
+                            continue
+                        if not readable:
+                            raise socket.timeout("frame receive deadline exceeded")
+                        try:
+                            return self._socket.recv(max_bytes)
+                        except BlockingIOError:
+                            continue
+
+                recv = recv_before_deadline
+
             try:
                 frame = read_next_frame(
                     self._reader,
-                    self._socket.recv,
+                    recv,
                     max_chunk_bytes=self._max_read_chunk_bytes,
                 )
             except TruncatedFrame:
+                self._pending_frame_deadline = None
                 with self._state_lock:
                     self._read_eof = True
                 raise
+            except socket.timeout:
+                if self._reader.available == 0:
+                    self._pending_frame_deadline = None
+                raise
 
+            if frame is not None:
+                self._pending_frame_deadline = None
             if frame is None and self._reader.closed:
+                self._pending_frame_deadline = None
                 with self._state_lock:
                     self._read_eof = True
             return frame
