@@ -1631,6 +1631,13 @@ class SerializerDeserializerPathAlignmentTests(unittest.TestCase):
             result["shared_path_signatures"][0]["helper_families"],
             ["Int", "String"],
         )
+        self.assertEqual(result["path_pair_count"], 1)
+        self.assertEqual(result["maximum_common_helper_prefix_length"], 2)
+        self.assertEqual(result["maximum_common_helper_prefix_pair_count"], 1)
+        self.assertEqual(
+            result["common_helper_prefix_length_histogram"],
+            [{"prefix_length": 2, "path_pair_count": 1}],
+        )
         self.assertFalse(result["field_order_inferred"])
 
     def test_branch_exclusive_helper_sequences_are_not_flattened_together(self):
@@ -1691,6 +1698,59 @@ class SerializerDeserializerPathAlignmentTests(unittest.TestCase):
                 "resolution": "not_resolved_as_serializer_helper",
             }],
         )
+
+    def test_path_alignment_reports_common_prefix_before_branch_divergence(self):
+        serializer = self._summary(
+            ("return", [
+                self._call("direct_call", method="SimpleSerializer::serializeInt"),
+                self._call("direct_call", method="SimpleSerializer::serializeString"),
+            ]),
+            ("return", [
+                self._call("direct_call", method="SimpleSerializer::serializeInt"),
+                self._call("direct_call", method="SimpleSerializer::serializeBoolean"),
+            ]),
+        )
+        deserializer = self._summary(
+            ("return", [
+                self._call("direct_call", method="SimpleDeserializer::deserializeInt"),
+                self._call("direct_call", method="SimpleDeserializer::deserializeLong"),
+            ]),
+            ("return", [
+                self._call("direct_call", method="SimpleDeserializer::deserializeBoolean"),
+            ]),
+        )
+
+        result = _summarize_serializer_deserializer_path_alignment(
+            serializer, deserializer
+        )
+
+        self.assertEqual(result["path_pair_count"], 4)
+        self.assertEqual(result["maximum_common_helper_prefix_length"], 1)
+        self.assertEqual(result["maximum_common_helper_prefix_pair_count"], 2)
+        self.assertEqual(
+            result["common_helper_prefix_length_histogram"],
+            [
+                {"prefix_length": 0, "path_pair_count": 2},
+                {"prefix_length": 1, "path_pair_count": 2},
+            ],
+        )
+        self.assertFalse(result["field_order_inferred"])
+
+    def test_path_alignment_with_empty_side_reports_zero_path_pairs(self):
+        serializer = self._summary((
+            "return",
+            [self._call("direct_call", method="SimpleSerializer::serializeInt")],
+        ))
+        deserializer = self._summary()
+
+        result = _summarize_serializer_deserializer_path_alignment(
+            serializer, deserializer
+        )
+
+        self.assertEqual(result["path_pair_count"], 0)
+        self.assertEqual(result["maximum_common_helper_prefix_length"], 0)
+        self.assertEqual(result["maximum_common_helper_prefix_pair_count"], 0)
+        self.assertEqual(result["common_helper_prefix_length_histogram"], [])
 
     def test_malformed_path_counts_and_observations_fail_closed(self):
         serializer = self._summary(
