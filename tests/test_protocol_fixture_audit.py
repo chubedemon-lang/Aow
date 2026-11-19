@@ -529,6 +529,128 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
             self.audit(json.dumps(base).encode())
 
 
+    def test_client_candidate_alignment_uses_client_events_only(self):
+        server_stream = frame(b"server")
+        first_client_frame = frame(b"a")
+        second_client_frame = frame(b"bc")
+        client_stream = first_client_frame + second_client_frame
+        events = [
+            {"direction": "client_to_server", "offset": 0, "length": len(first_client_frame)},
+            {"direction": "server_to_client", "offset": 0, "length": 4},
+            {
+                "direction": "client_to_server",
+                "offset": len(first_client_frame),
+                "length": len(second_client_frame),
+            },
+            {"direction": "server_to_client", "offset": 4, "length": len(server_stream) - 4},
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [client_stream[:3], client_stream[3:]],
+                schema_version=2,
+                io_events=events,
+            ),
+            client_to_server_length_offset=0,
+        )
+        alignment = result["client_to_server_candidate_io_alignment"]
+        self.assertEqual(
+            alignment["status"],
+            "unverified_candidate_io_boundary_correlation",
+        )
+        self.assertEqual(alignment["candidate_frame_boundary_count"], 2)
+        self.assertEqual(alignment["client_to_server_io_event_boundary_count"], 2)
+        self.assertEqual(
+            alignment["candidate_frame_boundaries_aligned_with_io_event_ends"], 2
+        )
+        self.assertEqual(
+            alignment["candidate_frame_boundaries_not_aligned_with_io_event_ends"], 0
+        )
+        self.assertEqual(
+            alignment["io_event_ends_aligned_with_known_candidate_frame_boundaries"], 2
+        )
+        self.assertEqual(
+            alignment["io_event_ends_without_known_candidate_frame_boundary"], 0
+        )
+        self.assertTrue(alignment["candidate_boundary_set_complete"])
+        self.assertFalse(alignment["absolute_offsets_emitted"])
+        self.assertFalse(alignment["packet_boundaries_verified"])
+        serialized = json.dumps(result)
+        self.assertNotIn('"offset"', serialized)
+        self.assertNotIn('"length"', serialized)
+        self.assertFalse(result["sender_symmetry_verified"])
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
+
+    def test_client_candidate_alignment_marks_partial_tail_as_lower_bound(self):
+        server_stream = frame(b"server")
+        complete = frame(b"ok")
+        client_stream = complete + b"\\x7f"
+        events = [
+            {"direction": "client_to_server", "offset": 0, "length": len(complete)},
+            {
+                "direction": "server_to_client",
+                "offset": 0,
+                "length": len(server_stream),
+            },
+            {
+                "direction": "client_to_server",
+                "offset": len(complete),
+                "length": 1,
+            },
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [client_stream],
+                schema_version=2,
+                io_events=events,
+            ),
+            client_to_server_length_offset=0,
+        )
+        candidate = result["client_to_server"]["length_prefix_candidate"]
+        alignment = result["client_to_server_candidate_io_alignment"]
+        self.assertEqual(candidate["status"], "candidate_not_recovered")
+        self.assertEqual(candidate["frame_count"], 1)
+        self.assertEqual(candidate["unclassified_stream_bytes"], 1)
+        self.assertFalse(candidate["candidate_stream_fully_consumed"])
+        self.assertEqual(alignment["candidate_frame_boundary_count"], 1)
+        self.assertTrue(alignment["candidate_frame_boundary_count_is_lower_bound"])
+        self.assertFalse(alignment["candidate_boundary_set_complete"])
+        self.assertEqual(
+            alignment["candidate_frame_boundaries_aligned_with_io_event_ends"], 1
+        )
+        self.assertEqual(
+            alignment["io_event_ends_without_known_candidate_frame_boundary"], 1
+        )
+        self.assertFalse(alignment["packet_boundaries_verified"])
+
+    def test_client_candidate_alignment_reports_missing_events_for_schema_v1(self):
+        result = self.audit(
+            fixture_bytes([frame(b"server")], [frame(b"client")]),
+            client_to_server_length_offset=0,
+        )
+        alignment = result["client_to_server_candidate_io_alignment"]
+        self.assertEqual(
+            alignment["status"],
+            "io_event_boundaries_not_recorded_schema_v1",
+        )
+        self.assertEqual(alignment["candidate_frame_boundary_count"], 1)
+        self.assertIsNone(alignment["client_to_server_io_event_boundary_count"])
+        self.assertTrue(alignment["candidate_boundary_set_complete"])
+        self.assertFalse(alignment["absolute_offsets_emitted"])
+
+    def test_client_candidate_alignment_is_not_attempted_by_default(self):
+        result = self.audit(fixture_bytes([frame(b"server")], [frame(b"client")]))
+        alignment = result["client_to_server_candidate_io_alignment"]
+        self.assertEqual(
+            alignment["status"],
+            "not_attempted_sender_symmetry_unproven",
+        )
+        self.assertIsNone(alignment["candidate_frame_boundary_count"])
+        self.assertIsNone(alignment["client_to_server_io_event_boundary_count"])
+        self.assertFalse(alignment["packet_boundaries_verified"])
+
     def test_schema_v3_reports_relative_monotonic_timing_without_absolute_values(self):
         server_stream = frame(b"server")
         client_stream = b"client"
