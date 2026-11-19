@@ -29,6 +29,7 @@ from tools.il2cpp_codegen_inventory import (
     _metadata_images,
     _slice,
 )
+from tools.aarch64_call_return_evidence import summarize_immediate_call_result_zero_tests
 from tools.aarch64_call_argument_evidence import (
     summarize_small_argument_constants,
 )
@@ -323,6 +324,9 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "entry_window_kind": "next_distinct_executable_entry_in_section",
             "entry_window_bytes": window_bytes,
             "entry_window_truncated": truncated,
+            "immediate_call_result_zero_tests": (
+                summarize_immediate_call_result_zero_tests(code)
+            ),
             "cfg_memory_access_observations": (
                 summarize_control_flow_memory_accesses(code, target)
             ),
@@ -392,7 +396,8 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "Base provenance tracks only ADRP/ADD/MOV and explicitly supplied "
             "relative-relocation-backed 64-bit LDR chains; absolute addresses "
             "are not emitted. Windows may contain shared or cold code. These "
-            "observations do not establish runtime execution, managed-field "
+            "immediate post-call W0/X0 zero tests are structural register-use candidates, not "
+            "callee return-type or semantic proof. These observations do not establish runtime execution, managed-field "
             "identity, packet framing, compression activation, message IDs, "
             "handshake semantics or APK/server compatibility. Relocation-backed "
             "FieldInfo usage cells are correlated only to static FieldRef table "

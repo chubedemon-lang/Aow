@@ -20,6 +20,9 @@ on:
       - 'tests/test_il2cpp_metadata_usage_evidence.py'
       - 'tools/aarch64_call_argument_evidence.py'
       - 'tests/test_aarch64_call_argument_evidence.py'
+      - 'tools/aarch64_call_return_evidence.py'
+      - 'tests/test_aarch64_call_return_evidence.py'
+      - 'docs/AARCH64_CALL_RETURN_EVIDENCE.md'
       - 'tools/aarch64_memory_access_evidence.py'
       - 'tests/test_aarch64_memory_access_evidence.py'
       - 'tools/aarch64_memory_base_provenance.py'
@@ -170,6 +173,8 @@ jobs:
           python-version: '3.12'
       - name: AArch64 small argument evidence tests (synthetic code only)
         run: python -m unittest discover -s tests -p 'test_aarch64_call_argument_evidence.py' -v
+      - name: AArch64 immediate call-result branch tests (synthetic code only)
+        run: python -m unittest discover -s tests -p 'test_aarch64_call_return_evidence.py' -v
       - name: AArch64 memory access evidence tests (synthetic code only)
         run: python -m unittest discover -s tests -p 'test_aarch64_memory_access_evidence.py' -v
       - name: AArch64 memory base provenance tests (synthetic code only)
@@ -188,6 +193,7 @@ jobs:
             tools/il2cpp_metadata_usage_evidence.py \
             tools/il2cpp_field_ref_evidence.py \
             tools/aarch64_call_argument_evidence.py \
+            tools/aarch64_call_return_evidence.py \
             tools/aarch64_memory_access_evidence.py \
             tools/aarch64_memory_base_provenance.py \
             tools/aarch64_delegate_target_evidence.py \

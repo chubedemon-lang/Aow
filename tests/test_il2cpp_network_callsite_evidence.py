@@ -198,6 +198,10 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         )
         self.assertFalse(provenance["absolute_addresses_emitted"])
         self.assertFalse(provenance["raw_instructions_emitted"])
+        return_tests = item["immediate_call_result_zero_tests"]
+        self.assertEqual(return_tests["analysis_kind"], "immediate_call_result_zero_test_candidate")
+        self.assertFalse(return_tests["native_addresses_emitted"])
+        self.assertFalse(return_tests["raw_instructions_emitted"])
 
     def test_inspect_bytes_correlates_static_field_info_tokens_to_field_refs(self):
         metadata = bytearray(make_metadata(
