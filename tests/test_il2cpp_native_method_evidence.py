@@ -80,7 +80,7 @@ def make_metadata(method_names, wrong_owner=False, *, image="ScriptsAssembly.dll
 
 
 def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
-             image="ScriptsAssembly.dll", text_words=()):
+             image="ScriptsAssembly.dll", text_words=(), method_entry_targets=None):
     names = b"\0.shstrtab\0.rodata\0.data.rel.ro\0.text\0.rela.dyn\0"
     offsets = {
         name: names.index(name.encode())
@@ -90,6 +90,14 @@ def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
     ro_off, relro_off, text_off, rela_off = 0x100, 0x120, 0x220, 0x280
     if len(text_words) > 16:
         raise ValueError("synthetic text window exceeds .text fixture")
+    if method_entry_targets is None:
+        method_entry_targets = tuple(target + index * 4 for index in range(method_count))
+    if (
+        type(method_entry_targets) not in (tuple, list)
+        or len(method_entry_targets) != method_count
+        or any(type(item) is not int or item < 0 or item % 4 for item in method_entry_targets)
+    ):
+        raise ValueError("method entry targets must be aligned addresses matching method_count")
 
     relro = bytearray(0x100)
     struct.pack_into("<I", relro, 8, method_count)
@@ -99,11 +107,11 @@ def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
     relocations = [(0x3000, (1 << 32) | 1027, 0x2000)]
     if not omit_table:
         relocations.append((0x3010, (1 << 32) | 1027, pointer_table))
-    for index in range(method_count):
+    for index, entry_target in enumerate(method_entry_targets):
         if index not in unrelocated:
             relocations.append((
                 pointer_table + index * 8, (1 << 32) | 1027,
-                target + index * 4,
+                entry_target,
             ))
     rela_data = b"".join(struct.pack("<QQq", *item) for item in relocations)
 
@@ -1184,6 +1192,72 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertNotIn("0x5000", rendered)
         self.assertNotIn("0x5004", rendered)
 
+
+    def test_network_callsite_summary_preserves_branch_specific_metadata_method_targets(self):
+        start = 0x5000
+        words = (
+            self._encode_b_cond(start, start + 20),
+            self._encode_bl(start + 4, start + 0x30),
+            self._encode_b(start + 8, start + 28),
+            0xD503201F,  # unreachable fallthrough after unconditional branch
+            0xD503201F,
+            self._encode_bl(start + 20, start + 0x34),
+            0xD65F03C0,  # ret
+            0xD65F03C0,  # ret
+        )
+        report = inspect_bytes(
+            make_metadata([
+                "Cycle", "DoStreamReadedBytes", "GetHttpMessageResponse"
+            ]),
+            make_elf(
+                3,
+                text_words=words,
+                method_entry_targets=(0x5000, 0x5030, 0x5034),
+            ),
+        )
+        summary = next(
+            item for item in report["network_callsite_summary"]
+            if item["type"] == "Receiver" and item["method"] == "Cycle"
+        )
+
+        self.assertEqual(
+            summary["control_flow_analysis_kind"],
+            "bounded_intraprocedural_basic_blocks",
+        )
+        self.assertEqual(summary["control_flow_path_count"], 2)
+        self.assertEqual(
+            summary["control_flow_reachable_resolved_metadata_method_callsite_count"],
+            2,
+        )
+        self.assertEqual(
+            summary["control_flow_unreachable_resolved_metadata_method_callsite_count"],
+            0,
+        )
+        path_methods = sorted(
+            tuple(
+                call["method"]
+                for call in path["helper_callsite_observations"]
+                if call.get("target_kind") == "metadata_method"
+            )
+            for path in summary["control_flow_paths"]
+        )
+        self.assertEqual(
+            path_methods,
+            sorted((
+                ("com.geargames.common.network.Receiver::DoStreamReadedBytes/p0",),
+                ("com.geargames.common.network.Receiver::GetHttpMessageResponse/p0",),
+            )),
+        )
+        self.assertEqual(
+            summary["resolved_direct_method_call_counts"],
+            {
+                "com.geargames.common.network.Receiver::DoStreamReadedBytes/p0": 1,
+                "com.geargames.common.network.Receiver::GetHttpMessageResponse/p0": 1,
+            },
+        )
+        rendered = json.dumps(summary)
+        for address in ("0x5000", "0x5014", "0x5030", "0x5034"):
+            self.assertNotIn(address, rendered)
 
     def test_network_and_login_serializer_summaries_include_redacted_memory_accesses(self):
         def encode_access(size, opc, base, target, immediate):
