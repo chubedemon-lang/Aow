@@ -25,6 +25,16 @@ class HostilePrincipal(str):
         raise AssertionError("custom strip hook must not run")
 
 
+class HostileIntClock(int):
+    def __float__(self):
+        raise AssertionError("custom integer clock conversion must not run")
+
+
+class HostileFloatClock(float):
+    def __float__(self):
+        raise AssertionError("custom float clock conversion must not run")
+
+
 class SqliteAuthRateLimiterTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -38,6 +48,24 @@ class SqliteAuthRateLimiterTests(unittest.TestCase):
             self.db, self.secret, max_attempts=3, window_seconds=60,
             lockout_seconds=30, clock=lambda: self.now[0],
         )
+
+    def test_clock_rejects_numeric_subclasses_before_float_hooks(self):
+        for value in (HostileIntClock(1_000), HostileFloatClock(1_000.0)):
+            with self.subTest(clock_type=type(value).__name__):
+                limiter = SqliteAuthRateLimiter(
+                    self.db, self.secret, clock=lambda value=value: value
+                )
+                with self.assertRaisesRegex(ValueError, "finite non-negative"):
+                    limiter.check_allowed("alice")
+                with self.assertRaisesRegex(ValueError, "finite non-negative"):
+                    limiter.record_failure("alice")
+                self.assertFalse(self.db.in_transaction)
+                self.assertEqual(
+                    self.db.execute(
+                        "SELECT count(*) FROM auth_attempt_limits"
+                    ).fetchone()[0],
+                    0,
+                )
 
     def test_lockout_starts_at_threshold_and_expires_at_exact_boundary(self):
         self.assertEqual(self.limiter.record_failure("alice"), 1)

@@ -80,7 +80,11 @@ class SqliteAuthRateLimiter:
 
     def _now(self) -> float:
         value = self.clock()
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        # Clock providers are injected by the operator, but still form a
+        # validation boundary. Numeric subclasses can override __float__ and
+        # execute arbitrary code during expiry checks; accept built-ins only,
+        # matching the durable-session and process-local session validators.
+        if type(value) not in (int, float):
             raise ValueError("clock must return a finite non-negative epoch time")
         try:
             numeric = float(value)
