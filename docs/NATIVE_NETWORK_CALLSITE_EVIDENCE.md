@@ -627,3 +627,17 @@ runtime-selected edge. Register indexes are native instruction operands, not
 managed field identities. The added summaries do not establish which branch
 executes in the APK, packet framing, message semantics, handshake order,
 LoginRequest field order, or client/server compatibility.
+
+
+## Relative instruction locations for conditional path predicates — tooling only
+
+Conditional branch-condition records now include the terminator's
+instruction_index when the source CFG block carries a validated instruction
+range. The index is relative to the bounded method entry window, so it can be
+correlated with redacted callsite observations without publishing native
+addresses. Legacy hand-authored CFG summaries without instruction ranges keep
+their prior shape and do not receive a fabricated index.
+
+This is location metadata only. It does not evaluate B.cond flags or CBZ/TBZ
+register values, infer a runtime-selected edge, or establish packet framing,
+message semantics, handshake/login order, or APK compatibility.

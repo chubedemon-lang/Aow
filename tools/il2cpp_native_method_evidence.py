@@ -1522,6 +1522,32 @@ def _summarize_control_flow_helper_paths(
                 if type(target_kind) is str:
                     item["target_kind"] = target_kind
                 calls.append(item)
+        def branch_condition_record(source, target, edge_kind, condition):
+            record = {
+                "from_block": source,
+                "to_block": target,
+                "edge_kind": edge_kind,
+                "outcome": (
+                    "taken" if edge_kind in {
+                        "conditional_taken", "conditional_branch_exit"
+                    } else "fallthrough"
+                ),
+                "condition": dict(condition),
+            }
+            source_block = by_index[source]
+            instruction_start = source_block.get("instruction_start")
+            instruction_count = source_block.get("instruction_count")
+            if (
+                type(instruction_start) is int and instruction_start >= 0
+                and type(instruction_count) is int and instruction_count >= 1
+            ):
+                # The index is relative to the bounded method window; never
+                # expose or reconstruct a native virtual address here.
+                record["instruction_index"] = (
+                    instruction_start + instruction_count - 1
+                )
+            return record
+
         branch_conditions = []
         for source, target, edge_kind in edges:
             if edge_kind not in {
@@ -1530,32 +1556,18 @@ def _summarize_control_flow_helper_paths(
                 continue
             condition = by_index[source].get("terminator_condition")
             if condition is not None:
-                branch_conditions.append({
-                    "from_block": source,
-                    "to_block": target,
-                    "edge_kind": edge_kind,
-                    "outcome": (
-                        "taken" if edge_kind == "conditional_taken"
-                        else "fallthrough"
-                    ),
-                    "condition": dict(condition),
-                })
+                branch_conditions.append(
+                    branch_condition_record(source, target, edge_kind, condition)
+                )
         if exit_kind in {
             "conditional_branch_exit", "conditional_fallthrough_exit"
         }:
             source = block_indexes[-1]
             condition = by_index[source].get("terminator_condition")
             if condition is not None:
-                branch_conditions.append({
-                    "from_block": source,
-                    "to_block": None,
-                    "edge_kind": exit_kind,
-                    "outcome": (
-                        "taken" if exit_kind == "conditional_branch_exit"
-                        else "fallthrough"
-                    ),
-                    "condition": dict(condition),
-                })
+                branch_conditions.append(
+                    branch_condition_record(source, None, exit_kind, condition)
+                )
         path = {
             "block_indexes": list(block_indexes),
             "edges": [
