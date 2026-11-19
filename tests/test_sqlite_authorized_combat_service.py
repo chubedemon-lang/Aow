@@ -20,6 +20,13 @@ from server.sqlite_authorized_combat_service import (
 )
 
 
+class HostileString(str):
+    """String subclass whose length hook must never run during validation."""
+
+    def __len__(self):
+        raise AssertionError("hostile string length hook executed")
+
+
 class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -329,6 +336,51 @@ class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
             self.db.execute("SELECT count(*) FROM combat_mutations").fetchone()[0],
             1,
         )
+
+    def test_public_identifiers_reject_string_subclasses(self):
+        hostile_battle_id = HostileString("hostile-battle")
+        with self.assertRaises(CombatStoreError):
+            self.service.create(
+                self.owner_token, 101, hostile_battle_id, self.battle()
+            )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM combat_battles").fetchone()[0],
+            0,
+        )
+
+        self.create_battle()
+        with self.assertRaises(CombatStoreError):
+            self.service.get(
+                self.owner_token, 101, HostileString("battle-1")
+            )
+        with self.assertRaises(CombatStoreError):
+            self.service.attack(
+                self.owner_token, 101, "battle-1",
+                HostileString("hostile-request"), 0, 101,
+            )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM combat_mutations").fetchone()[0],
+            0,
+        )
+
+    def test_receipt_decoder_rejects_string_subclass_before_length_hook(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "receipt", 0, 101
+        )
+        raw = self.db.execute(
+            "SELECT result_json FROM combat_mutations WHERE request_id='receipt'"
+        ).fetchone()[0]
+
+        with self.assertRaises(CombatStoreError):
+            self.service._decode_result(HostileString(raw))
+
+        # Rejection is read-only and the canonical receipt remains replayable.
+        replay = self.service.attack(
+            self.owner_token, 101, "battle-1", "receipt", 0, 101
+        )
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.snapshot.revision, 1)
 
     def test_invalid_identifiers_and_constructor_schema_fail_closed(self):
         for value in ("", " ", "../battle", "x" * 129, None):

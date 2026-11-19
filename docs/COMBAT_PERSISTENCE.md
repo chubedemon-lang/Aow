@@ -111,3 +111,17 @@ Regression coverage includes a hostile `Fighter` subclass and non-`Fighter`
 objects in both participant positions. This is synthetic domain validation
 only; it does not define AOW combat entities, packet fields, or wire
 compatibility.
+
+
+## Canonical identifier and receipt-input types — 2026-11-20
+
+Synthetic combat identifiers and stored receipt JSON now require exact
+built-in `str` values. String subclasses are rejected before regular-expression
+validation or length inspection. This avoids invoking custom subclass hooks
+while validating battle IDs, request IDs, or receipt input. Receipt owner
+identifiers are checked against the same canonical type.
+
+Regression tests use a hostile `str` subclass whose `__len__` raises. Public
+create/get/attack paths reject subclass identifiers, and receipt replay rejects
+a subclass without executing its length hook. This is a Python input-boundary
+hardening change only; it does not define AOW battle identifiers or wire fields.
