@@ -91,13 +91,20 @@ def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
     if len(text_words) > 16:
         raise ValueError("synthetic text window exceeds .text fixture")
     if method_entry_targets is None:
-        method_entry_targets = tuple(target + index * 4 for index in range(method_count))
+        method_entry_targets = tuple(
+            target + index * 4 for index in range(method_count)
+        )
     if (
         type(method_entry_targets) not in (tuple, list)
         or len(method_entry_targets) != method_count
-        or any(type(item) is not int or item < 0 or item % 4 for item in method_entry_targets)
+        or any(
+            type(item) is not int or item < 0 or item % 4
+            for item in method_entry_targets
+        )
     ):
-        raise ValueError("method entry targets must be aligned addresses matching method_count")
+        raise ValueError(
+            "method entry targets must be aligned addresses matching method_count"
+        )
 
     relro = bytearray(0x100)
     struct.pack_into("<I", relro, 8, method_count)
@@ -1193,7 +1200,9 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertNotIn("0x5004", rendered)
 
 
-    def test_network_callsite_summary_preserves_branch_specific_metadata_method_targets(self):
+    def test_network_callsite_summary_preserves_branch_specific_metadata_method_targets(
+        self,
+    ):
         start = 0x5000
         words = (
             self._encode_b_cond(start, start + 20),
