@@ -151,11 +151,23 @@ class SocketFrameChannel:
                     )
                 deadline = self._pending_frame_deadline
 
+                def raise_deadline_or_closed():
+                    # Resolve the close/deadline race at one lock-protected
+                    # point: whichever state transition acquires this lock
+                    # first determines whether the caller sees I/O closure or
+                    # an ordinary frame deadline timeout.
+                    with self._state_lock:
+                        if self._closed:
+                            raise OSError(
+                                "socket channel closed during frame receive"
+                            ) from None
+                        raise socket.timeout("frame receive deadline exceeded")
+
                 def recv_before_deadline(max_bytes):
                     while True:
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
-                            raise socket.timeout("frame receive deadline exceeded")
+                            raise_deadline_or_closed()
                         try:
                             readable, _writable, _exceptional = select.select(
                                 [self._socket], [], [], remaining
@@ -174,7 +186,7 @@ class SocketFrameChannel:
                                 ) from None
                             raise
                         if not readable:
-                            raise socket.timeout("frame receive deadline exceeded")
+                            raise_deadline_or_closed()
                         try:
                             return self._socket.recv(max_bytes)
                         except BlockingIOError:

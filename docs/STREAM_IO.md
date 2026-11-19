@@ -62,8 +62,12 @@ incomplete suffix for diagnosis. Either peer may half-close its write direction
 while the opposite direction remains usable. Local `shutdown_write()` waits
 for an in-progress write, is idempotent, and prevents subsequent sends while
 leaving receives available. Full `close()` shuts down both directions to
-interrupt a blocked receive; a concurrent read may observe clean EOF or an
-operating-system socket error depending on the shutdown/close race.
+interrupt a blocked receive. When a close races with a frame-deadline check or
+a readiness wait that returns no readable socket, the state lock linearizes
+the outcome: a close that wins is reported as an I/O error, while a deadline
+that wins is reported as a timeout. A read already past that decision point
+may still observe clean EOF or an operating-system socket error as shutdown
+completes.
 
 This is generic transport plumbing only. It is not connected to
 `server.mock`, an AOW listener, the receive-length candidate, or any login
