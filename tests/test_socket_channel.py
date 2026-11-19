@@ -162,6 +162,50 @@ class SocketFrameChannelTests(unittest.TestCase):
             channel.close()
             peer.close()
 
+    def test_close_racing_with_empty_select_result_is_reported_as_io_error(self):
+        channel, peer, reader = make_channel(timeout=1.0, frame_timeout=1.0)
+        try:
+            reader.feed(b"\\x03a")
+
+            def close_then_return_empty(*_args):
+                channel.close()
+                return ([], [], [])
+
+            with patch(
+                "server.socket_channel.select.select",
+                side_effect=close_then_return_empty,
+            ):
+                with self.assertRaisesRegex(OSError, "closed during frame receive"):
+                    channel.receive_frame()
+
+            self.assertTrue(channel.closed)
+            self.assertEqual(reader.available, 2)
+        finally:
+            channel.close()
+            peer.close()
+
+    def test_close_wins_when_frame_deadline_expires_during_clock_check(self):
+        channel, peer, reader = make_channel(timeout=1.0, frame_timeout=1.0)
+        try:
+            reader.feed(b"\\x03a")
+
+            def close_during_clock_check():
+                channel.close()
+                return 31.1
+
+            with patch(
+                "server.socket_channel.time.monotonic",
+                side_effect=[30.0, close_during_clock_check],
+            ):
+                with self.assertRaisesRegex(OSError, "closed during frame receive"):
+                    channel.receive_frame()
+
+            self.assertTrue(channel.closed)
+            self.assertEqual(reader.available, 2)
+        finally:
+            channel.close()
+            peer.close()
+
     def test_frame_deadline_before_any_bytes_does_not_pin_a_frame(self):
         channel, peer, _reader = make_channel(timeout=1.0, frame_timeout=0.1)
         try:
