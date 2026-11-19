@@ -89,3 +89,8 @@ truncated path enumeration is labeled partial.
 Regression tests use synthetic path summaries only. No APK, native bytes,
 instruction words, addresses, packet fixture, endpoint, credential, or
 proprietary asset is committed.
+
+
+A pair is also labeled partial when either native entry window itself was
+truncated by the analyzer's maximum-window bound, even if its CFG path
+enumeration completed within the available bytes.
