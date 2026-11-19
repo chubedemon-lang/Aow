@@ -605,3 +605,25 @@ only**, not runtime confirmation. The integer is not established as a stable
 numeric wire message ID; runtime branch outcome, compression range/placement,
 complete frame semantics, Sender/Receiver symmetry and APK compatibility
 remain unverified.
+
+
+## Conditional branch predicate and terminal-edge summaries — tooling only
+
+The bounded AArch64 CFG report now records the encoded predicate for each
+recognized conditional terminator:
+
+- `B.cond`: condition-code number and its architectural mnemonic;
+- `CBZ/CBNZ`: encoded register index, 32/64-bit width and zero/nonzero test;
+- `TBZ/TBNZ`: encoded register index, tested bit index and zero/nonzero test.
+
+Path summaries retain the predicate alongside the taken or fallthrough outcome.
+A conditional instruction at the end of the bounded entry window also reports
+a fallthrough exit when that edge leaves the window, even if its taken target
+remains inside the window. This avoids silently omitting one possible edge.
+
+These are decoded instruction operands, not evaluated predicates. The analyzer
+does not recover NZCV flags, register values, path constraints, or the
+runtime-selected edge. Register indexes are native instruction operands, not
+managed field identities. The added summaries do not establish which branch
+executes in the APK, packet framing, message semantics, handshake order,
+LoginRequest field order, or client/server compatibility.
