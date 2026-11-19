@@ -115,3 +115,23 @@ It does not map helper calls to message fields, infer field order or count,
 choose a runtime branch, or prove that any callsite executes. Simple paths,
 bounded entry windows, unresolved calls, and possible conditional edges retain
 their existing limitations. Tests use synthetic summaries only.
+
+
+## Bounded prefix-alignment implementation
+
+The cross-side prefix histogram is computed with a trie of deserializer helper
+sequences. Each trie node stores the number of deserializer paths sharing that
+prefix; serializer paths accumulate those counts by depth. Exact longest-common
+prefix counts are derived from adjacent prefix-frequency totals, so the
+implementation does not enumerate or materialize every serializer/deserializer
+path pair.
+
+The comparison accepts at most 256 paths per side, matching the path
+enumerator's public maximum, and at most 16,384 helper observations per path,
+the instruction-count ceiling of a 64 KiB AArch64 entry window. Larger or
+malformed summaries fail closed before pair aggregation. The output still
+reports the mathematical path-pair count, including duplicate paths as
+separate occurrences.
+
+This is resource-bounded static diagnostics only. It does not add APK findings,
+infer field order, select runtime branches, or establish a wire contract.
