@@ -762,7 +762,7 @@ def _is_aarch64_return(word):
 
 
 def _summarize_control_flow_serializer_helper_blocks(
-    code, start_va, relocations, helper_targets
+    code, start_va, relocations, helper_targets, *, method_targets=None
 ):
     """Group helper callsites by reachable intraprocedural basic block.
 
@@ -776,6 +776,8 @@ def _summarize_control_flow_serializer_helper_blocks(
         raise ValueError("AArch64 code window start must be an aligned address")
     if not isinstance(relocations, dict) or not isinstance(helper_targets, dict):
         raise ValueError("relocations and helper targets must be mappings")
+    if method_targets is not None and not isinstance(method_targets, dict):
+        raise ValueError("method targets must be a mapping")
 
     instruction_count = len(code) // 4
     if instruction_count == 0:
@@ -788,6 +790,8 @@ def _summarize_control_flow_serializer_helper_blocks(
             "control_flow_unreachable_callsite_observation_count": 0,
             "control_flow_reachable_resolved_helper_callsite_count": 0,
             "control_flow_unreachable_resolved_helper_callsite_count": 0,
+            "control_flow_reachable_resolved_metadata_method_callsite_count": 0,
+            "control_flow_unreachable_resolved_metadata_method_callsite_count": 0,
             "control_flow_conditional_branch_count": 0,
             "control_flow_external_branch_exit_count": 0,
         }
@@ -820,10 +824,26 @@ def _summarize_control_flow_serializer_helper_blocks(
             return {"kind": kind, "method": labels[0]}
         if len(labels) > 1:
             return {"kind": kind, "resolution": "ambiguous_serializer_helper"}
+
+        if method_targets is not None and target is not None:
+            method_labels = method_targets.get(target, ())
+            if len(method_labels) == 1:
+                return {
+                    "kind": kind,
+                    "method": method_labels[0],
+                    "target_kind": "metadata_method",
+                }
+            if len(method_labels) > 1:
+                return {"kind": kind, "resolution": "ambiguous_metadata_method"}
+
         if include_unresolved:
             return {
                 "kind": kind,
-                "resolution": "not_resolved_as_serializer_helper",
+                "resolution": (
+                    "not_resolved_as_metadata_method_or_serializer_helper"
+                    if method_targets is not None
+                    else "not_resolved_as_serializer_helper"
+                ),
             }
         return None
 
@@ -1132,6 +1152,8 @@ def _summarize_control_flow_serializer_helper_blocks(
     unreachable_observations = 0
     reachable_helpers = 0
     unreachable_helpers = 0
+    reachable_methods = 0
+    unreachable_methods = 0
     for block in blocks:
         block_index = block["block_index"]
         block_calls = []
@@ -1145,13 +1167,22 @@ def _summarize_control_flow_serializer_helper_blocks(
                 })
         block["reachable"] = block_index in reachable
         block["callsite_observations"] = block_calls
-        resolved_helpers = sum("method" in event for event in block_calls)
+        resolved_helpers = sum(
+            "method" in event and event.get("target_kind") != "metadata_method"
+            for event in block_calls
+        )
+        resolved_methods = sum(
+            event.get("target_kind") == "metadata_method"
+            for event in block_calls
+        )
         if block["reachable"]:
             reachable_observations += len(block_calls)
             reachable_helpers += resolved_helpers
+            reachable_methods += resolved_methods
         else:
             unreachable_observations += len(block_calls)
             unreachable_helpers += resolved_helpers
+            unreachable_methods += resolved_methods
 
     max_reported_blocks = 512
     return {
@@ -1163,6 +1194,8 @@ def _summarize_control_flow_serializer_helper_blocks(
         "control_flow_unreachable_callsite_observation_count": unreachable_observations,
         "control_flow_reachable_resolved_helper_callsite_count": reachable_helpers,
         "control_flow_unreachable_resolved_helper_callsite_count": unreachable_helpers,
+        "control_flow_reachable_resolved_metadata_method_callsite_count": reachable_methods,
+        "control_flow_unreachable_resolved_metadata_method_callsite_count": unreachable_methods,
         "control_flow_conditional_branch_count": conditional_count,
         "control_flow_external_branch_exit_count": external_exit_count,
     }
@@ -1367,10 +1400,13 @@ def _summarize_control_flow_helper_paths(
                     item["kind"] = kind
                 method = observation.get("method")
                 resolution = observation.get("resolution")
+                target_kind = observation.get("target_kind")
                 if type(method) is str:
                     item["method"] = method
                 elif type(resolution) is str:
                     item["resolution"] = resolution
+                if type(target_kind) is str:
+                    item["target_kind"] = target_kind
                 calls.append(item)
         path = {
             "block_indexes": list(block_indexes),
@@ -2069,6 +2105,12 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         indirect_summary = _summarize_relocated_indirect_calls(
             code, target, relocations, method_targets
         )
+        control_flow_summary = _summarize_control_flow_serializer_helper_blocks(
+            code, target, relocations, helper_targets, method_targets=method_targets
+        )
+        control_flow_path_summary = _summarize_control_flow_helper_paths(
+            control_flow_summary
+        )
         network_callsite_summary.append({
             "namespace": method["namespace"],
             "type": method["type"],
@@ -2081,6 +2123,8 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             **helper_summary,
             **named_summary,
             **indirect_summary,
+            **control_flow_summary,
+            **control_flow_path_summary,
             "memory_access_summary": summarize_unsigned_immediate_memory_accesses(code),
         })
     network_callsite_summary.sort(
