@@ -1596,7 +1596,7 @@ def _summarize_serializer_deserializer_path_alignment(
 ):
     """Compare bounded serializer/deserializer helper-family path multisets.
 
-    Primitive helper prefixes are normalized (serializeInt/deserialzeInt ->
+    Primitive helper prefixes are normalized (serializeInt/deserializeInt ->
     Int). Unresolved and ambiguous observations remain explicit tokens. This
     is a static path-shape comparison, not field order or runtime execution.
     """
@@ -1787,11 +1787,26 @@ def _compare_login_session_serializer_paths(callsite_summary):
         comparison = _summarize_serializer_deserializer_path_alignment(
             serializers[0], deserializers[0]
         )
+        serializer_window_truncated = serializers[0].get(
+            "entry_window_truncated", False
+        )
+        deserializer_window_truncated = deserializers[0].get(
+            "entry_window_truncated", False
+        )
+        if (
+            type(serializer_window_truncated) is not bool
+            or type(deserializer_window_truncated) is not bool
+        ):
+            raise ValueError("entry-window truncation flags must be built-in bools")
+        if serializer_window_truncated or deserializer_window_truncated:
+            comparison["comparison_status"] = "partial"
         comparisons.append({
             "image": image,
             "message_type": message_type,
             "serializer_type": serializers[0]["type"],
             "deserializer_type": deserializers[0]["type"],
+            "serializer_entry_window_truncated": serializer_window_truncated,
+            "deserializer_entry_window_truncated": deserializer_window_truncated,
             **comparison,
         })
     return comparisons
