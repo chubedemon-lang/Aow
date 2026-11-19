@@ -585,3 +585,23 @@ compression placement, message IDs, handshake sequence, LoginRequest field
 order and unchanged-APK end-to-end behavior remain unverified. The real AOW
 adapter remains disabled and no official endpoint was contacted. Native
 addresses, raw instructions, APK bytes and extracted assets remain private.
+
+
+## Evidence reconciliation — 2026-11-19
+
+The 2026-11-15 bounded FDE/helper-body pass above remains the strongest static
+attribution for the Receiver membership collection: the helper has a
+HashSet-style bucket traversal, and its static object provenance was
+cross-referenced with `NetworkSettings::.cctor` and the metadata field
+inventory to strongly attribute the collection to
+`NetworkSettings.m_zippetMessageTypes`.
+
+The independent 2026-11-19 bounded Receiver entry-window re-verification
+again observed the second decoded integer flowing to a subsequent helper, but
+did not independently resolve that helper's owner or semantic meaning in that
+pass. This is a narrower recheck, not contrary evidence against the earlier
+static cross-reference. Preserve the result as a **strong static attribution
+only**, not runtime confirmation. The integer is not established as a stable
+numeric wire message ID; runtime branch outcome, compression range/placement,
+complete frame semantics, Sender/Receiver symmetry and APK compatibility
+remain unverified.
