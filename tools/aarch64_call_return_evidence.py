@@ -208,7 +208,9 @@ def summarize_immediate_call_result_zero_tests(code, *, max_observations=128):
             })
 
     return {
-        "analysis_kind": "immediate_call_result_zero_or_bit_test_candidate",
+        # Preserve the original discriminator for existing report consumers.
+        "analysis_kind": "immediate_call_result_zero_test_candidate",
+        "analysis_extensions": ["tbz_tbnz_bit_test"],
         "instruction_count": len(words),
         "recognized_call_count": call_count,
         "immediate_w0_x0_zero_test_count": matched_count,
