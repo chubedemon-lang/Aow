@@ -60,9 +60,9 @@ class SyntheticFrameTests(unittest.TestCase):
 
     def test_rejects_bytes_subclass_before_length_or_iteration_hooks(self):
         decoder = SyntheticFrameDecoder()
-        decoder.feed(b"\\x00")
+        decoder.feed(b"\x00")
         before = decoder.buffered_bytes
-        hostile = HostileBytes(b"\\x01a")
+        hostile = HostileBytes(b"\x01a")
 
         with self.assertRaises(TypeError):
             decoder.feed(hostile)
