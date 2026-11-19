@@ -10,7 +10,7 @@
 | Primitive serialization | Native helper bodies indicate big-endian 16/32/64-bit values, UTF-16 code-unit strings and one-byte boolean/byte operations; isolated codec and synthetic vectors exist | Primitive payload layer only |
 | Message schema | Message type registry and paired serializer/deserializer type definitions | Field order, optionality and wire IDs unknown |
 | Handshake | Login/registration/session type names | Application handshake sequence unknown |
-| Compression/encryption | Compression/decompression and crypto-provider callsites are present; the second decoded Receiver integer flows to a later helper in the bounded 2026-11-19 entry-window recheck | Helper owner, integer semantics, branch outcome, compression range/placement and encryption rules unresolved in the latest pass |
+| Compression/encryption | The 2026-11-15 bounded helper-body/FDE and static-state cross-reference strongly attribute the Receiver membership collection to `NetworkSettings.m_zippetMessageTypes`; the 2026-11-19 pass again observes the second integer flowing to a later helper but does not independently resolve its owner | Strong static attribution only; no runtime confirmation, stable numeric wire-ID mapping, branch outcome, compression range/placement or encryption rules |
 | Login/session | Login, registration, and session-restore fields/methods identified | Wire semantics unknown |
 | Player initialization | Not established | Unknown |
 | World synchronization | Battle, lobby, map, and movement message names identified | Wire semantics unknown |
@@ -230,24 +230,30 @@ fixture or end-to-end exchange is available, so the AOW adapter remains
 disabled.
 
 
-## Receiver zipped-message membership — historical hypothesis, superseded 2026-11-19
+## Receiver zipped-message membership — strong static attribution, not runtime proof
 
-A 2026-11-15 bounded native pass reported a strong static attribution of the
-collection read by Receiver.Cycle to `NetworkSettings.m_zippetMessageTypes`,
-with the second decoded integer treated as a HashSet-style lookup key. That
-was a static hypothesis, not a runtime trace.
-
-The independent 2026-11-19 re-verification recorded in
+The 2026-11-15 bounded native pass documented in
 [NATIVE_NETWORK_CALLSITE_EVIDENCE.md](NATIVE_NETWORK_CALLSITE_EVIDENCE.md)
-recovered the second integer flowing to a subsequent helper, but did not
-resolve that helper's owning type or semantic meaning. The earlier collection
-owner attribution is therefore **not treated as confirmed in the current
-evidence summary**. Keep the owner and integer semantics unresolved until the
-native helper and its object provenance are independently re-established.
+identified a HashSet-style membership helper and strongly attributed its
+collection to `NetworkSettings.m_zippetMessageTypes`. The attribution uses
+the helper's bucket-array traversal plus a shared class-reference/static-state
+cross-reference with `NetworkSettings::.cctor` and the metadata field
+inventory. This is the strongest current static owner hypothesis; it is not
+a runtime observation.
 
-No message-ID meaning, compression flag, branch outcome, decompression range,
-complete frame layout, or Sender.Cycle symmetry is established. The adapter
-remains disabled pending authorized unchanged-client runtime evidence.
+The independent 2026-11-19 entry-window re-verification again observed the
+second decoded integer flowing to a subsequent helper, but did not
+independently resolve that helper's owner or semantics in that bounded pass.
+That limited recheck does not falsify the earlier static cross-reference, and
+it does not add a new independent owner confirmation. Keep the confidence
+label at **strong static attribution only** until the owner path is reproduced
+again from the exact APK build.
+
+The integer is a candidate membership key, not a confirmed numeric wire
+message ID. Runtime branch outcome, compression flag semantics, decompression
+range/placement, complete frame layout, Sender.Cycle symmetry and APK/server
+compatibility remain unverified. The adapter remains disabled pending
+authorized unchanged-client runtime evidence.
 
 
 ## Private local stream-fixture audit tooling — 2026-11-17
