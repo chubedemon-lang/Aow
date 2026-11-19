@@ -6,7 +6,7 @@ message types, keys, tokens, or wire bytes are represented here.
 
 
 class SessionPhaseError(ValueError):
-    """An invalid session transition or value."""
+    """An invalid synthetic session transition or value."""
 
 
 class SyntheticSessionPhases:
@@ -16,37 +16,49 @@ class SyntheticSessionPhases:
     IN_WORLD = "in_world"
     CLOSED = "closed"
 
+    __slots__ = ("_phase", "_player_id")
+
     def __init__(self):
-        self.phase = self.NEW
-        self.player_id = None
+        self._phase = self.NEW
+        self._player_id = None
+
+    @property
+    def phase(self):
+        """Read-only phase; callers must use validated transition methods."""
+        return self._phase
+
+    @property
+    def player_id(self):
+        """Read-only synthetic player identity."""
+        return self._player_id
 
     def negotiate(self):
-        if self.phase != self.NEW:
+        if self._phase != self.NEW:
             raise SessionPhaseError("negotiation requires new session")
-        self.phase = self.NEGOTIATED
+        self._phase = self.NEGOTIATED
 
     def authenticate(self, player_id, verified=False):
         # The caller must independently verify credentials. This gate does
         # not implement authentication and never accepts a password/token.
-        if self.phase != self.NEGOTIATED:
+        if self._phase != self.NEGOTIATED:
             raise SessionPhaseError("authentication out of order")
         if verified is not True:
             raise SessionPhaseError("external verification required")
         if type(player_id) is not int or player_id <= 0:
             raise SessionPhaseError("invalid player id")
-        self.player_id = player_id
-        self.phase = self.AUTHENTICATED
+        self._player_id = player_id
+        self._phase = self.AUTHENTICATED
 
     def enter_world(self):
-        if self.phase != self.AUTHENTICATED:
+        if self._phase != self.AUTHENTICATED:
             raise SessionPhaseError("world entry requires authentication")
-        self.phase = self.IN_WORLD
+        self._phase = self.IN_WORLD
 
     def leave_world(self):
-        if self.phase != self.IN_WORLD:
+        if self._phase != self.IN_WORLD:
             raise SessionPhaseError("not in world")
-        self.phase = self.AUTHENTICATED
+        self._phase = self.AUTHENTICATED
 
     def close(self):
-        self.player_id = None
-        self.phase = self.CLOSED
+        self._player_id = None
+        self._phase = self.CLOSED
