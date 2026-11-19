@@ -585,7 +585,7 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
     def test_client_candidate_alignment_marks_partial_tail_as_lower_bound(self):
         server_stream = frame(b"server")
         complete = frame(b"ok")
-        client_stream = complete + b"\\x7f"
+        client_stream = complete + b"\x7f"
         events = [
             {"direction": "client_to_server", "offset": 0, "length": len(complete)},
             {
