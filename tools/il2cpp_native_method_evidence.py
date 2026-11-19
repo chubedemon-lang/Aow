@@ -752,6 +752,98 @@ def _decode_aarch64_conditional_branch(word, pc):
     return kind, pc + (immediate << 2)
 
 
+
+_AARCH64_CONDITION_NAMES = (
+    "eq", "ne", "cs", "cc", "mi", "pl", "vs", "vc",
+    "hi", "ls", "ge", "lt", "gt", "le", "al", "nv",
+)
+
+
+def _decode_aarch64_conditional_branch_condition(word):
+    """Decode the predicate operands of B.cond, CBZ/CBNZ or TBZ/TBNZ.
+
+    This reports instruction encoding only. It does not evaluate flags or
+    register values and does not infer a runtime-selected edge.
+    """
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+
+    if (word & 0xFF000010) == 0x54000000:  # B.cond
+        condition_code = word & 0xF
+        return {
+            "kind": "b_cond",
+            "condition_code": condition_code,
+            "condition_name": _AARCH64_CONDITION_NAMES[condition_code],
+        }
+
+    if (word & 0x7E000000) == 0x34000000:  # CBZ/CBNZ
+        return {
+            "kind": "cbz_cbnz",
+            "register_index": word & 0x1F,
+            "register_width_bits": 64 if word & (1 << 31) else 32,
+            "predicate": "nonzero" if word & (1 << 24) else "zero",
+        }
+
+    if (word & 0x7E000000) == 0x36000000:  # TBZ/TBNZ
+        bit_index = (((word >> 31) & 1) << 5) | ((word >> 19) & 0x1F)
+        return {
+            "kind": "tbz_tbnz",
+            "register_index": word & 0x1F,
+            "bit_index": bit_index,
+            "predicate": "nonzero" if word & (1 << 24) else "zero",
+        }
+
+    return None
+
+
+def _validate_control_flow_branch_condition(condition):
+    """Validate a redacted conditional-branch predicate object."""
+    if type(condition) is not dict or any(type(key) is not str for key in condition):
+        raise ValueError("conditional branch predicate must be a built-in dict")
+    kind = condition.get("kind")
+    if kind == "b_cond":
+        if set(condition) != {"kind", "condition_code", "condition_name"}:
+            raise ValueError("B.cond predicate fields are invalid")
+        code = condition.get("condition_code")
+        name = condition.get("condition_name")
+        if (
+            type(code) is not int or not 0 <= code < len(_AARCH64_CONDITION_NAMES)
+            or type(name) is not str or name != _AARCH64_CONDITION_NAMES[code]
+        ):
+            raise ValueError("B.cond predicate encoding is invalid")
+    elif kind == "cbz_cbnz":
+        if set(condition) != {
+            "kind", "register_index", "register_width_bits", "predicate"
+        }:
+            raise ValueError("CBZ/CBNZ predicate fields are invalid")
+        if (
+            type(condition.get("register_index")) is not int
+            or not 0 <= condition["register_index"] <= 31
+            or type(condition.get("register_width_bits")) is not int
+            or condition["register_width_bits"] not in (32, 64)
+            or type(condition.get("predicate")) is not str
+            or condition["predicate"] not in ("zero", "nonzero")
+        ):
+            raise ValueError("CBZ/CBNZ predicate encoding is invalid")
+    elif kind == "tbz_tbnz":
+        if set(condition) != {
+            "kind", "register_index", "bit_index", "predicate"
+        }:
+            raise ValueError("TBZ/TBNZ predicate fields are invalid")
+        if (
+            type(condition.get("register_index")) is not int
+            or not 0 <= condition["register_index"] <= 31
+            or type(condition.get("bit_index")) is not int
+            or not 0 <= condition["bit_index"] <= 63
+            or type(condition.get("predicate")) is not str
+            or condition["predicate"] not in ("zero", "nonzero")
+        ):
+            raise ValueError("TBZ/TBNZ predicate encoding is invalid")
+    else:
+        raise ValueError("conditional branch predicate kind is invalid")
+    return dict(condition)
+
+
 def _is_aarch64_return(word):
     """Recognize RET Xn, including RET X30, without interpreting its target."""
     return (
@@ -871,6 +963,7 @@ def _summarize_control_flow_serializer_helper_blocks(
                 "kind": kind,
                 "conditional": True,
                 "target_index": target_slot,
+                "condition": _decode_aarch64_conditional_branch_condition(word),
             }
             conditional_count += 1
             continue
@@ -1013,10 +1106,19 @@ def _summarize_control_flow_serializer_helper_blocks(
         block["terminator"] = (
             None if terminator is None else terminator["kind"]
         )
+        if terminator is not None and terminator["conditional"]:
+            condition = terminator.get("condition")
+            if condition is not None:
+                block["terminator_condition"] = dict(condition)
         block["external_branch_exit"] = bool(
             terminator is not None
             and terminator["conditional"]
             and terminator["target_index"] is None
+        )
+        block["external_fallthrough_exit"] = bool(
+            terminator is not None
+            and terminator["conditional"]
+            and block_end == instruction_count
         )
 
     reachable = set()
@@ -1339,6 +1441,16 @@ def _summarize_control_flow_helper_paths(
                     )
                 previous_instruction_index = instruction_index
 
+        if "external_fallthrough_exit" in block and type(
+            block["external_fallthrough_exit"]
+        ) is not bool:
+            raise ValueError("conditional fallthrough-exit flag is invalid")
+        if "terminator_condition" in block:
+            condition = _validate_control_flow_branch_condition(
+                block["terminator_condition"]
+            )
+            if block.get("terminator") != condition["kind"]:
+                raise ValueError("conditional branch predicate does not match terminator")
         raw_edges = block.get("successor_edges")
         if raw_edges is None:
             # Accept older synthetic summaries, but mark their edge semantics
@@ -1410,12 +1522,47 @@ def _summarize_control_flow_helper_paths(
                 if type(target_kind) is str:
                     item["target_kind"] = target_kind
                 calls.append(item)
+        branch_conditions = []
+        for source, target, edge_kind in edges:
+            if edge_kind not in {
+                "conditional_taken", "conditional_fallthrough"
+            }:
+                continue
+            condition = by_index[source].get("terminator_condition")
+            if condition is not None:
+                branch_conditions.append({
+                    "from_block": source,
+                    "to_block": target,
+                    "edge_kind": edge_kind,
+                    "outcome": (
+                        "taken" if edge_kind == "conditional_taken"
+                        else "fallthrough"
+                    ),
+                    "condition": dict(condition),
+                })
+        if exit_kind in {
+            "conditional_branch_exit", "conditional_fallthrough_exit"
+        }:
+            source = block_indexes[-1]
+            condition = by_index[source].get("terminator_condition")
+            if condition is not None:
+                branch_conditions.append({
+                    "from_block": source,
+                    "to_block": None,
+                    "edge_kind": exit_kind,
+                    "outcome": (
+                        "taken" if exit_kind == "conditional_branch_exit"
+                        else "fallthrough"
+                    ),
+                    "condition": dict(condition),
+                })
         path = {
             "block_indexes": list(block_indexes),
             "edges": [
                 {"from_block": source, "to_block": target, "kind": kind}
                 for source, target, kind in edges
             ],
+            "branch_conditions": branch_conditions,
             "exit_kind": exit_kind,
             "helper_callsite_observations": calls,
         }
@@ -1443,16 +1590,20 @@ def _summarize_control_flow_helper_paths(
                 if not append_path(path, "branch_exit", edges=path_edges):
                     break
             elif terminator in {"b_cond", "cbz_cbnz", "tbz_tbnz"}:
+                has_conditional_exit = False
                 if block.get("external_branch_exit") is True:
+                    has_conditional_exit = True
                     if not append_path(
                         path, "conditional_branch_exit", edges=path_edges
                     ):
                         break
+                if block.get("external_fallthrough_exit") is True:
+                    has_conditional_exit = True
                     if not append_path(
                         path, "conditional_fallthrough_exit", edges=path_edges
                     ):
                         break
-                elif not append_path(
+                if not has_conditional_exit and not append_path(
                     path, "conditional_window_exit", edges=path_edges
                 ):
                     break
@@ -1465,6 +1616,11 @@ def _summarize_control_flow_helper_paths(
         if block.get("external_branch_exit") is True:
             if not append_path(
                 path, "conditional_branch_exit", edges=path_edges
+            ):
+                break
+        if block.get("external_fallthrough_exit") is True:
+            if not append_path(
+                path, "conditional_fallthrough_exit", edges=path_edges
             ):
                 break
 
