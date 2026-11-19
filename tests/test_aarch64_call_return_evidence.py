@@ -7,6 +7,7 @@ from tools.aarch64_call_return_evidence import (
     _decode_cbz_cbnz_on_x0,
     _decode_cmp_zero_on_x0,
     _decode_tbz_tbnz_on_x0,
+    _decode_tst_immediate_on_x0,
     summarize_immediate_call_result_zero_tests,
 )
 
@@ -45,6 +46,16 @@ def tbnz_x0(bit, delta):
 
 def b_cond(condition, delta):
     return 0x54000000 | ((delta & 0x7FFFF) << 5) | condition
+
+
+def tst_w0_one():
+    # Assembled from: tst w0, #1
+    return 0x7200001F
+
+
+def tst_x0_low_byte():
+    # Assembled from: tst x0, #0xff
+    return 0xF2401C1F
 
 
 class ImmediateCallReturnEvidenceTests(unittest.TestCase):
@@ -120,6 +131,70 @@ class ImmediateCallReturnEvidenceTests(unittest.TestCase):
         self.assertEqual(_decode_tbz_tbnz_on_x0(tbz_w0(31, 1))["tested_bit"], 31)
         self.assertEqual(_decode_tbz_tbnz_on_x0(tbnz_x0(63, 1))["tested_bit"], 63)
 
+    def test_direct_call_tst_w0_one_then_b_eq_is_reported(self):
+        report = summarize_immediate_call_result_zero_tests(
+            words(bl(), tst_w0_one(), b_cond(0, 2), 0xD503201F, 0xD65F03C0)
+        )
+        self.assertEqual(report["immediate_tst_zero_bcond_count"], 1)
+        self.assertEqual(report["calls_without_any_recognized_result_test"], 0)
+        # This legacy field deliberately counts only whole-result zero tests.
+        self.assertEqual(report["calls_without_either_zero_test_shape"], 1)
+        self.assertEqual(report["tst_zero_bcond_observations"][0], {
+            "call_instruction_index": 0,
+            "test_instruction_index": 1,
+            "branch_instruction_index": 2,
+            "call_kind": "direct_bl",
+            "tested_register": "w0",
+            "tested_mask_bit_count": 1,
+            "branch_when": "zero",
+            "branch_target_delta_instructions": 2,
+            "branch_target_within_window": True,
+            "branch_target_instruction_index": 4,
+        })
+
+    def test_indirect_call_tst_x0_low_byte_then_b_ne_reports_mask_density(self):
+        report = summarize_immediate_call_result_zero_tests(
+            words(blr(8), tst_x0_low_byte(), b_cond(1, -3), 0xD65F03C0)
+        )
+        self.assertEqual(report["immediate_tst_zero_bcond_count"], 1)
+        item = report["tst_zero_bcond_observations"][0]
+        self.assertEqual(item["call_kind"], "indirect_blr")
+        self.assertEqual(item["tested_register"], "x0")
+        self.assertEqual(item["tested_mask_bit_count"], 8)
+        self.assertEqual(item["branch_when"], "nonzero")
+        self.assertEqual(item["branch_target_delta_instructions"], -3)
+        self.assertFalse(item["branch_target_within_window"])
+        self.assertIsNone(item["branch_target_instruction_index"])
+        self.assertEqual(report["calls_without_any_recognized_result_test"], 0)
+
+    def test_tst_decoder_rejects_other_registers_destinations_and_invalid_masks(self):
+        self.assertEqual(
+            _decode_tst_immediate_on_x0(tst_w0_one()),
+            {"tested_register": "w0", "tested_mask_bit_count": 1},
+        )
+        self.assertEqual(
+            _decode_tst_immediate_on_x0(tst_x0_low_byte()),
+            {"tested_register": "x0", "tested_mask_bit_count": 8},
+        )
+        invalid_words = (
+            0x7200003F,  # Rn is W1, not W0
+            0x72000000,  # Rd is W0, not WZR (not the TST alias)
+            0x3200001F,  # AND immediate, not ANDS/TST
+            0x7240001F,  # N=1 is reserved for the 32-bit form
+            0x7200FC1F,  # reserved all-ones element mask
+            True,
+        )
+        for word in invalid_words:
+            with self.subTest(word=word):
+                self.assertIsNone(_decode_tst_immediate_on_x0(word))
+
+    def test_tst_branch_does_not_bridge_an_intervening_instruction(self):
+        report = summarize_immediate_call_result_zero_tests(
+            words(bl(), tst_w0_one(), 0xD503201F, b_cond(0, 1))
+        )
+        self.assertEqual(report["immediate_tst_zero_bcond_count"], 0)
+        self.assertEqual(report["calls_without_any_recognized_result_test"], 1)
+
     def test_direct_call_cmp_w0_zero_b_eq_is_reported(self):
         report = summarize_immediate_call_result_zero_tests(
             words(bl(), 0x7100001F, b_cond(0, 2), 0xD503201F, 0xD65F03C0)
@@ -192,6 +267,8 @@ class ImmediateCallReturnEvidenceTests(unittest.TestCase):
                 blr(), cbnz_x0(1),
                 bl(), tbz_w0(0, 1),
                 blr(), tbnz_x0(63, 1),
+                bl(), tst_w0_one(), b_cond(0, 1),
+                blr(), tst_x0_low_byte(), b_cond(1, 1),
                 bl(), 0x7100001F, b_cond(0, 1),
                 blr(), 0xF100001F, b_cond(1, 1),
             ),
@@ -199,12 +276,15 @@ class ImmediateCallReturnEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(report["immediate_w0_x0_zero_test_count"], 2)
         self.assertEqual(report["immediate_w0_x0_bit_test_count"], 2)
+        self.assertEqual(report["immediate_tst_zero_bcond_count"], 2)
         self.assertEqual(report["immediate_cmp_zero_bcond_count"], 2)
         self.assertEqual(len(report["observations"]), 1)
         self.assertEqual(len(report["bit_test_observations"]), 1)
+        self.assertEqual(len(report["tst_zero_bcond_observations"]), 1)
         self.assertEqual(len(report["cmp_zero_bcond_observations"]), 1)
         self.assertTrue(report["observations_truncated"])
         self.assertTrue(report["bit_test_observations_truncated"])
+        self.assertTrue(report["tst_zero_bcond_observations_truncated"])
         self.assertTrue(report["cmp_zero_bcond_observations_truncated"])
 
     def test_decoder_rejects_other_registers_and_non_matching_instructions(self):
