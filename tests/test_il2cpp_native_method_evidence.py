@@ -9,6 +9,7 @@ from tools.il2cpp_native_method_evidence import (
     _decode_aarch64_ldr_x_unsigned, _decode_aarch64_mov_x_register,
     _decode_aarch64_bl_target,
     _decode_aarch64_b_target, _decode_aarch64_conditional_branch,
+    _decode_aarch64_conditional_branch_condition,
     _summarize_aarch64_calls, _summarize_control_flow_serializer_helper_blocks,
     _summarize_relocated_indirect_calls,
     _summarize_ordered_serializer_helper_calls,
@@ -925,6 +926,133 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         )
         self.assertIsNone(
             _decode_aarch64_conditional_branch(0xD65F03C0, start)
+        )
+
+    def test_conditional_branch_predicate_decoder_preserves_encoded_operands(self):
+        start = 0x5000
+        self.assertEqual(
+            _decode_aarch64_conditional_branch_condition(
+                self._encode_b_cond(start, start + 12, condition=1)
+            ),
+            {
+                "kind": "b_cond",
+                "condition_code": 1,
+                "condition_name": "ne",
+            },
+        )
+        self.assertEqual(
+            _decode_aarch64_conditional_branch_condition(
+                0x34000000 | (2 << 5)
+            ),
+            {
+                "kind": "cbz_cbnz",
+                "register_index": 2,
+                "register_width_bits": 32,
+                "predicate": "zero",
+            },
+        )
+        self.assertEqual(
+            _decode_aarch64_conditional_branch_condition(
+                0xB5000000 | (3 << 5) | 3
+            ),
+            {
+                "kind": "cbz_cbnz",
+                "register_index": 3,
+                "register_width_bits": 64,
+                "predicate": "nonzero",
+            },
+        )
+        self.assertEqual(
+            _decode_aarch64_conditional_branch_condition(
+                0xB6000000 | (5 << 19) | (5 << 5) | 5
+            ),
+            {
+                "kind": "tbz_tbnz",
+                "register_index": 5,
+                "bit_index": 37,
+                "predicate": "zero",
+            },
+        )
+        self.assertEqual(
+            _decode_aarch64_conditional_branch_condition(
+                0x37000000 | (2 << 5) | 7
+            ),
+            {
+                "kind": "tbz_tbnz",
+                "register_index": 7,
+                "bit_index": 2,
+                "predicate": "nonzero",
+            },
+        )
+        self.assertIsNone(_decode_aarch64_conditional_branch_condition(True))
+        self.assertIsNone(_decode_aarch64_conditional_branch_condition(0xD65F03C0))
+
+    def test_control_flow_paths_preserve_decoded_branch_predicates(self):
+        start = 0x5200
+        words = (
+            self._encode_b_cond(start, start + 8, condition=1),
+            self._encode_bl(start + 4, 0x2000),
+            0xD65F03C0,  # ret
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code, start, {},
+            {0x2000: ["SimpleSerializer::serializeInt"]},
+        )
+        expected = {
+            "kind": "b_cond",
+            "condition_code": 1,
+            "condition_name": "ne",
+        }
+        self.assertEqual(
+            summary["control_flow_basic_blocks"][0]["terminator_condition"],
+            expected,
+        )
+        paths = _summarize_control_flow_helper_paths(summary)
+        records = [
+            item
+            for path in paths["control_flow_paths"]
+            for item in path["branch_conditions"]
+        ]
+        self.assertEqual(len(records), 2)
+        self.assertEqual(
+            {item["outcome"] for item in records},
+            {"taken", "fallthrough"},
+        )
+        self.assertTrue(all(item["condition"] == expected for item in records))
+        self.assertNotIn("0x5200", json.dumps(paths))
+
+    def test_terminal_conditional_branch_reports_out_of_window_fallthrough(self):
+        start = 0x5300
+        words = (
+            0xD503201F,  # nop
+            self._encode_b_cond(start + 4, start, condition=1),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code, start, {}, {}
+        )
+        block = summary["control_flow_basic_blocks"][0]
+        self.assertEqual(block["successors"], [0])
+        self.assertTrue(block["external_fallthrough_exit"])
+        paths = _summarize_control_flow_helper_paths(summary)
+        fallthrough = next(
+            item for item in paths["control_flow_paths"]
+            if item["exit_kind"] == "conditional_fallthrough_exit"
+        )
+        self.assertEqual(
+            fallthrough["branch_conditions"],
+            [{
+                "from_block": 0,
+                "to_block": None,
+                "edge_kind": "conditional_fallthrough_exit",
+                "outcome": "fallthrough",
+                "condition": {
+                    "kind": "b_cond",
+                    "condition_code": 1,
+                    "condition_name": "ne",
+                },
+            }],
         )
 
     def test_control_flow_summary_separates_mutually_exclusive_serializer_paths(self):
