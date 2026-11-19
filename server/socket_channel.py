@@ -162,6 +162,17 @@ class SocketFrameChannel:
                             )
                         except InterruptedError:
                             continue
+                        except ValueError:
+                            # select() rejects a socket whose descriptor was
+                            # invalidated by a concurrent close(). Normalize
+                            # that close race to the channel's I/O error type.
+                            with self._state_lock:
+                                closed = self._closed
+                            if closed:
+                                raise OSError(
+                                    "socket channel closed during frame receive"
+                                ) from None
+                            raise
                         if not readable:
                             raise socket.timeout("frame receive deadline exceeded")
                         try:

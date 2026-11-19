@@ -140,6 +140,28 @@ class SocketFrameChannelTests(unittest.TestCase):
             channel.close()
             peer.close()
 
+    def test_close_racing_with_frame_deadline_select_is_reported_as_io_error(self):
+        channel, peer, reader = make_channel(timeout=1.0, frame_timeout=1.0)
+        try:
+            reader.feed(b"\x03a")
+
+            def close_then_raise_value_error(*_args):
+                channel.close()
+                raise ValueError("file descriptor cannot be negative")
+
+            with patch(
+                "server.socket_channel.select.select",
+                side_effect=close_then_raise_value_error,
+            ):
+                with self.assertRaisesRegex(OSError, "closed during frame receive"):
+                    channel.receive_frame()
+
+            self.assertTrue(channel.closed)
+            self.assertEqual(reader.available, 2)
+        finally:
+            channel.close()
+            peer.close()
+
     def test_frame_deadline_before_any_bytes_does_not_pin_a_frame(self):
         channel, peer, _reader = make_channel(timeout=1.0, frame_timeout=0.1)
         try:
