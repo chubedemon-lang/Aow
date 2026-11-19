@@ -879,5 +879,117 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
 
 
 
+    def test_client_to_server_candidate_is_opt_in_and_does_not_claim_symmetry(self):
+        client_stream = frame(b"client")
+        default_result = self.audit(
+            fixture_bytes([frame(b"server")], [client_stream])
+        )
+        self.assertEqual(
+            default_result["client_to_server"]["analysis"],
+            "not_attempted_sender_symmetry_unproven",
+        )
+        self.assertNotIn(
+            "length_prefix_candidate", default_result["client_to_server"]
+        )
+
+        result = self.audit(
+            fixture_bytes([frame(b"server")], [client_stream[:3], client_stream[3:]]),
+            client_to_server_length_offset=0,
+        )
+        candidate = result["client_to_server"]["length_prefix_candidate"]
+        self.assertEqual(
+            result["client_to_server"]["analysis"],
+            "operator_selected_generic_signed_be32_length_hypothesis_only",
+        )
+        self.assertEqual(candidate["length_field_offset_from_stream_start"], 0)
+        self.assertTrue(candidate["candidate_stream_fully_consumed"])
+        self.assertEqual(candidate["frame_sizes"], [len(client_stream)])
+        self.assertFalse(result["sender_symmetry_verified"])
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
+
+    def test_client_to_server_candidate_can_test_an_opaque_four_byte_prefix(self):
+        payload = b"outbound"
+        client_stream = b"ABCD" + len(payload).to_bytes(4, "big", signed=True) + payload
+        result = self.audit(
+            fixture_bytes([frame(b"server")], [client_stream[:5], client_stream[5:]]),
+            client_to_server_length_offset=4,
+        )
+        candidate = result["client_to_server"]["length_prefix_candidate"]
+        self.assertEqual(candidate["length_field_offset_from_stream_start"], 4)
+        self.assertTrue(candidate["bytes_before_length_field_are_opaque"])
+        self.assertEqual(candidate["frame_sizes"], [len(client_stream)])
+        self.assertEqual(candidate["unclassified_stream_bytes"], 0)
+        self.assertFalse(result["sender_symmetry_verified"])
+
+    def test_client_to_server_candidate_reports_negative_length_without_guessing(self):
+        client_stream = bytes.fromhex("ffffffff")
+        result = self.audit(
+            fixture_bytes([frame(b"server")], [client_stream]),
+            client_to_server_length_offset=0,
+        )
+        candidate = result["client_to_server"]["length_prefix_candidate"]
+        self.assertEqual(candidate["status"], "candidate_not_recovered")
+        self.assertEqual(candidate["reason"], "InvalidCandidateLength")
+        self.assertEqual(candidate["candidate_bytes_consumed"], 0)
+        self.assertEqual(candidate["unclassified_stream_bytes"], 4)
+        self.assertFalse(candidate["candidate_stream_fully_consumed"])
+        self.assertFalse(result["wire_contract_verified"])
+
+    def test_client_to_server_candidate_rejects_invalid_offset_and_small_buffer(self):
+        for offset in (True, False, 1, -1, 8, "0"):
+            with self.subTest(offset=offset), self.assertRaisesRegex(
+                FixtureAuditError, "exactly 0 or 4"
+            ):
+                self.audit(
+                    fixture_bytes([frame(b"server")], [frame(b"client")]),
+                    client_to_server_length_offset=offset,
+                )
+        with self.assertRaisesRegex(FixtureAuditError, "buffer limit"):
+            self.audit(
+                fixture_bytes([frame(b"server")], [b"ABCD" + bytes.fromhex("00000000")]),
+                max_payload_bytes=0,
+                max_buffer_bytes=7,
+                client_to_server_length_offset=4,
+            )
+
+    def test_client_to_server_candidate_report_never_emits_private_payload(self):
+        payload = bytes.fromhex("d15ea5ed11223344")
+        client_stream = frame(payload)
+        result = self.audit(
+            fixture_bytes([frame(b"server")], [client_stream]),
+            client_to_server_length_offset=0,
+        )
+        serialized = json.dumps(result)
+        self.assertNotIn(payload.hex(), serialized)
+        self.assertNotIn(client_stream.hex(), serialized)
+        self.assertFalse(result["raw_bytes_emitted"])
+        self.assertFalse(result["sender_symmetry_verified"])
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
+
+    def test_cli_opt_in_client_candidate_prints_redacted_summary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private-fixture.json"
+            payload = bytes.fromhex("cafef00d")
+            path.write_bytes(
+                fixture_bytes([frame(b"server")], [frame(payload)])
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main([
+                    "--fixture", str(path),
+                    "--apk-sha256", APK_SHA256,
+                    "--client-to-server-length-offset", "0",
+                ])
+            self.assertEqual(code, 0)
+            self.assertNotIn(payload.hex(), output.getvalue())
+            self.assertIn(
+                "operator_selected_generic_signed_be32_length_hypothesis_only",
+                output.getvalue(),
+            )
+            self.assertIn('"sender_symmetry_verified": false', output.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

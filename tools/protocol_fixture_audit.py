@@ -17,6 +17,11 @@ from server.aow_framing_candidate import (
     make_four_byte_length_candidate_reader,
 )
 from server.frame_reader import FrameReaderError
+from server.signed_be_length_candidate import (
+    CandidateLengthTooLarge,
+    InvalidCandidateLength,
+    make_signed_be_length_candidate_reader,
+)
 
 
 MAX_FIXTURE_BYTES = 20 * 1024 * 1024
@@ -437,6 +442,72 @@ def _inspect_receive_candidate(chunks, *, max_payload_bytes, max_buffer_bytes):
     }
 
 
+
+def _inspect_signed_be_length_candidate(
+    chunks, *, length_offset, max_payload_bytes, max_buffer_bytes
+):
+    """Test one explicitly selected generic BE32 length hypothesis.
+
+    This is deliberately independent of the Receiver HTTP-marker candidate.
+    It is never treated as evidence that Sender and Receiver are symmetric.
+    """
+    stream_bytes = sum(len(chunk) for chunk in chunks)
+    reader = make_signed_be_length_candidate_reader(
+        length_offset=length_offset,
+        max_payload_bytes=max_payload_bytes,
+        max_buffer_bytes=max_buffer_bytes,
+    )
+    frame_sizes = []
+    frame_end_offsets = []
+    consumed_frame_bytes = [0]
+    try:
+        for chunk in chunks:
+            offset = 0
+            while offset < len(chunk):
+                _collect_complete_frames(
+                    reader, frame_sizes, frame_end_offsets, consumed_frame_bytes
+                )
+                available_room = reader.max_buffer_bytes - reader.available
+                if available_room <= 0:
+                    raise FrameReaderError("candidate reader cannot make progress")
+                amount = min(available_room, len(chunk) - offset)
+                reader.feed(chunk[offset:offset + amount])
+                offset += amount
+                _collect_complete_frames(
+                    reader, frame_sizes, frame_end_offsets, consumed_frame_bytes
+                )
+
+        reader.close()
+        _collect_complete_frames(
+            reader, frame_sizes, frame_end_offsets, consumed_frame_bytes
+        )
+        status = "candidate_frames_recovered"
+        reason = None
+        truncated = False
+    except (
+        InvalidCandidateLength,
+        CandidateLengthTooLarge,
+        FrameReaderError,
+    ) as exc:
+        truncated = isinstance(exc, _CandidateFrameCountLimit)
+        status = "candidate_not_recovered"
+        reason = type(exc).__name__
+
+    candidate_bytes_consumed = consumed_frame_bytes[0]
+    unclassified_stream_bytes = stream_bytes - candidate_bytes_consumed
+    return {
+        "status": status,
+        "reason": reason,
+        "frame_count": len(frame_sizes),
+        "frame_count_is_lower_bound": truncated,
+        "frame_sizes_truncated": truncated,
+        "frame_sizes": frame_sizes,
+        "candidate_bytes_consumed": candidate_bytes_consumed,
+        "unclassified_stream_bytes": unclassified_stream_bytes,
+        "candidate_stream_fully_consumed": unclassified_stream_bytes == 0,
+    }
+
+
 def _summarize_receive_candidate_io_alignment(
     candidate, frame_end_offsets, io_events, *, schema_version
 ):
@@ -504,6 +575,7 @@ def audit_fixture_bytes(
     max_payload_bytes=DEFAULT_MAX_PAYLOAD_BYTES,
     max_buffer_bytes=DEFAULT_MAX_BUFFER_BYTES,
     max_fixture_bytes=MAX_FIXTURE_BYTES,
+    client_to_server_length_offset=None,
 ):
     """Return a redacted candidate summary for a private stream fixture.
 
@@ -533,6 +605,18 @@ def audit_fixture_bytes(
         or not 0 <= max_payload_bytes <= min(0x7FFFFFFF, max_buffer_bytes - 4)
     ):
         raise FixtureAuditError("candidate payload limit is invalid")
+    if client_to_server_length_offset is not None:
+        if (
+            type(client_to_server_length_offset) is not int
+            or client_to_server_length_offset not in (0, 4)
+        ):
+            raise FixtureAuditError(
+                "client-to-server candidate length offset must be exactly 0 or 4"
+            )
+        if max_buffer_bytes < client_to_server_length_offset + 4:
+            raise FixtureAuditError(
+                "client-to-server candidate buffer limit is smaller than its prefix"
+            )
 
     try:
         text = content.decode("utf-8")
@@ -620,7 +704,31 @@ def audit_fixture_bytes(
         document.get("io_events", ()),
         schema_version=schema_version,
     )
+    client_candidate = None
+    if client_to_server_length_offset is not None:
+        client_candidate = _inspect_signed_be_length_candidate(
+            client_chunks,
+            length_offset=client_to_server_length_offset,
+            max_payload_bytes=max_payload_bytes,
+            max_buffer_bytes=max_buffer_bytes,
+        )
     candidate_status = candidate["status"]
+    client_to_server_report = {
+        "chunk_count": len(client_chunks),
+        "stream_bytes": client_bytes,
+        "analysis": (
+            "not_attempted_sender_symmetry_unproven"
+            if client_candidate is None
+            else "operator_selected_generic_signed_be32_length_hypothesis_only"
+        ),
+    }
+    if client_candidate is not None:
+        client_to_server_report["length_prefix_candidate"] = {
+            "length_field_offset_from_stream_start": client_to_server_length_offset,
+            "bytes_before_length_field_are_opaque": True,
+            "interpretation": "candidate_fit_does_not_prove_sender_symmetry",
+            **client_candidate,
+        }
     return {
         "status": (
             "candidate_analysis_only"
@@ -637,11 +745,8 @@ def audit_fixture_bytes(
             "stream_bytes": server_bytes,
             "receive_candidate": candidate,
         },
-        "client_to_server": {
-            "chunk_count": len(client_chunks),
-            "stream_bytes": client_bytes,
-            "analysis": "not_attempted_sender_symmetry_unproven",
-        },
+        "client_to_server": client_to_server_report,
+        "sender_symmetry_verified": False,
         "exchange_order": exchange_order,
         "receive_candidate_io_alignment": receive_candidate_io_alignment,
         "wire_contract_verified": False,
@@ -657,6 +762,7 @@ def inspect_fixture_file(
     max_payload_bytes=DEFAULT_MAX_PAYLOAD_BYTES,
     max_buffer_bytes=DEFAULT_MAX_BUFFER_BYTES,
     max_fixture_bytes=MAX_FIXTURE_BYTES,
+    client_to_server_length_offset=None,
 ):
     """Read a private fixture safely and return only its redacted summary."""
     content = _read_regular_file_no_follow(path, max_fixture_bytes)
@@ -666,6 +772,7 @@ def inspect_fixture_file(
         max_payload_bytes=max_payload_bytes,
         max_buffer_bytes=max_buffer_bytes,
         max_fixture_bytes=max_fixture_bytes,
+        client_to_server_length_offset=client_to_server_length_offset,
     )
 
 
@@ -676,6 +783,16 @@ def main(argv=None):
     parser.add_argument("--max-payload-bytes", type=int, default=DEFAULT_MAX_PAYLOAD_BYTES)
     parser.add_argument("--max-buffer-bytes", type=int, default=DEFAULT_MAX_BUFFER_BYTES)
     parser.add_argument("--max-fixture-bytes", type=int, default=MAX_FIXTURE_BYTES)
+    parser.add_argument(
+        "--client-to-server-length-offset",
+        type=int,
+        choices=(0, 4),
+        default=None,
+        help=(
+            "opt-in generic signed-BE32 length hypothesis for the client-to-server "
+            "stream; does not assert Sender/Receiver symmetry"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -685,6 +802,7 @@ def main(argv=None):
             max_payload_bytes=args.max_payload_bytes,
             max_buffer_bytes=args.max_buffer_bytes,
             max_fixture_bytes=args.max_fixture_bytes,
+            client_to_server_length_offset=args.client_to_server_length_offset,
         )
     except FixtureAuditError as exc:
         print(json.dumps({"status": "rejected", "reason": str(exc)}, sort_keys=True))

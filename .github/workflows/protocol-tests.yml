@@ -59,6 +59,8 @@ on:
       - 'docs/STREAM_IO.md'
       - 'server/aow_framing_candidate.py'
       - 'tests/test_aow_framing_candidate.py'
+      - 'server/signed_be_length_candidate.py'
+      - 'tests/test_signed_be_length_candidate.py'
       - 'docs/STREAM_READER.md'
       - 'docs/RECEIVER_LENGTH_PREFIX_CANDIDATE.md'
       - 'server/transport.py'
@@ -204,6 +206,7 @@ jobs:
             server/stream_buffer.py \
             server/stream_writer.py \
             server/aow_framing_candidate.py \
+            server/signed_be_length_candidate.py \
             server/offline_frame_probe.py \
             server/offline_protocol_evidence.py \
             server/offline_packet_fixture.py \
@@ -240,6 +243,10 @@ jobs:
           python -m unittest discover -s tests -p 'test_stream_writer.py' -v
       - name: Isolated AOW receive-length candidate tests (synthetic stream only)
         run: python -m unittest discover -s tests -p 'test_aow_framing_candidate.py' -v
+      - name: Generic signed-BE32 candidate tests (synthetic streams only)
+        run: python -m unittest discover -s tests -p 'test_signed_be_length_candidate.py' -v
+      - name: Private fixture auditor candidate tests (synthetic fixtures only)
+        run: python -m unittest discover -s tests -p 'test_protocol_fixture_audit.py' -v
       - name: Transport evidence boundary tests (synthetic codec only)
         run: python -m unittest discover -s tests -p 'test_transport.py' -v
       - name: Protocol evidence registry tests (metadata only)
