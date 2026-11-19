@@ -271,3 +271,24 @@ handshake/login proof, or APK compatibility result. See
 The authorized unchanged APK was re-read privately with a matching established SHA-256, 7,368 ZIP entries, no duplicate names and a passing full ZIP CRC check. A fresh bounded native pass revalidated the receive-side callsite pattern: a fixed count of 4 is supplied to the initial `ClientNetworkStreamBuffer.SetDataAvailable` and `AbstractClientBuffer.Write` calls, then `SimpleDeserializer.deserializeInt` is called at offset zero. Its result is compared with the HTTP marker; on the non-marker branch that result is reused as the next read/copy count. This supports the existing receive-side four-byte big-endian length-prefix candidate, but does not establish a complete frame or runtime behavior.
 
 The sender window still has two integer serializer callsites, compression and stream-write callsites, without proven symmetry. LoginRequest serializer/deserializer primitive-helper counts were rechecked, but field order remains unknown. The `NetworkSettings.HeaderLength` field-to-read-site relationship, handshake sequence, authentication semantics and unchanged-APK end-to-end compatibility remain unverified. The real APK adapter stays disabled pending an authorized client-side byte fixture or local runtime trace. No APK, native asset or capture was committed, and no official endpoint was contacted.
+
+## Opt-in client-to-server length hypothesis audit — 2026-11-19
+
+The private stream fixture auditor now has an optional, operator-selected
+generic signed big-endian 32-bit length hypothesis for the client-to-server
+stream. It can test a length field at byte offset 0, or at byte offset 4 after
+four opaque bytes. The default remains summary-only; no client-to-server
+decoding is performed unless the operator explicitly selects one candidate.
+
+This is a **tool capability**, not a new APK observation. A full candidate
+parse only means the supplied private bytes fit the selected generic
+interpretation under the chosen resource bounds. It does not identify the
+opaque prefix, prove that either integer is a message ID or length, establish
+Sender/Receiver symmetry, verify compression placement, or authenticate
+fixture provenance. The report always leaves
+`sender_symmetry_verified`, `wire_contract_verified`, and
+`apk_compatible` false. A failed candidate does not disprove other layouts.
+
+Keep the fixture private. Do not commit APK bytes, native assets, packet
+captures, endpoints, credentials, or player data. No official endpoint is
+contacted by this offline tool.
