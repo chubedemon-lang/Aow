@@ -165,7 +165,7 @@ class SocketFrameChannelTests(unittest.TestCase):
     def test_close_racing_with_empty_select_result_is_reported_as_io_error(self):
         channel, peer, reader = make_channel(timeout=1.0, frame_timeout=1.0)
         try:
-            reader.feed(b"\\x03a")
+            reader.feed(b"\x03a")
 
             def close_then_return_empty(*_args):
                 channel.close()
@@ -187,7 +187,7 @@ class SocketFrameChannelTests(unittest.TestCase):
     def test_close_wins_when_frame_deadline_expires_during_clock_check(self):
         channel, peer, reader = make_channel(timeout=1.0, frame_timeout=1.0)
         try:
-            reader.feed(b"\\x03a")
+            reader.feed(b"\x03a")
 
             def close_during_clock_check():
                 channel.close()
