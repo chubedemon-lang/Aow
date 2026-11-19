@@ -521,3 +521,67 @@ The new ADR decoder was added to the generic analyzer, but no ADR instruction wa
 ### Remaining limits
 
 The relationship between the `NetworkSettings.HeaderLength` metadata field and the receive-side fixed four-byte setup remains unresolved. The effective runtime field value, complete outer frame, sender/receiver symmetry, compression/encryption placement, message IDs, handshake order, LoginRequest field order and unchanged-APK end-to-end behavior remain unverified. The APK-facing adapter remains disabled. No extracted endpoint was contacted.
+
+## Independent private APK/native re-verification — 2026-11-19
+
+The original `aow.apk` was re-materialized into a private workspace and read
+successfully in this pass. Its SHA-256 again matched
+`c00bd00d30f625b85dfcc0159b3b058ca459c10f9917844a5301163480c7624e`.
+The APK is 256,468,647 bytes; its ZIP has 7,368 entries, no duplicate member
+names, and the full CRC test reports no bad member. The metadata member is
+26,021,348 bytes and the ARM64 `libil2cpp.so` member is 166,150,720 bytes.
+No APK or extracted member was added to the repository.
+
+A fresh offline IL2CPP v31 / ELF64 AArch64 registration pass matched all
+165 metadata images to native codegen modules. It rechecked 197,631 metadata
+method definitions and pointer slots; 164,023 pointer slots have
+AArch64-relative relocations to executable sections. The native type-pointer
+registration scan found one unique table of 124,985 entries.
+
+### Receiver and sender entry-window recheck
+
+The fresh bounded `Receiver.Cycle` entry window contains two direct
+`ClientNetworkStreamBuffer.SetDataAvailable` callsites, two
+`AbstractClientBuffer.Write` callsites, two
+`SimpleDeserializer.deserializeInt` callsites, one
+`ClientArrayUtils.ZipDecompress` callsite and one `MessageMeta` constructor
+callsite.
+
+At the first read pair, the statically recovered count arguments are both 4:
+the first `SetDataAvailable` receives 4 and the following
+`AbstractClientBuffer.Write` receives 4. The first `deserializeInt` result
+is compared with the HTTP marker. On the non-marker branch, that same result
+is passed to the next `SetDataAvailable` and `AbstractClientBuffer.Write`
+count arguments. This independently rechecks the receive-side four-byte
+length-prefix **candidate** and the special HTTP-marker branch. It does not
+prove runtime execution or a complete packet contract.
+
+The second `deserializeInt` result is passed to a subsequent helper in the
+bounded window; the owning type and semantic meaning of that helper remain
+unresolved in this pass. No message-ID or dictionary interpretation is added.
+
+The fresh bounded `Sender.Cycle` entry window contains two
+`SimpleSerializer.serializeInt` callsites, one
+`ClientArrayUtils.ZipCompression` callsite, one
+`ClientNetworkStreamBuffer.SetDataAvailable` callsite and two
+`ClientStreamBuffer.Write` callsites. These associations do not establish
+which serialized integer is a frame length, the exact write ordering on an
+executed path, or Sender/Receiver symmetry.
+
+### Static NetworkSettings defaults rechecked
+
+The v31 field/default tables again identify
+`NetworkSettings.HeaderLength` with static default 4 and
+`NetworkSettings.ZipIntermediateBufferSize` with static default 4096.
+Both field type indexes resolve to IL2CPP `I4` through the unique native
+type-pointer registration table. These are metadata defaults, not proof that
+the runtime initializes or reads either field on the active connection path.
+
+### Remaining limits
+
+No authorized client-to-server runtime byte fixture or test-client trace was
+available in this pass. The complete outer frame, sender/receiver symmetry,
+compression placement, message IDs, handshake sequence, LoginRequest field
+order and unchanged-APK end-to-end behavior remain unverified. The real AOW
+adapter remains disabled and no official endpoint was contacted. Native
+addresses, raw instructions, APK bytes and extracted assets remain private.
