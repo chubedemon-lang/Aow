@@ -1194,8 +1194,10 @@ def _summarize_control_flow_serializer_helper_blocks(
         "control_flow_unreachable_callsite_observation_count": unreachable_observations,
         "control_flow_reachable_resolved_helper_callsite_count": reachable_helpers,
         "control_flow_unreachable_resolved_helper_callsite_count": unreachable_helpers,
-        "control_flow_reachable_resolved_metadata_method_callsite_count": reachable_methods,
-        "control_flow_unreachable_resolved_metadata_method_callsite_count": unreachable_methods,
+        "control_flow_reachable_resolved_metadata_method_callsite_count":
+            reachable_methods,
+        "control_flow_unreachable_resolved_metadata_method_callsite_count":
+            unreachable_methods,
         "control_flow_conditional_branch_count": conditional_count,
         "control_flow_external_branch_exit_count": external_exit_count,
     }
