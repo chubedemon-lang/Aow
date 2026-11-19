@@ -1740,6 +1740,38 @@ class SerializerDeserializerPathAlignmentTests(unittest.TestCase):
         self.assertEqual(comparisons[0]["comparison_status"], "bounded")
         self.assertEqual(comparisons[0]["shared_path_instance_count"], 1)
 
+    def test_truncated_entry_window_makes_pair_comparison_partial(self):
+        serializer = self._summary((
+            "return",
+            [self._call("direct_call", method="SimpleSerializer::serializeInt")],
+        ))
+        deserializer = self._summary((
+            "return",
+            [self._call("direct_call", method="SimpleDeserializer::deserializeInt")],
+        ))
+        entries = [
+            {
+                "type": "LoginRequestSTSerializer",
+                "method": "serialize",
+                "image": "ScriptsAssembly.dll",
+                "entry_window_truncated": True,
+                **serializer,
+            },
+            {
+                "type": "LoginRequestSTDeserializer",
+                "method": "deserialize",
+                "image": "ScriptsAssembly.dll",
+                "entry_window_truncated": False,
+                **deserializer,
+            },
+        ]
+
+        comparison = _compare_login_session_serializer_paths(entries)[0]
+
+        self.assertEqual(comparison["comparison_status"], "partial")
+        self.assertTrue(comparison["serializer_entry_window_truncated"])
+        self.assertFalse(comparison["deserializer_entry_window_truncated"])
+
     def test_missing_or_ambiguous_pair_is_reported_without_guessing(self):
         entry = {
             "type": "SessionRestoreRequestSTSerializer",
