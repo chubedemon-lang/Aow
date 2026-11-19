@@ -12,7 +12,9 @@ from tools.il2cpp_native_method_evidence import (
     _summarize_aarch64_calls, _summarize_control_flow_serializer_helper_blocks,
     _summarize_relocated_indirect_calls,
     _summarize_ordered_serializer_helper_calls,
-    _summarize_control_flow_helper_paths, inspect_bytes,
+    _summarize_control_flow_helper_paths,
+    _summarize_serializer_deserializer_path_alignment,
+    _compare_login_session_serializer_paths, inspect_bytes,
 )
 
 
@@ -1574,6 +1576,183 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertEqual(paths["control_flow_path_analysis_status"], "bounded_with_cycles")
         self.assertFalse(paths["control_flow_paths_truncated"])
         self.assertEqual(paths["control_flow_path_cycle_count"], 1)
+
+
+
+class SerializerDeserializerPathAlignmentTests(unittest.TestCase):
+    @staticmethod
+    def _summary(*paths, status="bounded", truncated=False):
+        return {
+            "control_flow_path_analysis_status": status,
+            "control_flow_path_count": len(paths),
+            "control_flow_paths_truncated": truncated,
+            "control_flow_paths": [
+                {
+                    "exit_kind": exit_kind,
+                    "helper_callsite_observations": observations,
+                }
+                for exit_kind, observations in paths
+            ],
+        }
+
+    @staticmethod
+    def _call(kind, method=None, resolution=None):
+        result = {"kind": kind}
+        if method is not None:
+            result["method"] = method
+        if resolution is not None:
+            result["resolution"] = resolution
+        return result
+
+    def test_primitive_serializer_and_deserializer_names_normalize_to_same_families(self):
+        serializer = self._summary((
+            "return",
+            [
+                self._call("direct_call", method="SimpleSerializer::serializeInt"),
+                self._call("indirect_call", method="SimpleSerializer::serializeString"),
+            ],
+        ))
+        deserializer = self._summary((
+            "return",
+            [
+                self._call("direct_call", method="SimpleDeserializer::deserializeInt"),
+                self._call("indirect_call", method="SimpleDeserializer::deserializeString"),
+            ],
+        ))
+
+        result = _summarize_serializer_deserializer_path_alignment(
+            serializer, deserializer
+        )
+
+        self.assertEqual(result["comparison_status"], "bounded")
+        self.assertEqual(result["shared_path_signature_count"], 1)
+        self.assertEqual(result["shared_path_instance_count"], 1)
+        self.assertEqual(
+            result["shared_path_signatures"][0]["helper_families"],
+            ["Int", "String"],
+        )
+        self.assertFalse(result["field_order_inferred"])
+
+    def test_branch_exclusive_helper_sequences_are_not_flattened_together(self):
+        serializer = self._summary(
+            ("return", [self._call("direct_call", method="SimpleSerializer::serializeInt")]),
+            ("return", [self._call("direct_call", method="SimpleSerializer::serializeString")]),
+        )
+        deserializer = self._summary(
+            ("return", [self._call("direct_call", method="SimpleDeserializer::deserializeInt")]),
+            ("return", [self._call("direct_call", method="SimpleDeserializer::deserializeBoolean")]),
+        )
+
+        result = _summarize_serializer_deserializer_path_alignment(
+            serializer, deserializer
+        )
+
+        self.assertEqual(result["shared_path_instance_count"], 1)
+        self.assertEqual(result["serializer_only_path_instance_count"], 1)
+        self.assertEqual(result["deserializer_only_path_instance_count"], 1)
+        self.assertEqual(
+            result["serializer_only_path_signatures"][0]["helper_families"],
+            ["String"],
+        )
+        self.assertEqual(
+            result["deserializer_only_path_signatures"][0]["helper_families"],
+            ["Boolean"],
+        )
+
+    def test_unresolved_calls_remain_explicit_and_truncated_inputs_are_partial(self):
+        serializer = self._summary(
+            ("return", [
+                self._call("direct_call", method="SimpleSerializer::serializeInt"),
+                self._call(
+                    "indirect_call",
+                    resolution="not_resolved_as_serializer_helper",
+                ),
+            ]),
+            status="truncated",
+            truncated=True,
+        )
+        deserializer = self._summary(
+            ("return", [
+                self._call("direct_call", method="SimpleDeserializer::deserializeInt"),
+            ]),
+        )
+
+        result = _summarize_serializer_deserializer_path_alignment(
+            serializer, deserializer
+        )
+
+        self.assertEqual(result["comparison_status"], "partial")
+        self.assertEqual(result["serializer_unresolved_observation_count"], 1)
+        self.assertEqual(result["shared_path_signature_count"], 0)
+        self.assertEqual(
+            result["serializer_only_path_signatures"][0]["unresolved_observations"],
+            [{
+                "kind": "indirect_call",
+                "resolution": "not_resolved_as_serializer_helper",
+            }],
+        )
+
+    def test_malformed_path_counts_and_observations_fail_closed(self):
+        serializer = self._summary(
+            ("return", [self._call("direct_call", method="SimpleSerializer::serializeInt")])
+        )
+        serializer["control_flow_path_count"] = 2
+        deserializer = self._summary()
+        with self.assertRaisesRegex(ValueError, "path count"):
+            _summarize_serializer_deserializer_path_alignment(
+                serializer, deserializer
+            )
+
+        malformed = self._summary(("return", [{"kind": "direct_call"}]))
+        with self.assertRaisesRegex(ValueError, "no method or resolution"):
+            _summarize_serializer_deserializer_path_alignment(
+                malformed, deserializer
+            )
+
+    def test_login_session_pairs_are_grouped_by_metadata_type_and_image(self):
+        serializer = self._summary((
+            "return",
+            [self._call("direct_call", method="SimpleSerializer::serializeInt")],
+        ))
+        deserializer = self._summary((
+            "return",
+            [self._call("direct_call", method="SimpleDeserializer::deserializeInt")],
+        ))
+        entries = [
+            {
+                "type": "LoginRequestSTSerializer",
+                "method": "serialize",
+                "image": "ScriptsAssembly.dll",
+                **serializer,
+            },
+            {
+                "type": "LoginRequestSTDeserializer",
+                "method": "deserialize",
+                "image": "ScriptsAssembly.dll",
+                **deserializer,
+            },
+        ]
+
+        comparisons = _compare_login_session_serializer_paths(entries)
+
+        self.assertEqual(len(comparisons), 1)
+        self.assertEqual(comparisons[0]["message_type"], "LoginRequest")
+        self.assertEqual(comparisons[0]["comparison_status"], "bounded")
+        self.assertEqual(comparisons[0]["shared_path_instance_count"], 1)
+
+    def test_missing_or_ambiguous_pair_is_reported_without_guessing(self):
+        entry = {
+            "type": "SessionRestoreRequestSTSerializer",
+            "method": "serialize",
+            "image": "ScriptsAssembly.dll",
+        }
+        comparisons = _compare_login_session_serializer_paths([entry, dict(entry)])
+        self.assertEqual(len(comparisons), 1)
+        self.assertEqual(
+            comparisons[0]["comparison_status"], "unpaired_or_ambiguous"
+        )
+        self.assertEqual(comparisons[0]["serializer_entry_count"], 2)
+        self.assertEqual(comparisons[0]["deserializer_entry_count"], 0)
 
 
 if __name__ == "__main__":
