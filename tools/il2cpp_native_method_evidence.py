@@ -1590,6 +1590,213 @@ def _summarize_named_method_calls(code, start_va, method_targets):
     }
 
 
+
+def _summarize_serializer_deserializer_path_alignment(
+    serializer_summary, deserializer_summary
+):
+    """Compare bounded serializer/deserializer helper-family path multisets.
+
+    Primitive helper prefixes are normalized (serializeInt/deserialzeInt ->
+    Int). Unresolved and ambiguous observations remain explicit tokens. This
+    is a static path-shape comparison, not field order or runtime execution.
+    """
+    def collect(summary, side):
+        if type(summary) is not dict:
+            raise ValueError(f"{side} path summary must be a built-in dict")
+        paths = summary.get("control_flow_paths")
+        path_count = summary.get("control_flow_path_count")
+        truncated = summary.get("control_flow_paths_truncated")
+        status = summary.get("control_flow_path_analysis_status")
+        if type(paths) is not list:
+            raise ValueError(f"{side} paths must be a built-in list")
+        if type(path_count) is not int or path_count != len(paths):
+            raise ValueError(f"{side} path count does not match its path list")
+        if type(truncated) is not bool:
+            raise ValueError(f"{side} truncation flag must be a built-in bool")
+        if type(status) is not str:
+            raise ValueError(f"{side} path status must be a built-in string")
+
+        signatures = Counter()
+        unresolved_count = 0
+        for path in paths:
+            if type(path) is not dict:
+                raise ValueError(f"{side} path entries must be built-in dicts")
+            exit_kind = path.get("exit_kind")
+            observations = path.get("helper_callsite_observations")
+            if type(exit_kind) is not str or type(observations) is not list:
+                raise ValueError(f"{side} path entry is malformed")
+            tokens = []
+            for observation in observations:
+                if type(observation) is not dict:
+                    raise ValueError(
+                        f"{side} callsite observations must be built-in dicts"
+                    )
+                kind = observation.get("kind")
+                method = observation.get("method")
+                resolution = observation.get("resolution")
+                if type(method) is str and method:
+                    leaf = method.rsplit("::", 1)[-1]
+                    if leaf.startswith("serialize") and len(leaf) > 9:
+                        family = leaf[9:]
+                    elif leaf.startswith("deserialize") and len(leaf) > 11:
+                        family = leaf[11:]
+                    else:
+                        family = leaf
+                    tokens.append(("helper", family))
+                elif type(resolution) is str and resolution:
+                    if type(kind) is not str:
+                        raise ValueError(
+                            f"{side} unresolved callsite kind is invalid"
+                        )
+                    tokens.append(("unresolved", kind, resolution))
+                    unresolved_count += 1
+                else:
+                    raise ValueError(
+                        f"{side} callsite observation has no method or resolution"
+                    )
+            signatures[(exit_kind, tuple(tokens))] += 1
+        return signatures, len(paths), unresolved_count, status, truncated
+
+    serializer, serializer_count, serializer_unresolved, serializer_status, serializer_truncated = (
+        collect(serializer_summary, "serializer")
+    )
+    deserializer, deserializer_count, deserializer_unresolved, deserializer_status, deserializer_truncated = (
+        collect(deserializer_summary, "deserializer")
+    )
+    shared_keys = serializer.keys() & deserializer.keys()
+    shared_instances = sum(
+        min(serializer[key], deserializer[key]) for key in shared_keys
+    )
+    serializer_only = sum(
+        serializer[key] - min(serializer[key], deserializer[key])
+        for key in serializer
+    )
+    deserializer_only = sum(
+        deserializer[key] - min(serializer[key], deserializer[key])
+        for key in deserializer
+    )
+
+    complete_statuses = {"bounded", "bounded_with_cycles", "empty"}
+    if (
+        serializer_truncated
+        or deserializer_truncated
+        or serializer_status not in complete_statuses
+        or deserializer_status not in complete_statuses
+    ):
+        comparison_status = "partial"
+    elif (
+        serializer_status == "bounded_with_cycles"
+        or deserializer_status == "bounded_with_cycles"
+    ):
+        comparison_status = "bounded_with_cycles"
+    elif serializer_status == "empty" or deserializer_status == "empty":
+        comparison_status = "empty"
+    else:
+        comparison_status = "bounded"
+
+    def render(counter):
+        rendered = []
+        for (exit_kind, tokens), occurrences in sorted(
+            counter.items(), key=lambda item: repr(item[0])
+        ):
+            families = []
+            unresolved = []
+            for token in tokens:
+                if token[0] == "helper":
+                    families.append(token[1])
+                else:
+                    unresolved.append({
+                        "kind": token[1],
+                        "resolution": token[2],
+                    })
+            rendered.append({
+                "exit_kind": exit_kind,
+                "helper_families": families,
+                "unresolved_observations": unresolved,
+                "occurrences": occurrences,
+            })
+        return rendered
+
+    shared = Counter({
+        key: min(serializer[key], deserializer[key])
+        for key in shared_keys
+    })
+    serializer_excess = Counter({
+        key: serializer[key] - min(serializer[key], deserializer[key])
+        for key in serializer
+        if serializer[key] > deserializer[key]
+    })
+    deserializer_excess = Counter({
+        key: deserializer[key] - min(serializer[key], deserializer[key])
+        for key in deserializer
+        if deserializer[key] > serializer[key]
+    })
+    return {
+        "comparison_kind": "bounded_control_flow_helper_family_path_multiset",
+        "comparison_status": comparison_status,
+        "path_semantics": (
+            "conditional edges are possible; simple paths only; cycles are not unrolled"
+        ),
+        "field_order_inferred": False,
+        "serializer_path_count": serializer_count,
+        "deserializer_path_count": deserializer_count,
+        "shared_path_signature_count": len(shared_keys),
+        "shared_path_instance_count": shared_instances,
+        "serializer_only_path_instance_count": serializer_only,
+        "deserializer_only_path_instance_count": deserializer_only,
+        "serializer_unresolved_observation_count": serializer_unresolved,
+        "deserializer_unresolved_observation_count": deserializer_unresolved,
+        "shared_path_signatures": render(shared),
+        "serializer_only_path_signatures": render(serializer_excess),
+        "deserializer_only_path_signatures": render(deserializer_excess),
+    }
+
+
+def _compare_login_session_serializer_paths(callsite_summary):
+    """Pair metadata-named STSerializer/STDeserializer path summaries."""
+    if type(callsite_summary) is not list:
+        raise ValueError("callsite summary must be a built-in list")
+    groups = defaultdict(lambda: {"serializer": [], "deserializer": []})
+    for entry in callsite_summary:
+        if type(entry) is not dict:
+            raise ValueError("callsite summary entries must be built-in dicts")
+        type_name = entry.get("type")
+        method_name = entry.get("method")
+        image = entry.get("image")
+        if type(type_name) is not str or type(image) is not str:
+            continue
+        if type_name.endswith("STSerializer") and method_name == "serialize":
+            groups[(image, type_name[:-len("STSerializer")])]["serializer"].append(entry)
+        elif type_name.endswith("STDeserializer") and method_name == "deserialize":
+            groups[(image, type_name[:-len("STDeserializer")])]["deserializer"].append(entry)
+
+    comparisons = []
+    for (image, message_type), pair in sorted(groups.items()):
+        serializers = pair["serializer"]
+        deserializers = pair["deserializer"]
+        if len(serializers) != 1 or len(deserializers) != 1:
+            comparisons.append({
+                "image": image,
+                "message_type": message_type,
+                "serializer_entry_count": len(serializers),
+                "deserializer_entry_count": len(deserializers),
+                "comparison_status": "unpaired_or_ambiguous",
+                "field_order_inferred": False,
+            })
+            continue
+        comparison = _summarize_serializer_deserializer_path_alignment(
+            serializers[0], deserializers[0]
+        )
+        comparisons.append({
+            "image": image,
+            "message_type": message_type,
+            "serializer_type": serializers[0]["type"],
+            "deserializer_type": deserializers[0]["type"],
+            **comparison,
+        })
+    return comparisons
+
+
 def _entrypoint_windows(sections, relocations, tables, images, executable):
     """Bound each entry window by the next distinct executable entry in its section."""
     by_section = defaultdict(set)
@@ -1769,6 +1976,9 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "memory_access_summary": summarize_unsigned_immediate_memory_accesses(code),
         })
     callsite_summary.sort(key=lambda x: (x["type"], x["method"]))
+    serializer_deserializer_path_comparisons = (
+        _compare_login_session_serializer_paths(callsite_summary)
+    )
 
     network_callsite_summary = []
     for method, section_name, target, window_bytes, truncated, code in network_windows:
@@ -1837,11 +2047,13 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         ),
         "methods": evidence,
         "serializer_callsite_summary": callsite_summary,
+        "serializer_deserializer_path_comparisons": serializer_deserializer_path_comparisons,
         "network_callsite_summary": network_callsite_summary,
         "network_field_summary": network_fields,
         "primitive_helper_callsite_summary": primitive_helper_summary,
         "native_addresses_emitted": False,
         "raw_instructions_emitted": False,
+        "serializer_path_comparison_field_order_inferred": False,
         "interpretation": (
             "Metadata method slots are associated with relocation-backed executable "
             "entries. Serializer and primitive-helper callsite summaries count direct AArch64 BL calls "
