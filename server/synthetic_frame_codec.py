@@ -28,10 +28,11 @@ class SyntheticFrameDecoder:
         """Return complete payloads; retain partial bytes for the next feed.
 
         Limit each incoming chunk before copying it into the internal buffer.
-        Reject invalid lengths immediately and clear buffered data on failure.
+        Reject non-canonical byte inputs before calling any overridable
+        subclass hooks, and clear buffered data on size or framing failure.
         """
-        if not isinstance(data, bytes):
-            raise TypeError("data must be immutable bytes")
+        if type(data) is not bytes:
+            raise TypeError("data must be exact immutable bytes")
         if len(data) > self.max_chunk_bytes:
             self._buffer.clear()
             raise FrameError("synthetic input chunk exceeds configured limit")
@@ -51,8 +52,8 @@ class SyntheticFrameDecoder:
 
 def encode_synthetic_frame(payload, max_payload=4096):
     """Encode a test fixture only; never use to claim APK compatibility."""
-    if not isinstance(payload, bytes):
-        raise TypeError("payload must be immutable bytes")
+    if type(payload) is not bytes:
+        raise TypeError("payload must be exact immutable bytes")
     if type(max_payload) is not int or not 1 <= max_payload <= 65535:
         raise ValueError("max_payload must be 1..65535")
     if not 1 <= len(payload) <= max_payload:

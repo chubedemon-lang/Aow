@@ -6,6 +6,16 @@ from server.synthetic_frame_codec import (
 )
 
 
+class HostileBytes(bytes):
+    """A bytes subtype whose Python-level hooks must never be invoked."""
+
+    def __len__(self):
+        raise AssertionError("custom __len__ hook executed")
+
+    def __iter__(self):
+        raise AssertionError("custom __iter__ hook executed")
+
+
 class SyntheticFrameTests(unittest.TestCase):
     def test_fragmented_header_and_body(self):
         frame = encode_synthetic_frame(b"hello")
@@ -47,6 +57,19 @@ class SyntheticFrameTests(unittest.TestCase):
             SyntheticFrameDecoder().feed(bytearray(b"ab"))
         with self.assertRaises(TypeError):
             encode_synthetic_frame("not bytes")
+
+    def test_rejects_bytes_subclass_before_length_or_iteration_hooks(self):
+        decoder = SyntheticFrameDecoder()
+        decoder.feed(b"\x00")
+        before = decoder.buffered_bytes
+        hostile = HostileBytes(b"\x01a")
+
+        with self.assertRaises(TypeError):
+            decoder.feed(hostile)
+        self.assertEqual(decoder.buffered_bytes, before)
+
+        with self.assertRaises(TypeError):
+            encode_synthetic_frame(hostile)
 
     def test_maximum_allowed_payload(self):
         frame = encode_synthetic_frame(b"x" * 8, max_payload=8)
