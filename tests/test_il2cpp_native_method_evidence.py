@@ -999,6 +999,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             code, start, {},
             {0x2000: ["SimpleSerializer::serializeInt"]},
         )
+        self.assertEqual(summary["control_flow_instruction_count"], len(words))
         expected = {
             "kind": "b_cond",
             "condition_code": 1,
@@ -1575,6 +1576,96 @@ class NativeMethodEvidenceTests(unittest.TestCase):
                 "method": "SimpleSerializer::serializeInt",
             }],
         )
+
+
+    def test_path_summary_rejects_instruction_range_outside_declared_window(self):
+        summary = {
+            "control_flow_instruction_count": 3,
+            "control_flow_block_count": 1,
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_basic_blocks": [{
+                "block_index": 0,
+                "instruction_start": 2,
+                "instruction_count": 2,
+                "successors": [],
+                "terminator": "return",
+                "callsite_observations": [],
+            }],
+        }
+        with self.assertRaisesRegex(ValueError, "outside declared window"):
+            _summarize_control_flow_helper_paths(summary)
+
+    def test_path_summary_rejects_gapped_instruction_window_partition(self):
+        summary = {
+            "control_flow_instruction_count": 3,
+            "control_flow_block_count": 2,
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_basic_blocks": [
+                {
+                    "block_index": 0,
+                    "instruction_start": 0,
+                    "instruction_count": 1,
+                    "successors": [1],
+                    "successor_edges": [
+                        {"target_block": 1, "kind": "branch_target"},
+                    ],
+                    "terminator": "b",
+                    "callsite_observations": [],
+                },
+                {
+                    "block_index": 1,
+                    "instruction_start": 2,
+                    "instruction_count": 1,
+                    "successors": [],
+                    "successor_edges": [],
+                    "terminator": "return",
+                    "callsite_observations": [],
+                },
+            ],
+        }
+        with self.assertRaisesRegex(ValueError, "contiguous and non-overlapping"):
+            _summarize_control_flow_helper_paths(summary)
+
+    def test_path_summary_requires_ranges_for_declared_instruction_window(self):
+        summary = {
+            "control_flow_instruction_count": 1,
+            "control_flow_block_count": 1,
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_basic_blocks": [{
+                "block_index": 0,
+                "successors": [],
+                "terminator": "return",
+                "callsite_observations": [],
+            }],
+        }
+        with self.assertRaisesRegex(ValueError, "require instruction ranges"):
+            _summarize_control_flow_helper_paths(summary)
+
+    def test_path_summary_rejects_conditional_edges_without_predicate(self):
+        summary = {
+            "control_flow_block_count": 2,
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_basic_blocks": [
+                {
+                    "block_index": 0,
+                    "successors": [1],
+                    "successor_edges": [
+                        {"target_block": 1, "kind": "conditional_taken"},
+                    ],
+                    "terminator": "b_cond",
+                    "callsite_observations": [],
+                },
+                {
+                    "block_index": 1,
+                    "successors": [],
+                    "successor_edges": [],
+                    "terminator": "return",
+                    "callsite_observations": [],
+                },
+            ],
+        }
+        with self.assertRaisesRegex(ValueError, "require a matching branch predicate"):
+            _summarize_control_flow_helper_paths(summary)
 
     def test_control_flow_paths_preserve_mutually_exclusive_helper_sequences(self):
         summary = {
