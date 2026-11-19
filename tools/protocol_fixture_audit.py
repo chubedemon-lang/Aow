@@ -502,6 +502,7 @@ def _inspect_signed_be_length_candidate(
         "frame_count_is_lower_bound": truncated,
         "frame_sizes_truncated": truncated,
         "frame_sizes": frame_sizes,
+        "_frame_end_offsets": frame_end_offsets,
         "candidate_bytes_consumed": candidate_bytes_consumed,
         "unclassified_stream_bytes": unclassified_stream_bytes,
         "candidate_stream_fully_consumed": unclassified_stream_bytes == 0,
@@ -561,6 +562,66 @@ def _summarize_receive_candidate_io_alignment(
         "io_event_ends_aligned_with_known_candidate_frame_boundaries": aligned_io_ends,
         "io_event_ends_without_known_candidate_frame_boundary": (
             len(server_event_ends) - aligned_io_ends
+        ),
+        "candidate_boundary_set_complete": candidate_complete,
+        "absolute_offsets_emitted": False,
+        "packet_boundaries_verified": False,
+    }
+
+
+def _summarize_client_candidate_io_alignment(
+    candidate, frame_end_offsets, io_events, *, schema_version
+):
+    """Correlate redacted C2S candidate frame ends with observed C2S I/O ends.
+
+    I/O event boundaries describe local write observations, not packet
+    boundaries. The summary emits counts only and never exposes stream offsets.
+    """
+    candidate_complete = (
+        candidate["status"] == "candidate_frames_recovered"
+        and candidate["candidate_stream_fully_consumed"]
+        and not candidate["frame_count_is_lower_bound"]
+    )
+    frame_end_set = set(frame_end_offsets)
+    if schema_version == 1:
+        return {
+            "status": "io_event_boundaries_not_recorded_schema_v1",
+            "candidate_frame_boundary_count": len(frame_end_offsets),
+            "candidate_frame_boundary_count_is_lower_bound": not candidate_complete,
+            "client_to_server_io_event_boundary_count": None,
+            "candidate_frame_boundaries_aligned_with_io_event_ends": None,
+            "candidate_frame_boundaries_not_aligned_with_io_event_ends": None,
+            "io_event_ends_aligned_with_known_candidate_frame_boundaries": None,
+            "io_event_ends_without_known_candidate_frame_boundary": None,
+            "candidate_boundary_set_complete": candidate_complete,
+            "absolute_offsets_emitted": False,
+            "packet_boundaries_verified": False,
+        }
+
+    client_event_ends = tuple(
+        event["offset"] + event["length"]
+        for event in io_events
+        if event["direction"] == "client_to_server"
+    )
+    client_event_end_set = set(client_event_ends)
+    aligned_frame_ends = sum(
+        end_offset in client_event_end_set for end_offset in frame_end_offsets
+    )
+    aligned_io_ends = sum(
+        end_offset in frame_end_set for end_offset in client_event_ends
+    )
+    return {
+        "status": "unverified_candidate_io_boundary_correlation",
+        "candidate_frame_boundary_count": len(frame_end_offsets),
+        "candidate_frame_boundary_count_is_lower_bound": not candidate_complete,
+        "client_to_server_io_event_boundary_count": len(client_event_ends),
+        "candidate_frame_boundaries_aligned_with_io_event_ends": aligned_frame_ends,
+        "candidate_frame_boundaries_not_aligned_with_io_event_ends": (
+            len(frame_end_offsets) - aligned_frame_ends
+        ),
+        "io_event_ends_aligned_with_known_candidate_frame_boundaries": aligned_io_ends,
+        "io_event_ends_without_known_candidate_frame_boundary": (
+            len(client_event_ends) - aligned_io_ends
         ),
         "candidate_boundary_set_complete": candidate_complete,
         "absolute_offsets_emitted": False,
@@ -705,12 +766,32 @@ def audit_fixture_bytes(
         schema_version=schema_version,
     )
     client_candidate = None
+    client_candidate_io_alignment = {
+        "status": "not_attempted_sender_symmetry_unproven",
+        "candidate_frame_boundary_count": None,
+        "candidate_frame_boundary_count_is_lower_bound": None,
+        "client_to_server_io_event_boundary_count": None,
+        "candidate_frame_boundaries_aligned_with_io_event_ends": None,
+        "candidate_frame_boundaries_not_aligned_with_io_event_ends": None,
+        "io_event_ends_aligned_with_known_candidate_frame_boundaries": None,
+        "io_event_ends_without_known_candidate_frame_boundary": None,
+        "candidate_boundary_set_complete": False,
+        "absolute_offsets_emitted": False,
+        "packet_boundaries_verified": False,
+    }
     if client_to_server_length_offset is not None:
         client_candidate = _inspect_signed_be_length_candidate(
             client_chunks,
             length_offset=client_to_server_length_offset,
             max_payload_bytes=max_payload_bytes,
             max_buffer_bytes=max_buffer_bytes,
+        )
+        client_frame_end_offsets = client_candidate.pop("_frame_end_offsets")
+        client_candidate_io_alignment = _summarize_client_candidate_io_alignment(
+            client_candidate,
+            client_frame_end_offsets,
+            document.get("io_events", ()),
+            schema_version=schema_version,
         )
     candidate_status = candidate["status"]
     client_to_server_report = {
@@ -749,6 +830,7 @@ def audit_fixture_bytes(
         "sender_symmetry_verified": False,
         "exchange_order": exchange_order,
         "receive_candidate_io_alignment": receive_candidate_io_alignment,
+        "client_to_server_candidate_io_alignment": client_candidate_io_alignment,
         "wire_contract_verified": False,
         "apk_compatible": False,
         "raw_bytes_emitted": False,
