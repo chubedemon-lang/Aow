@@ -94,3 +94,24 @@ proprietary asset is committed.
 A pair is also labeled partial when either native entry window itself was
 truncated by the analyzer's maximum-window bound, even if its CFG path
 enumeration completed within the available bytes.
+
+
+## Cross-side common helper-prefix diagnostics
+
+The serializer/deserializer path comparison also reports the distribution of
+longest common prefixes across every bounded serializer-path/deserializer-path
+pair. Helper observations are normalized to primitive families before
+comparison; unresolved observations compare only when their kind and
+resolution labels match exactly.
+
+The report includes the total number of path pairs, the maximum common-prefix
+length, the number of pairs attaining that maximum, and a histogram by prefix
+length. An empty side produces zero path pairs and an empty histogram. This
+makes branch-level divergence easier to prioritize when no complete path
+signature is shared.
+
+The metric is strictly a comparison of static helper-observation sequences.
+It does not map helper calls to message fields, infer field order or count,
+choose a runtime branch, or prove that any callsite executes. Simple paths,
+bounded entry windows, unresolved calls, and possible conditional edges retain
+their existing limitations. Tests use synthetic summaries only.

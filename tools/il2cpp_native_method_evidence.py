@@ -1618,6 +1618,7 @@ def _summarize_serializer_deserializer_path_alignment(
 
         signatures = Counter()
         unresolved_count = 0
+        path_tokens = []
         for path in paths:
             if type(path) is not dict:
                 raise ValueError(f"{side} path entries must be built-in dicts")
@@ -1654,14 +1655,38 @@ def _summarize_serializer_deserializer_path_alignment(
                     raise ValueError(
                         f"{side} callsite observation has no method or resolution"
                     )
-            signatures[(exit_kind, tuple(tokens))] += 1
-        return signatures, len(paths), unresolved_count, status, truncated
+            token_sequence = tuple(tokens)
+            path_tokens.append(token_sequence)
+            signatures[(exit_kind, token_sequence)] += 1
+        return (
+            signatures, len(paths), unresolved_count, status, truncated,
+            path_tokens,
+        )
 
-    serializer, serializer_count, serializer_unresolved, serializer_status, serializer_truncated = (
-        collect(serializer_summary, "serializer")
-    )
-    deserializer, deserializer_count, deserializer_unresolved, deserializer_status, deserializer_truncated = (
-        collect(deserializer_summary, "deserializer")
+    (
+        serializer, serializer_count, serializer_unresolved,
+        serializer_status, serializer_truncated, serializer_paths,
+    ) = collect(serializer_summary, "serializer")
+    (
+        deserializer, deserializer_count, deserializer_unresolved,
+        deserializer_status, deserializer_truncated, deserializer_paths,
+    ) = collect(deserializer_summary, "deserializer")
+    prefix_lengths = Counter()
+    for serializer_path in serializer_paths:
+        for deserializer_path in deserializer_paths:
+            prefix_length = 0
+            limit = min(len(serializer_path), len(deserializer_path))
+            while (
+                prefix_length < limit
+                and serializer_path[prefix_length]
+                == deserializer_path[prefix_length]
+            ):
+                prefix_length += 1
+            prefix_lengths[prefix_length] += 1
+    maximum_common_prefix_length = max(prefix_lengths, default=0)
+    path_pair_count = len(serializer_paths) * len(deserializer_paths)
+    maximum_common_prefix_pair_count = prefix_lengths.get(
+        maximum_common_prefix_length, 0
     )
     shared_keys = serializer.keys() & deserializer.keys()
     shared_instances = sum(
@@ -1740,6 +1765,13 @@ def _summarize_serializer_deserializer_path_alignment(
         "field_order_inferred": False,
         "serializer_path_count": serializer_count,
         "deserializer_path_count": deserializer_count,
+        "path_pair_count": path_pair_count,
+        "maximum_common_helper_prefix_length": maximum_common_prefix_length,
+        "maximum_common_helper_prefix_pair_count": maximum_common_prefix_pair_count,
+        "common_helper_prefix_length_histogram": [
+            {"prefix_length": length, "path_pair_count": count}
+            for length, count in sorted(prefix_lengths.items())
+        ],
         "shared_path_signature_count": len(shared_keys),
         "shared_path_instance_count": shared_instances,
         "serializer_only_path_instance_count": serializer_only,
