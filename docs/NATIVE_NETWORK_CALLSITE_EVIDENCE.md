@@ -641,3 +641,19 @@ their prior shape and do not receive a fabricated index.
 This is location metadata only. It does not evaluate B.cond flags or CBZ/TBZ
 register values, infer a runtime-selected edge, or establish packet framing,
 message semantics, handshake/login order, or APK compatibility.
+
+
+## CFG instruction-window integrity — 2026-11-20
+
+Newly generated CFG summaries include `control_flow_instruction_count`, the
+number of AArch64 instructions in the bounded method window. When this field is
+present, the path summarizer requires every basic block to carry a valid
+instruction range, rejects ranges outside the declared window, and verifies
+that block ranges form a contiguous, non-overlapping partition of the window.
+Legacy hand-authored summaries without the extent field remain supported.
+
+Conditional successor-edge labels now require a matching decoded branch
+predicate on a conditional terminator. This prevents malformed or partially
+constructed summaries from being presented as predicate-backed branch paths.
+These checks validate the internal consistency of static evidence only; they
+do not evaluate predicates, select runtime edges, or establish wire semantics.

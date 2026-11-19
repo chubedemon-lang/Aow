@@ -875,6 +875,7 @@ def _summarize_control_flow_serializer_helper_blocks(
     if instruction_count == 0:
         return {
             "control_flow_analysis_kind": "bounded_intraprocedural_basic_blocks",
+            "control_flow_instruction_count": 0,
             "control_flow_block_count": 0,
             "control_flow_basic_blocks": [],
             "control_flow_basic_blocks_truncated": False,
@@ -1289,6 +1290,7 @@ def _summarize_control_flow_serializer_helper_blocks(
     max_reported_blocks = 512
     return {
         "control_flow_analysis_kind": "bounded_intraprocedural_basic_blocks",
+        "control_flow_instruction_count": instruction_count,
         "control_flow_block_count": len(blocks),
         "control_flow_basic_blocks": blocks[:max_reported_blocks],
         "control_flow_basic_blocks_truncated": len(blocks) > max_reported_blocks,
@@ -1329,6 +1331,23 @@ def _summarize_control_flow_helper_paths(
     block_count = control_flow_summary.get("control_flow_block_count")
     if type(block_count) is not int or block_count < 0:
         raise ValueError("control-flow block count is invalid")
+    has_declared_instruction_count = (
+        "control_flow_instruction_count" in control_flow_summary
+    )
+    declared_instruction_count = control_flow_summary.get(
+        "control_flow_instruction_count"
+    )
+    if has_declared_instruction_count:
+        if (
+            type(declared_instruction_count) is not int
+            or declared_instruction_count < 0
+        ):
+            raise ValueError("control-flow instruction count is invalid")
+        if (
+            (block_count == 0 and declared_instruction_count != 0)
+            or (block_count > 0 and declared_instruction_count == 0)
+        ):
+            raise ValueError("control-flow instruction count does not match blocks")
     if (
         control_flow_summary.get("control_flow_basic_blocks_truncated") is True
         or len(blocks) != block_count
@@ -1415,6 +1434,18 @@ def _summarize_control_flow_helper_paths(
         else:
             instruction_start = None
             instruction_count = None
+        if has_declared_instruction_count and not has_instruction_range:
+            raise ValueError(
+                "control-flow blocks require instruction ranges when window count is declared"
+            )
+
+        if (
+            has_declared_instruction_count
+            and instruction_start + instruction_count > declared_instruction_count
+        ):
+            raise ValueError(
+                "control-flow block instruction range is outside declared window"
+            )
 
         previous_instruction_index = None
         if has_instruction_indexes and all(has_instruction_indexes):
@@ -1480,6 +1511,19 @@ def _summarize_control_flow_helper_paths(
                 normalized_edges.append({"target_block": target, "kind": kind})
             if {edge["target_block"] for edge in normalized_edges} != set(successors):
                 raise ValueError("control-flow successor edges do not cover successors")
+        conditional_edge_kinds = {
+            "conditional_taken", "conditional_fallthrough"
+        }
+        if any(edge["kind"] in conditional_edge_kinds for edge in normalized_edges):
+            if (
+                block.get("terminator") not in {
+                    "b_cond", "cbz_cbnz", "tbz_tbnz"
+                }
+                or "terminator_condition" not in block
+            ):
+                raise ValueError(
+                    "conditional successor edges require a matching branch predicate"
+                )
         edges_by_index[index] = normalized_edges
         by_index[index] = block
 
@@ -1487,6 +1531,21 @@ def _summarize_control_flow_helper_paths(
         raise ValueError("control-flow block indexes are incomplete")
     if 0 not in by_index:
         raise ValueError("control-flow entry block is missing")
+    if has_declared_instruction_count:
+        expected_start = 0
+        for index in range(block_count):
+            block = by_index[index]
+            instruction_start = block["instruction_start"]
+            instruction_count = block["instruction_count"]
+            if instruction_start != expected_start:
+                raise ValueError(
+                    "control-flow block instruction ranges must be contiguous and non-overlapping"
+                )
+            expected_start += instruction_count
+        if expected_start != declared_instruction_count:
+            raise ValueError(
+                "control-flow block instruction ranges do not cover declared window"
+            )
 
     paths = []
     truncated = False
