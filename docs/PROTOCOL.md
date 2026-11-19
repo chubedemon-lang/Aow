@@ -10,7 +10,7 @@
 | Primitive serialization | Native helper bodies indicate big-endian 16/32/64-bit values, UTF-16 code-unit strings and one-byte boolean/byte operations; isolated codec and synthetic vectors exist | Primitive payload layer only |
 | Message schema | Message type registry and paired serializer/deserializer type definitions | Field order, optionality and wire IDs unknown |
 | Handshake | Login/registration/session type names | Application handshake sequence unknown |
-| Compression/encryption | Zipped/encrypted/decrypted buffer and crypto-provider identifiers; Receiver.Cycle's second decoded integer is passed to a HashSet-style membership helper strongly attributed to NetworkSettings.m_zippetMessageTypes | Membership-set owner is strongly attributed statically; branch outcome, compression range/placement and encryption rules remain unverified |
+| Compression/encryption | Compression/decompression and crypto-provider callsites are present; the second decoded Receiver integer flows to a later helper in the bounded 2026-11-19 entry-window recheck | Helper owner, integer semantics, branch outcome, compression range/placement and encryption rules unresolved in the latest pass |
 | Login/session | Login, registration, and session-restore fields/methods identified | Wire semantics unknown |
 | Player initialization | Not established | Unknown |
 | World synchronization | Battle, lobby, map, and movement message names identified | Wire semantics unknown |
