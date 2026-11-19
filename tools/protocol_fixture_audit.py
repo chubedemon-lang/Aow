@@ -509,6 +509,87 @@ def _inspect_signed_be_length_candidate(
     }
 
 
+def _summarize_candidate_event_overlaps(
+    frame_end_offsets, io_events, *, direction, schema_version, candidate_complete
+):
+    """Summarize frame/event interval overlap without exposing stream positions.
+
+    Candidate frames and observed I/O events are contiguous, ordered partitions
+    of their respective prefixes. A linear sweep counts overlaps, allowing the
+    report to distinguish a candidate frame split across multiple I/O calls
+    from one I/O call containing multiple candidate frames. These are local
+    observation relationships only, never packet-boundary evidence.
+    """
+    unavailable = {
+        "candidate_frames_overlapping_io_events": None,
+        "candidate_frames_spanning_multiple_io_events": None,
+        "io_events_overlapping_candidate_frames": None,
+        "io_events_overlapping_multiple_candidate_frames": None,
+        "io_events_without_complete_candidate_frame": None,
+        "candidate_frames_without_io_event": None,
+        "frame_event_overlap_pair_count": None,
+    }
+    if schema_version == 1:
+        return {
+            "status": "io_event_boundaries_not_recorded_schema_v1",
+            **unavailable,
+            "candidate_frame_set_complete": candidate_complete,
+            "absolute_offsets_emitted": False,
+            "packet_boundaries_verified": False,
+        }
+
+    event_ranges = tuple(
+        (event["offset"], event["offset"] + event["length"])
+        for event in io_events
+        if event["direction"] == direction
+    )
+    frame_overlap_counts = [0] * len(frame_end_offsets)
+    event_overlap_counts = [0] * len(event_ranges)
+
+    frame_index = 0
+    event_index = 0
+    frame_start = 0
+    while frame_index < len(frame_end_offsets) and event_index < len(event_ranges):
+        frame_end = frame_end_offsets[frame_index]
+        event_start, event_end = event_ranges[event_index]
+
+        if frame_start < event_end and event_start < frame_end:
+            frame_overlap_counts[frame_index] += 1
+            event_overlap_counts[event_index] += 1
+
+        if frame_end <= event_end:
+            frame_start = frame_end
+            frame_index += 1
+        if event_end <= frame_end:
+            event_index += 1
+
+    return {
+        "status": "unverified_candidate_frame_io_interval_overlap",
+        "candidate_frames_overlapping_io_events": sum(
+            count > 0 for count in frame_overlap_counts
+        ),
+        "candidate_frames_spanning_multiple_io_events": sum(
+            count > 1 for count in frame_overlap_counts
+        ),
+        "io_events_overlapping_candidate_frames": sum(
+            count > 0 for count in event_overlap_counts
+        ),
+        "io_events_overlapping_multiple_candidate_frames": sum(
+            count > 1 for count in event_overlap_counts
+        ),
+        "io_events_without_complete_candidate_frame": sum(
+            count == 0 for count in event_overlap_counts
+        ),
+        "candidate_frames_without_io_event": sum(
+            count == 0 for count in frame_overlap_counts
+        ),
+        "frame_event_overlap_pair_count": sum(frame_overlap_counts),
+        "candidate_frame_set_complete": candidate_complete,
+        "absolute_offsets_emitted": False,
+        "packet_boundaries_verified": False,
+    }
+
+
 def _summarize_receive_candidate_io_alignment(
     candidate, frame_end_offsets, io_events, *, schema_version
 ):
@@ -534,6 +615,13 @@ def _summarize_receive_candidate_io_alignment(
             "io_event_ends_aligned_with_known_candidate_frame_boundaries": None,
             "io_event_ends_without_known_candidate_frame_boundary": None,
             "candidate_boundary_set_complete": candidate_complete,
+            "interval_overlap": _summarize_candidate_event_overlaps(
+                frame_end_offsets,
+                io_events,
+                direction="server_to_client",
+                schema_version=schema_version,
+                candidate_complete=candidate_complete,
+            ),
             "absolute_offsets_emitted": False,
             "packet_boundaries_verified": False,
         }
@@ -564,6 +652,13 @@ def _summarize_receive_candidate_io_alignment(
             len(server_event_ends) - aligned_io_ends
         ),
         "candidate_boundary_set_complete": candidate_complete,
+        "interval_overlap": _summarize_candidate_event_overlaps(
+            frame_end_offsets,
+            io_events,
+            direction="server_to_client",
+            schema_version=schema_version,
+            candidate_complete=candidate_complete,
+        ),
         "absolute_offsets_emitted": False,
         "packet_boundaries_verified": False,
     }
@@ -594,6 +689,13 @@ def _summarize_client_candidate_io_alignment(
             "io_event_ends_aligned_with_known_candidate_frame_boundaries": None,
             "io_event_ends_without_known_candidate_frame_boundary": None,
             "candidate_boundary_set_complete": candidate_complete,
+            "interval_overlap": _summarize_candidate_event_overlaps(
+                frame_end_offsets,
+                io_events,
+                direction="client_to_server",
+                schema_version=schema_version,
+                candidate_complete=candidate_complete,
+            ),
             "absolute_offsets_emitted": False,
             "packet_boundaries_verified": False,
         }
@@ -624,6 +726,13 @@ def _summarize_client_candidate_io_alignment(
             len(client_event_ends) - aligned_io_ends
         ),
         "candidate_boundary_set_complete": candidate_complete,
+        "interval_overlap": _summarize_candidate_event_overlaps(
+            frame_end_offsets,
+            io_events,
+            direction="client_to_server",
+            schema_version=schema_version,
+            candidate_complete=candidate_complete,
+        ),
         "absolute_offsets_emitted": False,
         "packet_boundaries_verified": False,
     }
