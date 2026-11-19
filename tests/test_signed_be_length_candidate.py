@@ -2,7 +2,6 @@
 
 import unittest
 
-from server.frame_reader import FrameReaderError
 from server.signed_be_length_candidate import (
     CandidateLengthTooLarge,
     InvalidCandidateLength,
