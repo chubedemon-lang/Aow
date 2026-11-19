@@ -1752,6 +1752,59 @@ class SerializerDeserializerPathAlignmentTests(unittest.TestCase):
         self.assertEqual(result["maximum_common_helper_prefix_pair_count"], 0)
         self.assertEqual(result["common_helper_prefix_length_histogram"], [])
 
+    def test_path_alignment_aggregates_the_maximum_bounded_pair_matrix(self):
+        serializer_paths = tuple(
+            ("return", [
+                self._call("direct_call", method="SimpleSerializer::serializeInt")
+            ])
+            for _ in range(256)
+        )
+        deserializer_paths = tuple(
+            ("return", [
+                self._call("direct_call", method="SimpleDeserializer::deserializeInt")
+            ])
+            for _ in range(256)
+        )
+
+        result = _summarize_serializer_deserializer_path_alignment(
+            self._summary(*serializer_paths),
+            self._summary(*deserializer_paths),
+        )
+
+        self.assertEqual(result["path_pair_count"], 65_536)
+        self.assertEqual(
+            result["common_helper_prefix_length_histogram"],
+            [{"prefix_length": 1, "path_pair_count": 65_536}],
+        )
+        self.assertEqual(result["maximum_common_helper_prefix_pair_count"], 65_536)
+
+    def test_path_alignment_rejects_more_than_the_producer_path_limit(self):
+        serializer = self._summary(*(
+            ("return", [
+                self._call("direct_call", method="SimpleSerializer::serializeInt")
+            ])
+            for _ in range(257)
+        ))
+
+        with self.assertRaisesRegex(ValueError, "path count exceeds 256"):
+            _summarize_serializer_deserializer_path_alignment(
+                serializer, self._summary()
+            )
+
+    def test_path_alignment_rejects_observations_larger_than_the_entry_window(self):
+        serializer = self._summary((
+            "return",
+            [
+                self._call("direct_call", method="SimpleSerializer::serializeInt")
+                for _ in range(16_385)
+            ],
+        ))
+
+        with self.assertRaisesRegex(ValueError, "path observations exceed 16384"):
+            _summarize_serializer_deserializer_path_alignment(
+                serializer, self._summary()
+            )
+
     def test_malformed_path_counts_and_observations_fail_closed(self):
         serializer = self._summary(
             ("return", [self._call("direct_call", method="SimpleSerializer::serializeInt")])
