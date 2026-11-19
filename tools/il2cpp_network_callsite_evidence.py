@@ -42,7 +42,9 @@ from tools.aarch64_delegate_target_evidence import (
     summarize_delegate_constructor_argument_shape,
     summarize_delegate_method_pointer_arguments,
 )
+from tools.il2cpp_field_ref_evidence import correlate_field_info_usage_tokens
 from tools.il2cpp_metadata_usage_evidence import (
+    decode_field_info_usage_index,
     decode_method_def_usage_index,
     encode_method_def_usage_index,
 )
@@ -86,8 +88,10 @@ NETWORK_SUPPORT_METHODS = {
     ("com.geargames.common.network", "OnMessageReceivedDelegate"): {".ctor"},
 }
 
-def _metadata_usage_static_values(elf, sections, relocations, metadata_version):
-    """Read only relocation-referenced data cells containing MethodDef usage tokens."""
+def _metadata_usage_static_values_for_decoder(
+    elf, sections, relocations, metadata_version, decoder,
+):
+    """Read relocation-referenced data cells accepted by one usage-token decoder."""
     values = {}
     data_sections = [
         sections[name]
@@ -123,11 +127,28 @@ def _metadata_usage_static_values(elf, sections, relocations, metadata_version):
             )[0]
             if encoded >> 32:
                 break
-            if decode_method_def_usage_index(encoded, metadata_version) is not None:
+            if decoder(encoded, metadata_version) is not None:
                 values[target] = encoded
             break
     return values
 
+
+def _metadata_usage_static_values(elf, sections, relocations, metadata_version):
+    """Read relocation-backed cells containing resolved MethodDef usage tokens."""
+    return _metadata_usage_static_values_for_decoder(
+        elf, sections, relocations, metadata_version,
+        decode_method_def_usage_index,
+    )
+
+
+def _metadata_usage_static_field_info_values(
+    elf, sections, relocations, metadata_version,
+):
+    """Read relocation-backed cells containing resolved FieldInfo usage tokens."""
+    return _metadata_usage_static_values_for_decoder(
+        elf, sections, relocations, metadata_version,
+        decode_field_info_usage_index,
+    )
 
 CALLSITE_ARGUMENT_TARGET_PREFIXES = (
     "ClientNetworkStreamBuffer::SetDataAvailable",
@@ -212,6 +233,19 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
 
     static_memory_values = _metadata_usage_static_values(
         elf, sections, relocations, info["version"]
+    )
+    static_field_info_values = _metadata_usage_static_field_info_values(
+        elf, sections, relocations, info["version"]
+    )
+    # Sort by private cell address for deterministic occurrence ordering. The
+    # addresses are never copied into the public report.
+    field_info_tokens = [
+        static_field_info_values[address]
+        for address in sorted(static_field_info_values)
+    ]
+    field_info_correlation = (
+        correlate_field_info_usage_tokens(metadata, field_info_tokens)
+        if field_info_tokens else None
     )
     encoded_values = set(static_memory_values.values())
     image_starts = {
@@ -342,6 +376,9 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         "selected_method_records": len(methods),
         "resolved_entry_windows": len(resolved),
         "unresolved_method_records": unresolved_methods,
+        "field_info_usage_static_cell_count": len(static_field_info_values),
+        "field_info_usage_correlation": field_info_correlation,
+        "field_info_usage_cell_addresses_emitted": False,
         "callsite_summary": callsite_summary,
         "native_addresses_emitted": False,
         "raw_instructions_emitted": False,
@@ -357,7 +394,10 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "are not emitted. Windows may contain shared or cold code. These "
             "observations do not establish runtime execution, managed-field "
             "identity, packet framing, compression activation, message IDs, "
-            "handshake semantics or APK/server compatibility."
+            "handshake semantics or APK/server compatibility. Relocation-backed "
+            "FieldInfo usage cells are correlated only to static FieldRef table "
+            "coordinates; they do not identify a declaring managed type or "
+            "prove that a selected network method accesses the field."
         ),
     }
 
