@@ -64,6 +64,25 @@ class SessionPhaseTests(unittest.TestCase):
             with self.assertRaises(SessionPhaseError):
                 operation()
 
+    def test_public_lifecycle_properties_are_read_only(self):
+        s = SyntheticSessionPhases()
+        attempted = (
+            ("phase", s.AUTHENTICATED),
+            ("player_id", 999),
+            ("injected", True),
+        )
+        for name, value in attempted:
+            with self.subTest(name=name), self.assertRaises(AttributeError):
+                setattr(s, name, value)
+        self.assertEqual((s.phase, s.player_id), (s.NEW, None))
+        self.assertFalse(hasattr(s, "__dict__"))
+
+        s.negotiate()
+        with self.assertRaises(SessionPhaseError):
+            s.authenticate(17, verified=True)
+        self.assertEqual(s.phase, s.NEGOTIATED)
+        self.assertIsNone(s.player_id)
+
 
 if __name__ == "__main__":
     unittest.main()
