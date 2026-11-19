@@ -1020,7 +1020,42 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             {"taken", "fallthrough"},
         )
         self.assertTrue(all(item["condition"] == expected for item in records))
+        self.assertEqual(
+            {item["instruction_index"] for item in records},
+            {0},
+        )
         self.assertNotIn("0x5200", json.dumps(paths))
+
+
+    def test_branch_condition_records_include_relative_terminator_index(self):
+        start = 0x5400
+        branch_words = (
+            self._encode_b_cond(start, start + 8, condition=1),
+            0xB4000000 | (2 << 5) | 3,  # cbz x3, +8
+            0xB6000000 | (5 << 19) | (2 << 5) | 5,  # tbz x5, #37, +8
+        )
+        for branch_word in branch_words:
+            with self.subTest(branch_word=hex(branch_word)):
+                words = (branch_word, 0xD65F03C0, 0xD65F03C0)
+                code = b"".join(struct.pack("<I", word) for word in words)
+                summary = _summarize_control_flow_serializer_helper_blocks(
+                    code, start, {}, {}
+                )
+                paths = _summarize_control_flow_helper_paths(summary)
+                records = [
+                    condition
+                    for path in paths["control_flow_paths"]
+                    for condition in path["branch_conditions"]
+                ]
+                self.assertEqual(len(records), 2)
+                self.assertEqual(
+                    {item["instruction_index"] for item in records},
+                    {0},
+                )
+                self.assertTrue(all(
+                    item["outcome"] in {"taken", "fallthrough"}
+                    for item in records
+                ))
 
     def test_terminal_conditional_branch_reports_out_of_window_fallthrough(self):
         start = 0x5300
@@ -1052,6 +1087,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
                     "condition_code": 1,
                     "condition_name": "ne",
                 },
+                "instruction_index": 1,
             }],
         )
 
@@ -1550,6 +1586,10 @@ class NativeMethodEvidenceTests(unittest.TestCase):
                      {"target_block": 1, "kind": "conditional_taken"},
                      {"target_block": 2, "kind": "conditional_fallthrough"},
                  ], "terminator": "b_cond",
+                 "terminator_condition": {
+                     "kind": "b_cond", "condition_code": 0,
+                     "condition_name": "eq",
+                 },
                  "callsite_observations": [], "reachable": True},
                 {"block_index": 1, "successors": [3],
                  "successor_edges": [
@@ -1576,6 +1616,16 @@ class NativeMethodEvidenceTests(unittest.TestCase):
 
         self.assertEqual(paths["control_flow_path_count"], 2)
         self.assertFalse(paths["control_flow_paths_truncated"])
+        legacy_conditions = [
+            condition
+            for path in paths["control_flow_paths"]
+            for condition in path["branch_conditions"]
+        ]
+        self.assertEqual(len(legacy_conditions), 2)
+        self.assertTrue(all(
+            "instruction_index" not in condition
+            for condition in legacy_conditions
+        ))
         self.assertEqual(
             [item["block_indexes"] for item in paths["control_flow_paths"]],
             [[0, 1, 3], [0, 2, 3]],
