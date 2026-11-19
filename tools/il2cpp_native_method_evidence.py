@@ -98,6 +98,8 @@ NETWORK_CALLSITE_METHODS = {
 }
 
 MAX_ENTRYPOINT_WINDOW_BYTES = 64 * 1024
+MAX_SERIALIZER_ALIGNMENT_PATHS = 256
+MAX_SERIALIZER_ALIGNMENT_OBSERVATIONS = MAX_ENTRYPOINT_WINDOW_BYTES // 4
 
 
 def _network_methods(metadata, info, allowlist_map=None):
@@ -1609,6 +1611,10 @@ def _summarize_serializer_deserializer_path_alignment(
         status = summary.get("control_flow_path_analysis_status")
         if type(paths) is not list:
             raise ValueError(f"{side} paths must be a built-in list")
+        if len(paths) > MAX_SERIALIZER_ALIGNMENT_PATHS:
+            raise ValueError(
+                f"{side} path count exceeds {MAX_SERIALIZER_ALIGNMENT_PATHS}"
+            )
         if type(path_count) is not int or path_count != len(paths):
             raise ValueError(f"{side} path count does not match its path list")
         if type(truncated) is not bool:
@@ -1626,6 +1632,11 @@ def _summarize_serializer_deserializer_path_alignment(
             observations = path.get("helper_callsite_observations")
             if type(exit_kind) is not str or type(observations) is not list:
                 raise ValueError(f"{side} path entry is malformed")
+            if len(observations) > MAX_SERIALIZER_ALIGNMENT_OBSERVATIONS:
+                raise ValueError(
+                    f"{side} path observations exceed "
+                    f"{MAX_SERIALIZER_ALIGNMENT_OBSERVATIONS}"
+                )
             tokens = []
             for observation in observations:
                 if type(observation) is not dict:
@@ -1671,20 +1682,44 @@ def _summarize_serializer_deserializer_path_alignment(
         deserializer, deserializer_count, deserializer_unresolved,
         deserializer_status, deserializer_truncated, deserializer_paths,
     ) = collect(deserializer_summary, "deserializer")
-    prefix_lengths = Counter()
-    for serializer_path in serializer_paths:
-        for deserializer_path in deserializer_paths:
-            prefix_length = 0
-            limit = min(len(serializer_path), len(deserializer_path))
-            while (
-                prefix_length < limit
-                and serializer_path[prefix_length]
-                == deserializer_path[prefix_length]
-            ):
-                prefix_length += 1
-            prefix_lengths[prefix_length] += 1
-    maximum_common_prefix_length = max(prefix_lengths, default=0)
     path_pair_count = len(serializer_paths) * len(deserializer_paths)
+    prefix_lengths = Counter()
+    if path_pair_count:
+        # Count deserializer paths below each helper-prefix trie node. Each
+        # serializer path then accumulates the number of pairs sharing every
+        # prefix length without materializing the full Cartesian product.
+        trie = {"children": {}}
+        for deserializer_path in deserializer_paths:
+            node = trie
+            for token in deserializer_path:
+                child = node["children"].get(token)
+                if child is None:
+                    child = {"count": 0, "children": {}}
+                    node["children"][token] = child
+                child["count"] += 1
+                node = child
+
+        pairs_with_prefix = Counter()
+        for serializer_path in serializer_paths:
+            node = trie
+            for prefix_length, token in enumerate(serializer_path, 1):
+                node = node["children"].get(token)
+                if node is None:
+                    break
+                pairs_with_prefix[prefix_length] += node["count"]
+
+        zero_prefix_pairs = path_pair_count - pairs_with_prefix.get(1, 0)
+        if zero_prefix_pairs:
+            prefix_lengths[0] = zero_prefix_pairs
+        maximum_prefix_length = max(pairs_with_prefix, default=0)
+        for prefix_length in range(1, maximum_prefix_length + 1):
+            exact_pairs = (
+                pairs_with_prefix[prefix_length]
+                - pairs_with_prefix.get(prefix_length + 1, 0)
+            )
+            if exact_pairs:
+                prefix_lengths[prefix_length] = exact_pairs
+    maximum_common_prefix_length = max(prefix_lengths, default=0)
     maximum_common_prefix_pair_count = prefix_lengths.get(
         maximum_common_prefix_length, 0
     )
