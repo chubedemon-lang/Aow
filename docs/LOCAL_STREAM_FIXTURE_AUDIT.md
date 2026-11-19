@@ -199,6 +199,26 @@ emitted, and the result never sets `wire_contract_verified` or
 `apk_compatible` to true. Schema `1` reports that I/O event boundaries were
 not recorded.
 
+## Client-to-server candidate frame / observed I/O boundary correlation
+
+When the generic client-to-server length hypothesis is explicitly enabled,
+schemas `2` and `3` also compare its candidate frame-end positions with the
+ends of client-to-server I/O observations. The redacted report contains counts
+only and uses only events marked `client_to_server`; server-to-client events
+are not included in this comparison. This makes the two directional
+correlations independently inspectable without assuming Sender/Receiver
+symmetry.
+
+As on the receive side, this is an aggregate diagnostic. A local write-call
+boundary is not a packet boundary, and a candidate frame end is not a verified
+AOW message boundary. Partial parses and report-cap truncation mark the
+candidate boundary set as incomplete/lower-bound. Schema `1` has no ordered
+I/O events and reports that the correlation could not be performed. When the
+client-to-server hypothesis is not selected, the correlation is explicitly
+reported as not attempted. No offsets, stream bytes, or per-event lengths are
+emitted, and the result never verifies Sender symmetry, the wire contract, or
+APK compatibility.
+
 ## Provenance and limits
 
 The fixture hash and `client_unchanged` value are assertions in the input. The
