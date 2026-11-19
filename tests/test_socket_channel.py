@@ -189,13 +189,19 @@ class SocketFrameChannelTests(unittest.TestCase):
         try:
             reader.feed(b"\x03a")
 
+            clock_calls = 0
+
             def close_during_clock_check():
+                nonlocal clock_calls
+                clock_calls += 1
+                if clock_calls == 1:
+                    return 30.0
                 channel.close()
                 return 31.1
 
             with patch(
                 "server.socket_channel.time.monotonic",
-                side_effect=[30.0, close_during_clock_check],
+                side_effect=close_during_clock_check,
             ):
                 with self.assertRaisesRegex(OSError, "closed during frame receive"):
                     channel.receive_frame()
