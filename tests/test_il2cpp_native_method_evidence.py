@@ -942,7 +942,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             _decode_aarch64_conditional_branch_condition(
-                0x34000000 | (2 << 5)
+                0x34000000 | 2
             ),
             {
                 "kind": "cbz_cbnz",
@@ -953,7 +953,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             _decode_aarch64_conditional_branch_condition(
-                0xB5000000 | (3 << 5) | 3
+                0xB5000000 | 3
             ),
             {
                 "kind": "cbz_cbnz",
@@ -964,7 +964,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             _decode_aarch64_conditional_branch_condition(
-                0xB6000000 | (5 << 19) | (5 << 5) | 5
+                0xB6000000 | (5 << 19) | 5
             ),
             {
                 "kind": "tbz_tbnz",
@@ -975,7 +975,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             _decode_aarch64_conditional_branch_condition(
-                0x37000000 | (2 << 5) | 7
+                0x37000000 | (2 << 19) | 7
             ),
             {
                 "kind": "tbz_tbnz",
