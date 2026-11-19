@@ -135,3 +135,28 @@ separate occurrences.
 
 This is resource-bounded static diagnostics only. It does not add APK findings,
 infer field order, select runtime branches, or establish a wire contract.
+
+## Branch-aware network callsite summaries
+
+Selected network entry windows now also receive the same bounded intraprocedural
+basic-block and simple-path summaries used for serializer methods. For these
+network summaries, a callsite can resolve either to an allowlisted primitive
+serializer helper or, when that is not applicable, to a uniquely matched
+metadata method entry. The latter is labeled with
+`target_kind: metadata_method`; ambiguous and unresolved targets remain
+explicit rather than being assigned a guessed owner.
+
+Reachable and unreachable metadata-method callsites are counted separately.
+Path observations preserve the target kind so a direct call to a known network
+method is not counted as a primitive serializer helper. The path report keeps
+conditional-taken and conditional-fallthrough edges distinct, even when they
+converge on the same block.
+
+This improves review of branch-exclusive calls in bounded methods such as
+`Receiver.Cycle` and `Sender.Cycle`, but it remains static graph reachability.
+Both conditional outcomes are treated as possible, loops are not unrolled,
+external branches remain exits, and the bounded entry window may not equal a
+complete function. It does not identify the runtime-selected branch, establish
+Sender/Receiver symmetry, infer packet fields, or prove framing, handshake,
+login, or unchanged-APK compatibility. Regression tests use synthetic ELF and
+AArch64 instruction fixtures only; no APK or native bytes are committed.
