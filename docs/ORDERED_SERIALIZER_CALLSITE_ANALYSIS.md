@@ -64,3 +64,28 @@ control/data-flow review, serializer/deserializer correlation, and preferably
 an authorized redacted local fixture.
 
 The reachable/unreachable observation counters include unresolved indirect callsites, while the separate resolved-helper counters include only uniquely named helper targets. This keeps an unresolved indirect target from being reported as a confirmed serializer helper.
+
+
+## Serializer/deserializer helper-family path comparison
+
+The native report now pairs metadata-named types ending in
+STSerializer/STDeserializer when their entry windows expose the expected
+serialize/deserialize methods. For each pair it compares the bounded simple
+path summaries already produced by the intraprocedural CFG analyzer.
+
+Resolved primitive helper names are normalized to families (for example,
+serializeInt and deserializeInt both become Int). Unresolved and ambiguous
+callsite observations remain explicit comparison tokens; they are never
+silently discarded. The output reports shared path signatures and
+serializer-only/deserializer-only signatures as separate multisets.
+
+This comparison helps prioritize where the LoginRequest or session-restore
+helper paths diverge. It does **not** infer field order, field count, getter
+semantics, a message schema, or a runtime execution path. Conditional edges
+remain possible rather than evaluated, loops are not unrolled, and every
+summary is still limited to the bounded native entry window. A partial or
+truncated path enumeration is labeled partial.
+
+Regression tests use synthetic path summaries only. No APK, native bytes,
+instruction words, addresses, packet fixture, endpoint, credential, or
+proprietary asset is committed.
