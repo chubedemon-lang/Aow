@@ -127,7 +127,7 @@ class SocketFrameChannelTests(unittest.TestCase):
                 with self.assertRaises(socket.timeout):
                     channel.receive_frame()
 
-            self.assertEqual(reader.peek(3), b"\x03ab")
+            self.assertEqual(reader._buffer.peek(3), b"\x03ab")
             self.assertEqual(channel._pending_frame_deadline, 10.1)
 
             # A later receive call must not restart the deadline for the same
@@ -135,7 +135,7 @@ class SocketFrameChannelTests(unittest.TestCase):
             with patch("server.socket_channel.time.monotonic", return_value=10.12):
                 with self.assertRaises(socket.timeout):
                     channel.receive_frame()
-            self.assertEqual(reader.peek(3), b"\x03ab")
+            self.assertEqual(reader._buffer.peek(3), b"\x03ab")
         finally:
             channel.close()
             peer.close()
