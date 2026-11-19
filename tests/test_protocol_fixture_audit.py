@@ -624,6 +624,9 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
             alignment["io_event_ends_without_known_candidate_frame_boundary"], 1
         )
         self.assertFalse(alignment["packet_boundaries_verified"])
+        overlap = alignment["interval_overlap"]
+        self.assertEqual(overlap["io_events_without_complete_candidate_frame"], 1)
+        self.assertFalse(overlap["candidate_frame_set_complete"])
 
     def test_client_candidate_alignment_reports_missing_events_for_schema_v1(self):
         result = self.audit(
@@ -639,6 +642,9 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertIsNone(alignment["client_to_server_io_event_boundary_count"])
         self.assertTrue(alignment["candidate_boundary_set_complete"])
         self.assertFalse(alignment["absolute_offsets_emitted"])
+        overlap = alignment["interval_overlap"]
+        self.assertEqual(overlap["status"], "io_event_boundaries_not_recorded_schema_v1")
+        self.assertIsNone(overlap["frame_event_overlap_pair_count"])
 
     def test_client_candidate_alignment_is_not_attempted_by_default(self):
         result = self.audit(fixture_bytes([frame(b"server")], [frame(b"client")]))
@@ -650,6 +656,101 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertIsNone(alignment["candidate_frame_boundary_count"])
         self.assertIsNone(alignment["client_to_server_io_event_boundary_count"])
         self.assertFalse(alignment["packet_boundaries_verified"])
+
+
+    def test_receive_interval_overlap_reports_one_read_containing_multiple_frames(self):
+        first = frame(b"a")
+        second = frame(b"bc")
+        server_stream = first + second
+        events = [
+            {"direction": "server_to_client", "offset": 0, "length": len(server_stream)},
+            {"direction": "client_to_server", "offset": 0, "length": 1},
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [b"c"],
+                schema_version=2,
+                io_events=events,
+            )
+        )
+        overlap = result["receive_candidate_io_alignment"]["interval_overlap"]
+        self.assertEqual(overlap["candidate_frames_overlapping_io_events"], 2)
+        self.assertEqual(overlap["candidate_frames_spanning_multiple_io_events"], 0)
+        self.assertEqual(overlap["io_events_overlapping_candidate_frames"], 1)
+        self.assertEqual(overlap["io_events_overlapping_multiple_candidate_frames"], 1)
+        self.assertEqual(overlap["io_events_without_complete_candidate_frame"], 0)
+        self.assertEqual(overlap["candidate_frames_without_io_event"], 0)
+        self.assertEqual(overlap["frame_event_overlap_pair_count"], 2)
+        self.assertFalse(overlap["packet_boundaries_verified"])
+
+    def test_receive_interval_overlap_reports_one_frame_spanning_multiple_reads(self):
+        server_stream = frame(b"split")
+        split = len(server_stream) // 2
+        events = [
+            {"direction": "server_to_client", "offset": 0, "length": split},
+            {"direction": "client_to_server", "offset": 0, "length": 1},
+            {
+                "direction": "server_to_client",
+                "offset": split,
+                "length": len(server_stream) - split,
+            },
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [b"c"],
+                schema_version=2,
+                io_events=events,
+            )
+        )
+        overlap = result["receive_candidate_io_alignment"]["interval_overlap"]
+        self.assertEqual(overlap["candidate_frames_spanning_multiple_io_events"], 1)
+        self.assertEqual(overlap["io_events_overlapping_candidate_frames"], 2)
+        self.assertEqual(overlap["io_events_overlapping_multiple_candidate_frames"], 0)
+        self.assertEqual(overlap["frame_event_overlap_pair_count"], 2)
+
+    def test_client_interval_overlap_reports_split_and_coalesced_writes(self):
+        first = frame(b"a")
+        second = frame(b"bc")
+        client_stream = first + second
+        server_stream = frame(b"s")
+        events = [
+            {"direction": "client_to_server", "offset": 0, "length": 2},
+            {
+                "direction": "server_to_client",
+                "offset": 0,
+                "length": len(server_stream),
+            },
+            {
+                "direction": "client_to_server",
+                "offset": 2,
+                "length": len(client_stream) - 2,
+            },
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [client_stream],
+                schema_version=2,
+                io_events=events,
+            ),
+            client_to_server_length_offset=0,
+        )
+        overlap = result["client_to_server_candidate_io_alignment"]["interval_overlap"]
+        self.assertEqual(overlap["candidate_frames_overlapping_io_events"], 2)
+        self.assertEqual(overlap["candidate_frames_spanning_multiple_io_events"], 1)
+        self.assertEqual(overlap["io_events_overlapping_candidate_frames"], 2)
+        self.assertEqual(overlap["io_events_overlapping_multiple_candidate_frames"], 1)
+        self.assertEqual(overlap["io_events_without_complete_candidate_frame"], 0)
+        self.assertEqual(overlap["frame_event_overlap_pair_count"], 3)
+        self.assertFalse(overlap["packet_boundaries_verified"])
+        serialized = json.dumps(result)
+        self.assertNotIn('"offset"', serialized)
+        self.assertNotIn('"length"', serialized)
+        self.assertFalse(result["sender_symmetry_verified"])
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
 
     def test_schema_v3_reports_relative_monotonic_timing_without_absolute_values(self):
         server_stream = frame(b"server")

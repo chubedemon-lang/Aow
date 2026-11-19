@@ -219,6 +219,25 @@ reported as not attempted. No offsets, stream bytes, or per-event lengths are
 emitted, and the result never verifies Sender symmetry, the wire contract, or
 APK compatibility.
 
+## Frame / I/O interval-overlap summary
+
+For schemas `2` and `3`, each directional correlation also includes a
+linear-sweep interval-overlap summary. It counts candidate frames that overlap
+more than one observed I/O event, I/O events that overlap more than one
+complete candidate frame, events that overlap no complete candidate frame,
+and the total number of frame/event overlap pairs. This distinguishes a
+candidate frame split across multiple local reads/writes from multiple
+candidate frames coalesced into one local read/write without publishing offsets.
+
+Only complete candidate frames participate. If candidate parsing stops early,
+later I/O events can be counted as having no complete candidate frame; this is
+not evidence that those bytes are invalid. Schema `1` has no I/O timeline, so
+the interval-overlap counts are reported as unavailable. The summary is
+bounded by the existing frame/event limits and uses a linear sweep over the
+ordered contiguous ranges. It remains an observation about local I/O calls,
+not packet boundaries, and never changes the wire-contract or APK-compatibility
+flags.
+
 ## Provenance and limits
 
 The fixture hash and `client_unchanged` value are assertions in the input. The
