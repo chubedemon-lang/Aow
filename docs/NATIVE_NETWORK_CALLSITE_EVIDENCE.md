@@ -27,9 +27,11 @@ and rejects a mismatch before parsing ZIP members, preventing an analyst from
 accidentally producing a report for a different build. Omitting the option
 preserves the existing behavior.
 
-The command is offline and emits method labels, bounded entry-window sizes and
-aggregate call counts only. It does not emit APK bytes, native addresses, raw
-instructions, packet bytes or endpoint values.
+The command is offline and emits method labels, bounded entry-window sizes,
+aggregate call counts, and—when relocation-backed FieldInfo usage cells are
+found—validated FieldRef table coordinates. It does not emit APK bytes, native
+addresses, raw instructions, raw metadata-usage tokens, packet bytes or endpoint
+values.
 
 ## Static callsite observations
 
@@ -56,6 +58,22 @@ windows for the exact APK fingerprint above:
 These are method-call associations in bounded native entry windows. They
 identify useful next methods to inspect, but do not establish a complete
 control-flow graph or prove that every call executes on every message.
+
+## Relocation-backed FieldInfo usage cells
+
+The analyzer also scans relocation-referenced eight-byte cells in the ELF
+`.data` and `.data.rel.ro` sections for resolved v31 FieldInfo metadata-usage
+tokens. When such cells are found, their token indexes are joined to the
+validated metadata FieldRef table. The report preserves deterministic cell
+order and emits only FieldRef index, TypeIndex and the field index local to that
+type; it never emits the encoded token or the cell address.
+
+This is a whole-section static-data inventory, not a use-def chain. A matching
+cell does not prove that `Receiver.Cycle`, `Sender.Cycle` or any selected
+network method reads it. A FieldRef coordinate is not a managed declaring-type
+name, a native field offset, or proof of runtime access. If a token is found but
+the FieldRef table is malformed, analysis fails closed rather than dropping the
+correlation.
 
 ## What this does and does not establish
 

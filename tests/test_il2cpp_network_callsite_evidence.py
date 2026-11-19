@@ -14,6 +14,7 @@ from tools.aarch64_call_argument_evidence import summarize_small_argument_consta
 from tools.il2cpp_network_callsite_evidence import (
     CALLSITE_ARGUMENT_TARGET_PREFIXES,
     _metadata_usage_static_values,
+    _metadata_usage_static_field_info_values,
     inspect_bytes,
     inspect_apk,
     _read_apk_members,
@@ -25,7 +26,10 @@ from tools.il2cpp_codegen_inventory import (
     CodegenInventoryError,
     R_AARCH64_RELATIVE,
 )
-from tools.il2cpp_metadata_usage_evidence import encode_method_def_usage_index
+from tools.il2cpp_metadata_usage_evidence import (
+    encode_field_info_usage_index,
+    encode_method_def_usage_index,
+)
 
 
 class NetworkCallsiteEvidenceTests(unittest.TestCase):
@@ -49,6 +53,80 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
             31,
         )
         self.assertEqual(values, {0x9000: encoded})
+
+    def test_field_info_usage_cells_are_read_only_and_redacted(self):
+        encoded = encode_field_info_usage_index(321, 31)
+        elf = bytearray(64)
+        struct.pack_into("<Q", elf, 16, encoded)
+        sections = {
+            ".data": {
+                "type": 1,
+                "flags": 3,
+                "address": 0x9000,
+                "offset": 16,
+                "size": 8,
+            },
+        }
+        values = _metadata_usage_static_field_info_values(
+            bytes(elf),
+            sections,
+            {0x8000: (R_AARCH64_RELATIVE, 0x9000)},
+            31,
+        )
+        self.assertEqual(values, {0x9000: encoded})
+
+    def test_field_info_usage_cells_ignore_other_and_unresolved_usage_tokens(self):
+        values_to_reject = (
+            encode_method_def_usage_index(321, 31),
+            0x80000282,  # FieldInfo usage type with the v27+ unresolved marker.
+            0x0000000180000283,  # More than one 32-bit token.
+        )
+        sections = {
+            ".data": {
+                "type": 1,
+                "flags": 3,
+                "address": 0x9000,
+                "offset": 16,
+                "size": 8,
+            },
+        }
+        for value in values_to_reject:
+            with self.subTest(value=value):
+                elf = bytearray(64)
+                struct.pack_into("<Q", elf, 16, value)
+                self.assertEqual(
+                    _metadata_usage_static_field_info_values(
+                        bytes(elf),
+                        sections,
+                        {0x8000: (R_AARCH64_RELATIVE, 0x9000)},
+                        31,
+                    ),
+                    {},
+                )
+
+    def test_field_info_usage_cells_with_their_own_relocation_are_ignored(self):
+        encoded = encode_field_info_usage_index(321, 31)
+        elf = bytearray(64)
+        struct.pack_into("<Q", elf, 16, encoded)
+        sections = {
+            ".data": {
+                "type": 1,
+                "flags": 3,
+                "address": 0x9000,
+                "offset": 16,
+                "size": 8,
+            },
+        }
+        relocations = {
+            0x8000: (R_AARCH64_RELATIVE, 0x9000),
+            0x9000: (R_AARCH64_RELATIVE, 0xA000),
+        }
+        self.assertEqual(
+            _metadata_usage_static_field_info_values(
+                bytes(elf), sections, relocations, 31
+            ),
+            {},
+        )
 
     def test_metadata_usage_cells_with_their_own_relocation_are_ignored(self):
         encoded = encode_method_def_usage_index(321, 31)
@@ -120,6 +198,44 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         )
         self.assertFalse(provenance["absolute_addresses_emitted"])
         self.assertFalse(provenance["raw_instructions_emitted"])
+
+    def test_inspect_bytes_correlates_static_field_info_tokens_to_field_refs(self):
+        metadata = bytearray(make_metadata(
+            ["Cycle"],
+            fields=[("probeField", 17, 0x04000001)],
+        ))
+        metadata.extend(bytes((-len(metadata)) % 8))
+        field_ref_offset = len(metadata)
+        metadata.extend(struct.pack("<ii", 17, 0))
+        struct.pack_into("<II", metadata, 0xB8, field_ref_offset, 8)
+
+        encoded = encode_field_info_usage_index(0, 31)
+        with patch(
+            "tools.il2cpp_network_callsite_evidence."
+            "_metadata_usage_static_field_info_values",
+            return_value={0x9000: encoded},
+        ):
+            report = inspect_bytes(bytes(metadata), make_elf(1))
+
+        correlation = report["field_info_usage_correlation"]
+        self.assertEqual(report["field_info_usage_static_cell_count"], 1)
+        self.assertEqual(correlation["resolved_reference_count"], 1)
+        self.assertEqual(correlation["unique_resolved_field_ref_count"], 1)
+        self.assertEqual(
+            correlation["references"][0],
+            {
+                "position": 0,
+                "status": "field_ref_coordinate_resolved",
+                "field_ref_index": 0,
+                "type_index": 17,
+                "field_index_within_type": 0,
+            },
+        )
+        rendered = json.dumps(report)
+        self.assertNotIn(hex(encoded), rendered)
+        self.assertNotIn("0x9000", rendered)
+        self.assertFalse(report["field_info_usage_cell_addresses_emitted"])
+        self.assertFalse(report["native_addresses_emitted"])
 
     def test_network_buffer_support_allowlist_is_explicit(self):
         report = inspect_bytes(
