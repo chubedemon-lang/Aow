@@ -109,8 +109,11 @@ resource budget. The remaining budget is enforced incrementally before each
 hex chunk is materialized, so the second direction cannot temporarily allocate
 beyond the aggregate cap. This is an audit resource limit, not an AOW protocol
 limit. Only the `server_to_client` direction is passed through the isolated
-receive-length candidate. The `client_to_server` direction is deliberately not decoded because
-Sender/Receiver symmetry has not been established. Schemas `2` and `3` validate
+receive-length candidate. By default, the `client_to_server` direction is only summarized
+because Sender/Receiver symmetry has not been established. An explicit
+operator-selected generic length hypothesis can be tested separately, as
+described below; it is never treated as proof of sender symmetry. Schemas
+`2` and `3` validate
 that ordered I/O ranges cover both directional streams exactly once. Schema
 `3` additionally validates relative monotonic timing and reports only an
 aggregate span and maximum gap. Schema `1` reports that cross-direction order
@@ -138,6 +141,44 @@ unclassified; the overall status can still be `candidate_not_recovered` when
 the frame-size report cap was reached. They describe only how much input this
 candidate parser accepted; they do not validate the real AOW frame boundary.
 This is a resource-safety limit for the audit report, not an AOW protocol limit.
+
+
+## Optional client-to-server length hypothesis
+
+The fixture auditor can test a generic signed big-endian 32-bit length-field
+hypothesis against the private client-to-server stream. This is **opt-in** and
+does not change the default summary-only behavior.
+
+Use one of the two bounded candidate offsets:
+
+- `0`: test the first four stream bytes as a signed BE32 length.
+- `4`: treat the first four bytes as opaque, then test the next four bytes
+  as a signed BE32 length. No message-ID meaning is assigned to the opaque
+  prefix.
+
+Example local commands:
+
+```sh
+python -m tools.protocol_fixture_audit \
+  --fixture "$PRIVATE_FIXTURE/authorized-stream.json" \
+  --apk-sha256 YOUR_EXPECTED_64_CHARACTER_LOWERCASE_SHA256 \
+  --client-to-server-length-offset 0
+```
+
+To test the second candidate position, use
+`--client-to-server-length-offset 4`. The selected position is an operator
+hypothesis, not a recovered Sender field offset. The parser applies caller
+resource limits, reports only complete candidate frame sizes and byte
+accounting, and never emits stream bytes or offsets.
+
+A complete parse means only that the supplied client-to-server bytes fit the
+selected generic hypothesis. It does **not** establish Sender/Receiver
+symmetry, prove the first or second integer's semantics, identify a message ID,
+confirm compression placement, or verify any AOW frame boundary. The report
+always keeps `sender_symmetry_verified`, `wire_contract_verified`, and
+`apk_compatible` false. A failed candidate likewise does not disprove other
+possible layouts. Keep the private fixture local and review provenance
+independently.
 
 ## Candidate frame / observed I/O boundary correlation
 
