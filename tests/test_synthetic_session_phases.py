@@ -79,7 +79,7 @@ class SessionPhaseTests(unittest.TestCase):
 
         s.negotiate()
         with self.assertRaises(SessionPhaseError):
-            s.authenticate(17, verified=True)
+            s.enter_world()
         self.assertEqual(s.phase, s.NEGOTIATED)
         self.assertIsNone(s.player_id)
 
