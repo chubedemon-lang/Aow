@@ -1,9 +1,10 @@
 """Conservative evidence for immediate AArch64 call-result zero tests.
 
-A call followed immediately by CBZ/CBNZ on W0/X0 is reported as a register
-dependency candidate only. Under AAPCS64 X0/W0 carries scalar return values,
-but this structural observation does not prove the callee's managed return
-type, semantics, runtime execution, or any AOW protocol meaning.
+A call followed immediately by CBZ/CBNZ on W0/X0, or by CMP W0/X0, #0
+followed immediately by B.EQ/B.NE, is reported as a register-dependency
+candidate only. Under AAPCS64 X0/W0 carries scalar return values, but these
+structural observations do not prove the callee's managed return type,
+semantics, runtime execution, or any AOW protocol meaning.
 """
 from tools.aarch64_call_argument_evidence import _is_indirect_call
 
@@ -36,14 +37,46 @@ def _decode_cbz_cbnz_on_x0(word):
     }
 
 
-def summarize_immediate_call_result_zero_tests(code, *, max_observations=128):
-    """Report calls immediately followed by CBZ/CBNZ on the ABI result register.
+def _decode_cmp_zero_on_x0(word):
+    """Recognize only CMP W0, #0 and CMP X0, #0 (SUBS to the zero register)."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    if word == 0x7100001F:
+        return "w0"
+    if word == 0xF100001F:
+        return "x0"
+    return None
 
-    The scan is linear and bounded to one supplied method window. It does not
-    follow branches, resolve call targets, infer return types, or evaluate
-    conditions. Only the instruction immediately after a recognized BL/BLR
-    (including pointer-authenticated BLR forms recognized by the shared
-    decoder) is considered, so no intervening instruction can overwrite W0/X0.
+
+def _decode_b_cond_eq_ne(word):
+    """Decode B.EQ/B.NE and expose only its signed relative instruction delta."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    if (word & 0xFF000010) != 0x54000000:
+        return None
+    condition = word & 0xF
+    if condition not in (0, 1):
+        return None
+    return {
+        "branch_when": "zero" if condition == 0 else "nonzero",
+        "branch_target_delta_instructions": _sign_extend(
+            (word >> 5) & 0x7FFFF, 19
+        ),
+    }
+
+
+def summarize_immediate_call_result_zero_tests(code, *, max_observations=128):
+    """Report bounded call-result zero-test candidates in one supplied method window.
+
+    Supported shapes are:
+      * BL/BLR; CBZ/CBNZ W0/X0
+      * BL/BLR; CMP W0/X0, #0; B.EQ/B.NE
+
+    The scan is linear and bounded. It does not follow branches, resolve call
+    targets, infer return types, or evaluate conditions. Each recognized test
+    is adjacent to the call or its compare/branch pair is adjacent, so no
+    intervening instruction can overwrite the result register or condition
+    flags. Other data-flow shapes remain unresolved.
     """
     if type(code) is not bytes:
         raise ValueError("AArch64 code window must be exact immutable bytes")
@@ -61,7 +94,9 @@ def summarize_immediate_call_result_zero_tests(code, *, max_observations=128):
     ]
     call_count = 0
     matched_count = 0
+    cmp_branch_count = 0
     observations = []
+    cmp_branch_observations = []
 
     for index, word in enumerate(words):
         if _is_direct_call(word):
@@ -71,20 +106,56 @@ def summarize_immediate_call_result_zero_tests(code, *, max_observations=128):
         else:
             continue
         call_count += 1
+
         branch_index = index + 1
-        if branch_index >= len(words):
+        if branch_index < len(words):
+            decoded = _decode_cbz_cbnz_on_x0(words[branch_index])
+            if decoded is not None:
+                matched_count += 1
+                target_index = (
+                    branch_index + decoded["branch_target_delta_instructions"]
+                )
+                if len(observations) < max_observations:
+                    observations.append({
+                        "call_instruction_index": index,
+                        "branch_instruction_index": branch_index,
+                        "call_kind": call_kind,
+                        **decoded,
+                        "branch_target_within_window": (
+                            0 <= target_index < len(words)
+                        ),
+                        "branch_target_instruction_index": (
+                            target_index if 0 <= target_index < len(words) else None
+                        ),
+                    })
+                continue
+
+        compare_index = index + 1
+        compare_register = (
+            _decode_cmp_zero_on_x0(words[compare_index])
+            if compare_index < len(words) else None
+        )
+        conditional_branch_index = index + 2
+        decoded_branch = (
+            _decode_b_cond_eq_ne(words[conditional_branch_index])
+            if conditional_branch_index < len(words) else None
+        )
+        if compare_register is None or decoded_branch is None:
             continue
-        decoded = _decode_cbz_cbnz_on_x0(words[branch_index])
-        if decoded is None:
-            continue
-        matched_count += 1
-        target_index = branch_index + decoded["branch_target_delta_instructions"]
-        if len(observations) < max_observations:
-            observations.append({
+
+        cmp_branch_count += 1
+        target_index = (
+            conditional_branch_index
+            + decoded_branch["branch_target_delta_instructions"]
+        )
+        if len(cmp_branch_observations) < max_observations:
+            cmp_branch_observations.append({
                 "call_instruction_index": index,
-                "branch_instruction_index": branch_index,
+                "compare_instruction_index": compare_index,
+                "branch_instruction_index": conditional_branch_index,
                 "call_kind": call_kind,
-                **decoded,
+                "tested_register": compare_register,
+                **decoded_branch,
                 "branch_target_within_window": 0 <= target_index < len(words),
                 "branch_target_instruction_index": (
                     target_index if 0 <= target_index < len(words) else None
@@ -99,6 +170,14 @@ def summarize_immediate_call_result_zero_tests(code, *, max_observations=128):
         "calls_without_immediate_w0_x0_zero_test": call_count - matched_count,
         "observations": observations,
         "observations_truncated": matched_count > len(observations),
+        "immediate_cmp_zero_bcond_count": cmp_branch_count,
+        "cmp_zero_bcond_observations": cmp_branch_observations,
+        "cmp_zero_bcond_observations_truncated": (
+            cmp_branch_count > len(cmp_branch_observations)
+        ),
+        "calls_without_either_zero_test_shape": (
+            call_count - matched_count - cmp_branch_count
+        ),
         "native_addresses_emitted": False,
         "raw_instructions_emitted": False,
     }
