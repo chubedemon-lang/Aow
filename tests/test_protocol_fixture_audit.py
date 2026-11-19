@@ -1213,6 +1213,86 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
             )
             self.assertIn('"sender_symmetry_verified": false', output.getvalue())
 
+    def test_client_to_server_both_offsets_are_reported_independently_without_ranking(self):
+        payload = b"outbound"
+        client_stream = (
+            b"ABCD"
+            + len(payload).to_bytes(4, "big", signed=True)
+            + payload
+        )
+        result = self.audit(
+            fixture_bytes([frame(b"server")], [client_stream]),
+            client_to_server_test_both_length_offsets=True,
+        )
+        report = result["client_to_server"]
+        self.assertEqual(
+            report["analysis"],
+            "operator_selected_generic_signed_be32_length_hypotheses_only",
+        )
+        self.assertEqual(report["hypothesis_comparison"], "independent_no_ranking")
+        hypotheses = report["length_prefix_hypotheses"]
+        self.assertEqual(
+            [item["length_field_offset_from_stream_start"] for item in hypotheses],
+            [0, 4],
+        )
+        self.assertEqual(
+            hypotheses[0]["candidate"]["status"], "candidate_not_recovered"
+        )
+        self.assertEqual(
+            hypotheses[1]["candidate"]["status"], "candidate_frames_recovered"
+        )
+        self.assertTrue(
+            hypotheses[1]["candidate"]["candidate_stream_fully_consumed"]
+        )
+        self.assertTrue(hypotheses[1]["bytes_before_length_field_are_opaque"])
+        self.assertEqual(
+            result["client_to_server_candidate_io_alignment"]["status"],
+            "not_applicable_multiple_independent_hypotheses",
+        )
+        serialized = json.dumps(result)
+        self.assertNotIn(payload.hex(), serialized)
+        self.assertNotIn(client_stream.hex(), serialized)
+        self.assertFalse(result["sender_symmetry_verified"])
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
+
+    def test_client_to_server_both_offset_mode_rejects_conflicting_options(self):
+        options = (
+            {"client_to_server_length_offset": 0,
+             "client_to_server_test_both_length_offsets": True},
+            {"client_to_server_test_both_length_offsets": 1},
+            {"client_to_server_test_both_length_offsets": None},
+        )
+        for kwargs in options:
+            with self.subTest(kwargs=kwargs), self.assertRaises(FixtureAuditError):
+                self.audit(fixture_bytes([frame(b"server")], [b"client"]), **kwargs)
+
+    def test_cli_both_offset_mode_prints_only_redacted_independent_summaries(self):
+        payload = b"private-client-fixture"
+        client_stream = (
+            b"ABCD"
+            + len(payload).to_bytes(4, "big", signed=True)
+            + payload
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private-fixture.json"
+            path.write_bytes(
+                fixture_bytes([frame(b"server")], [client_stream])
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main([
+                    "--fixture", str(path),
+                    "--apk-sha256", APK_SHA256,
+                    "--client-to-server-test-both-length-offsets",
+                ])
+        self.assertEqual(code, 0)
+        serialized = output.getvalue()
+        self.assertNotIn(payload.hex(), serialized)
+        self.assertNotIn(client_stream.hex(), serialized)
+        self.assertIn('"hypothesis_comparison": "independent_no_ranking"', serialized)
+        self.assertIn('"apk_compatible": false', serialized)
+
 
 if __name__ == "__main__":
     unittest.main()

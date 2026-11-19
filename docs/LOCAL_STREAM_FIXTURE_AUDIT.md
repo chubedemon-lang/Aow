@@ -180,6 +180,23 @@ always keeps `sender_symmetry_verified`, `wire_contract_verified`, and
 possible layouts. Keep the private fixture local and review provenance
 independently.
 
+## Compare both client-to-server length offsets without ranking
+
+The client-to-server audit also has an explicit
+`--client-to-server-test-both-length-offsets` mode. It runs the generic
+signed-BE32 candidate reader independently at offsets 0 and 4 and returns two
+separate redacted summaries. It does not choose a winner, rank candidates,
+combine their frame counts, or treat a complete parse as protocol evidence.
+The single-offset option and both-offset mode are mutually exclusive.
+
+The offset-4 hypothesis treats the first four bytes as opaque; no message-ID
+or sequence semantics are assigned. A candidate may fail because its
+operator-selected interpretation does not fit, while the other candidate may
+fit. Neither outcome proves or disproves the actual AOW framing. The report
+keeps sender symmetry, wire-contract verification, and APK compatibility
+false. Use only a provenance-reviewed private fixture from an authorized run
+of the exact unchanged APK, and keep all raw bytes outside the repository.
+
 ## Candidate frame / observed I/O boundary correlation
 
 For schemas `2` and `3`, the redacted report compares cumulative end
