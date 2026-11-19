@@ -230,21 +230,24 @@ fixture or end-to-end exchange is available, so the AOW adapter remains
 disabled.
 
 
-## Receiver zipped-message membership — 2026-11-15
+## Receiver zipped-message membership — historical hypothesis, superseded 2026-11-19
 
-A fresh bounded native pass, documented in
-[NATIVE_NETWORK_CALLSITE_EVIDENCE.md](NATIVE_NETWORK_CALLSITE_EVIDENCE.md),
-strongly attributes the collection read by Receiver.Cycle to
-NetworkSettings.m_zippetMessageTypes. The second decoded integer is passed as
-the key to a HashSet-style membership helper. This is a static attribution of
-the collection owner and the lookup shape, not a runtime trace.
+A 2026-11-15 bounded native pass reported a strong static attribution of the
+collection read by Receiver.Cycle to `NetworkSettings.m_zippetMessageTypes`,
+with the second decoded integer treated as a HashSet-style lookup key. That
+was a static hypothesis, not a runtime trace.
 
-This narrows the receiver's zipped-message classification path. It does **not**
-establish that the integer is a stable wire message ID, which branch executes
-for a particular message, what byte range is decompressed, where compression
-sits in the complete frame, or whether Sender.Cycle is symmetric. The adapter
-remains disabled pending an authorized redacted client-side byte fixture or
-local runtime trace.
+The independent 2026-11-19 re-verification recorded in
+[NATIVE_NETWORK_CALLSITE_EVIDENCE.md](NATIVE_NETWORK_CALLSITE_EVIDENCE.md)
+recovered the second integer flowing to a subsequent helper, but did not
+resolve that helper's owning type or semantic meaning. The earlier collection
+owner attribution is therefore **not treated as confirmed in the current
+evidence summary**. Keep the owner and integer semantics unresolved until the
+native helper and its object provenance are independently re-established.
+
+No message-ID meaning, compression flag, branch outcome, decompression range,
+complete frame layout, or Sender.Cycle symmetry is established. The adapter
+remains disabled pending authorized unchanged-client runtime evidence.
 
 
 ## Private local stream-fixture audit tooling — 2026-11-17
