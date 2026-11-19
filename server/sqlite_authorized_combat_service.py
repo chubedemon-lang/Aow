@@ -153,7 +153,10 @@ class SqliteAuthorizedCombatService:
 
     @staticmethod
     def _identifier(value, name):
-        if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
+        # Reject str subclasses before regex, hashing, or SQLite binding can
+        # interact with caller-defined behavior. Persisted identifiers and
+        # public request identifiers use one canonical built-in str type.
+        if type(value) is not str or not _IDENTIFIER.fullmatch(value):
             raise CombatStoreError(f"invalid {name}")
         return value
 
@@ -276,7 +279,9 @@ class SqliteAuthorizedCombatService:
     @staticmethod
     def _decode_result(raw):
         """Decode one bounded, unambiguous and internally consistent receipt."""
-        if not isinstance(raw, str) or len(raw) > _MAX_RECEIPT_JSON_CHARS:
+        if type(raw) is not str or len(raw) > _MAX_RECEIPT_JSON_CHARS:
+            # Exact type check must precede len(): a str subclass can override
+            # __len__ and execute arbitrary caller code during receipt parsing.
             raise CombatStoreError("invalid combat receipt")
 
         try:
@@ -298,7 +303,7 @@ class SqliteAuthorizedCombatService:
                 value["battle_id"], "battle identifier"
             )
             owner_character_id = value["owner_character_id"]
-            if (not isinstance(owner_character_id, str)
+            if (type(owner_character_id) is not str
                     or not _IDENTIFIER.fullmatch(owner_character_id)):
                 raise CombatStoreError("invalid combat receipt owner")
 
