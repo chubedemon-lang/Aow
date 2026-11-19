@@ -68,6 +68,57 @@ def _decode_cmp_zero_on_x0(word):
     return None
 
 
+def _decode_tst_immediate_on_x0(word):
+    """Decode TST W0/X0 with a logical-immediate mask, without exposing it."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    # ANDS (immediate), with Rn=W0/X0 and Rd=WZR/XZR (the TST alias).
+    if (word & 0x7F800000) != 0x72000000 or (word & 0x3FF) != 0x1F:
+        return None
+
+    is_64_bit = bool(word & 0x80000000)
+    n = (word >> 22) & 1
+    if not is_64_bit and n:
+        return None
+
+    immr = (word >> 16) & 0x3F
+    imms = (word >> 10) & 0x3F
+    selector = (n << 6) | ((~imms) & 0x3F)
+    if selector == 0:
+        return None
+    length = selector.bit_length() - 1
+    if length < 1:
+        return None
+
+    levels = (1 << length) - 1
+    s = imms & levels
+    r = immr & levels
+    if s == levels:
+        return None
+
+    element_bits = 1 << length
+    data_bits = 64 if is_64_bit else 32
+    if element_bits > data_bits:
+        return None
+
+    element_mask = (1 << (s + 1)) - 1
+    rotation = r % element_bits
+    element_limit = (1 << element_bits) - 1
+    if rotation:
+        element_mask = (
+            (element_mask >> rotation)
+            | (element_mask << (element_bits - rotation))
+        ) & element_limit
+
+    mask = 0
+    for shift in range(0, data_bits, element_bits):
+        mask |= element_mask << shift
+    return {
+        "tested_register": "x0" if is_64_bit else "w0",
+        "tested_mask_bit_count": mask.bit_count(),
+    }
+
+
 def _decode_b_cond_eq_ne(word):
     """Decode B.EQ/B.NE and expose only its signed relative instruction delta."""
     if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
@@ -91,6 +142,7 @@ def summarize_immediate_call_result_zero_tests(code, *, max_observations=128):
     Supported shapes are:
       * BL/BLR; CBZ/CBNZ W0/X0
       * BL/BLR; TBZ/TBNZ W0/X0, #bit
+      * BL/BLR; TST W0/X0, #logical-immediate; B.EQ/B.NE
       * BL/BLR; CMP W0/X0, #0; B.EQ/B.NE
 
     The scan is linear and bounded. It does not follow branches, resolve call
@@ -117,8 +169,10 @@ def summarize_immediate_call_result_zero_tests(code, *, max_observations=128):
     matched_count = 0
     bit_test_count = 0
     cmp_branch_count = 0
+    tst_branch_count = 0
     observations = []
     bit_test_observations = []
+    tst_branch_observations = []
     cmp_branch_observations = []
 
     for index, word in enumerate(words):
@@ -175,6 +229,35 @@ def summarize_immediate_call_result_zero_tests(code, *, max_observations=128):
                     })
                 continue
 
+            tst = _decode_tst_immediate_on_x0(words[branch_index])
+            tst_branch_index = index + 2
+            tst_branch = (
+                _decode_b_cond_eq_ne(words[tst_branch_index])
+                if tst_branch_index < len(words) else None
+            )
+            if tst is not None and tst_branch is not None:
+                tst_branch_count += 1
+                target_index = (
+                    tst_branch_index
+                    + tst_branch["branch_target_delta_instructions"]
+                )
+                if len(tst_branch_observations) < max_observations:
+                    tst_branch_observations.append({
+                        "call_instruction_index": index,
+                        "test_instruction_index": branch_index,
+                        "branch_instruction_index": tst_branch_index,
+                        "call_kind": call_kind,
+                        **tst,
+                        **tst_branch,
+                        "branch_target_within_window": (
+                            0 <= target_index < len(words)
+                        ),
+                        "branch_target_instruction_index": (
+                            target_index if 0 <= target_index < len(words) else None
+                        ),
+                    })
+                continue
+
         compare_index = index + 1
         compare_register = (
             _decode_cmp_zero_on_x0(words[compare_index])
@@ -210,7 +293,7 @@ def summarize_immediate_call_result_zero_tests(code, *, max_observations=128):
     return {
         # Preserve the original discriminator for existing report consumers.
         "analysis_kind": "immediate_call_result_zero_test_candidate",
-        "analysis_extensions": ["tbz_tbnz_bit_test"],
+        "analysis_extensions": ["tbz_tbnz_bit_test", "tst_immediate_bcond"],
         "instruction_count": len(words),
         "recognized_call_count": call_count,
         "immediate_w0_x0_zero_test_count": matched_count,
@@ -222,6 +305,11 @@ def summarize_immediate_call_result_zero_tests(code, *, max_observations=128):
         "bit_test_observations_truncated": (
             bit_test_count > len(bit_test_observations)
         ),
+        "immediate_tst_zero_bcond_count": tst_branch_count,
+        "tst_zero_bcond_observations": tst_branch_observations,
+        "tst_zero_bcond_observations_truncated": (
+            tst_branch_count > len(tst_branch_observations)
+        ),
         "immediate_cmp_zero_bcond_count": cmp_branch_count,
         "cmp_zero_bcond_observations": cmp_branch_observations,
         "cmp_zero_bcond_observations_truncated": (
@@ -231,7 +319,8 @@ def summarize_immediate_call_result_zero_tests(code, *, max_observations=128):
             call_count - matched_count - cmp_branch_count
         ),
         "calls_without_any_recognized_result_test": (
-            call_count - matched_count - bit_test_count - cmp_branch_count
+            call_count - matched_count - bit_test_count
+            - tst_branch_count - cmp_branch_count
         ),
         "native_addresses_emitted": False,
         "raw_instructions_emitted": False,

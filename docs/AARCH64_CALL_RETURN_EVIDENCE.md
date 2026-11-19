@@ -8,6 +8,9 @@ supplied AArch64 method window:
 2. A direct `BL` or recognized indirect `BLR`, immediately followed by
    `TBZ` or `TBNZ` testing a bit of `W0` or `X0`.
 3. A direct `BL` or recognized indirect `BLR`, immediately followed by
+   the `TST` alias of `ANDS` (immediate) on `W0` or `X0`, then
+   immediately followed by `B.EQ` or `B.NE`.
+4. A direct `BL` or recognized indirect `BLR`, immediately followed by
    `CMP W0, #0` or `CMP X0, #0`, then immediately followed by
    `B.EQ` or `B.NE`.
 
@@ -16,8 +19,10 @@ scalar result register. In the CMP pattern, the adjacent compare consumes that
 register and the adjacent conditional branch consumes the flags produced by
 the compare. For TBZ/TBNZ, the tested bit is read directly from the same result
 register. No intervening instruction in the supplied window can overwrite the
-result register or flags before the recognized test. The tool reports these
-patterns only as **call-result dependency candidates**.
+result register or flags before the recognized test. For the TST form, the
+logical immediate is decoded and only its population count is reported; the
+mask value itself is not emitted. The tool reports these patterns only as
+**call-result dependency candidates**.
 
 ## Output
 
@@ -27,7 +32,10 @@ zero/nonzero branch condition, relative branch-target index when inside the
 bounded window, aggregate counts and explicit truncation flags. The legacy
 CBZ/CBNZ and CMP/B.cond fields remain unchanged; TBZ/TBNZ observations are
 reported separately as `immediate_w0_x0_bit_test_count` and
-`bit_test_observations`. No native address, instruction word, APK byte,
+`bit_test_observations`. TST/B.cond observations are reported separately as
+`immediate_tst_zero_bcond_count` and `tst_zero_bcond_observations`; only
+the tested mask's population count is exposed. No native address, instruction
+word, APK byte,
 callee name, packet field or message value is emitted.
 
 ## Interpretation limits
@@ -39,9 +47,10 @@ callee name, packet field or message value is emitted.
 - It does not prove the call or branch executes for a particular input.
 - It does not identify a HashSet owner, compression decision, message ID,
   frame field, handshake stage, login schema or APK compatibility.
-- Only the three exact shapes above are reported. TST, other TBZ/TBNZ
-  registers, register copies, nonzero CMP immediates and more distant
-  data-flow remain unresolved rather than guessed.
+- Only the four exact shapes above are reported. TST on registers other than
+  W0/X0, other TBZ/TBNZ registers, register copies, nonzero CMP immediates,
+  non-EQ/NE conditional branches and more distant data-flow remain unresolved
+  rather than guessed.
 - Synthetic instruction tests validate the decoder only. No AOW APK analysis
   is claimed by adding this tool.
 
