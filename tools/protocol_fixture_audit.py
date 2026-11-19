@@ -746,6 +746,7 @@ def audit_fixture_bytes(
     max_buffer_bytes=DEFAULT_MAX_BUFFER_BYTES,
     max_fixture_bytes=MAX_FIXTURE_BYTES,
     client_to_server_length_offset=None,
+    client_to_server_test_both_length_offsets=False,
 ):
     """Return a redacted candidate summary for a private stream fixture.
 
@@ -775,6 +776,18 @@ def audit_fixture_bytes(
         or not 0 <= max_payload_bytes <= min(0x7FFFFFFF, max_buffer_bytes - 4)
     ):
         raise FixtureAuditError("candidate payload limit is invalid")
+    if type(client_to_server_test_both_length_offsets) is not bool:
+        raise FixtureAuditError(
+            "client-to-server both-offset mode must be a boolean"
+        )
+    if client_to_server_test_both_length_offsets and client_to_server_length_offset is not None:
+        raise FixtureAuditError(
+            "select one client-to-server offset or both-offset mode, not both"
+        )
+    if client_to_server_test_both_length_offsets and max_buffer_bytes < 8:
+        raise FixtureAuditError(
+            "client-to-server both-offset mode requires at least 8 buffer bytes"
+        )
     if client_to_server_length_offset is not None:
         if (
             type(client_to_server_length_offset) is not int
@@ -875,6 +888,7 @@ def audit_fixture_bytes(
         schema_version=schema_version,
     )
     client_candidate = None
+    client_hypotheses = []
     client_candidate_io_alignment = {
         "status": "not_attempted_sender_symmetry_unproven",
         "candidate_frame_boundary_count": None,
@@ -888,37 +902,66 @@ def audit_fixture_bytes(
         "absolute_offsets_emitted": False,
         "packet_boundaries_verified": False,
     }
-    if client_to_server_length_offset is not None:
-        client_candidate = _inspect_signed_be_length_candidate(
+    if client_to_server_test_both_length_offsets:
+        client_candidate_io_alignment["status"] = (
+            "not_applicable_multiple_independent_hypotheses"
+        )
+
+    selected_client_offsets = (
+        (0, 4)
+        if client_to_server_test_both_length_offsets
+        else (
+            ()
+            if client_to_server_length_offset is None
+            else (client_to_server_length_offset,)
+        )
+    )
+    for selected_offset in selected_client_offsets:
+        candidate_result = _inspect_signed_be_length_candidate(
             client_chunks,
-            length_offset=client_to_server_length_offset,
+            length_offset=selected_offset,
             max_payload_bytes=max_payload_bytes,
             max_buffer_bytes=max_buffer_bytes,
         )
-        client_frame_end_offsets = client_candidate.pop("_frame_end_offsets")
-        client_candidate_io_alignment = _summarize_client_candidate_io_alignment(
-            client_candidate,
+        client_frame_end_offsets = candidate_result.pop("_frame_end_offsets")
+        candidate_alignment = _summarize_client_candidate_io_alignment(
+            candidate_result,
             client_frame_end_offsets,
             document.get("io_events", ()),
             schema_version=schema_version,
         )
+        client_hypotheses.append({
+            "length_field_offset_from_stream_start": selected_offset,
+            "bytes_before_length_field_are_opaque": selected_offset == 4,
+            "interpretation": "candidate_fit_does_not_prove_sender_symmetry",
+            "candidate": candidate_result,
+            "io_alignment": candidate_alignment,
+        })
+        if not client_to_server_test_both_length_offsets:
+            client_candidate = candidate_result
+            client_candidate_io_alignment = candidate_alignment
     candidate_status = candidate["status"]
     client_to_server_report = {
         "chunk_count": len(client_chunks),
         "stream_bytes": client_bytes,
         "analysis": (
             "not_attempted_sender_symmetry_unproven"
-            if client_candidate is None
+            if not client_hypotheses
+            else "operator_selected_generic_signed_be32_length_hypotheses_only"
+            if client_to_server_test_both_length_offsets
             else "operator_selected_generic_signed_be32_length_hypothesis_only"
         ),
     }
     if client_candidate is not None:
         client_to_server_report["length_prefix_candidate"] = {
             "length_field_offset_from_stream_start": client_to_server_length_offset,
-            "bytes_before_length_field_are_opaque": True,
+            "bytes_before_length_field_are_opaque": client_to_server_length_offset == 4,
             "interpretation": "candidate_fit_does_not_prove_sender_symmetry",
             **client_candidate,
         }
+    if client_to_server_test_both_length_offsets:
+        client_to_server_report["hypothesis_comparison"] = "independent_no_ranking"
+        client_to_server_report["length_prefix_hypotheses"] = client_hypotheses
     return {
         "status": (
             "candidate_analysis_only"
@@ -954,6 +997,7 @@ def inspect_fixture_file(
     max_buffer_bytes=DEFAULT_MAX_BUFFER_BYTES,
     max_fixture_bytes=MAX_FIXTURE_BYTES,
     client_to_server_length_offset=None,
+    client_to_server_test_both_length_offsets=False,
 ):
     """Read a private fixture safely and return only its redacted summary."""
     content = _read_regular_file_no_follow(path, max_fixture_bytes)
@@ -964,6 +1008,7 @@ def inspect_fixture_file(
         max_buffer_bytes=max_buffer_bytes,
         max_fixture_bytes=max_fixture_bytes,
         client_to_server_length_offset=client_to_server_length_offset,
+        client_to_server_test_both_length_offsets=client_to_server_test_both_length_offsets,
     )
 
 
@@ -984,6 +1029,14 @@ def main(argv=None):
             "stream; does not assert Sender/Receiver symmetry"
         ),
     )
+    parser.add_argument(
+        "--client-to-server-test-both-length-offsets",
+        action="store_true",
+        help=(
+            "opt-in: test generic signed-BE32 length hypotheses at offsets 0 and 4 "
+            "independently, without ranking them or asserting sender symmetry"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -994,6 +1047,9 @@ def main(argv=None):
             max_buffer_bytes=args.max_buffer_bytes,
             max_fixture_bytes=args.max_fixture_bytes,
             client_to_server_length_offset=args.client_to_server_length_offset,
+            client_to_server_test_both_length_offsets=(
+                args.client_to_server_test_both_length_offsets
+            ),
         )
     except FixtureAuditError as exc:
         print(json.dumps({"status": "rejected", "reason": str(exc)}, sort_keys=True))
