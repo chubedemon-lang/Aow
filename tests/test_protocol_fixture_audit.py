@@ -923,7 +923,7 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertFalse(result["sender_symmetry_verified"])
 
     def test_client_to_server_candidate_reports_negative_length_without_guessing(self):
-        client_stream = b"\\xff\\xff\\xff\\xff"
+        client_stream = bytes.fromhex("ffffffff")
         result = self.audit(
             fixture_bytes([frame(b"server")], [client_stream]),
             client_to_server_length_offset=0,
@@ -947,7 +947,7 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
                 )
         with self.assertRaisesRegex(FixtureAuditError, "buffer limit"):
             self.audit(
-                fixture_bytes([frame(b"server")], [b"ABCD" + b"\\x00\\x00\\x00\\x00"]),
+                fixture_bytes([frame(b"server")], [b"ABCD" + bytes.fromhex("00000000")]),
                 max_payload_bytes=0,
                 max_buffer_bytes=7,
                 client_to_server_length_offset=4,
