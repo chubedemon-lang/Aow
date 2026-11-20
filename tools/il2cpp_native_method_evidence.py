@@ -1348,10 +1348,19 @@ def _summarize_control_flow_helper_paths(
             or (block_count > 0 and declared_instruction_count == 0)
         ):
             raise ValueError("control-flow instruction count does not match blocks")
+    truncated_flag = control_flow_summary.get(
+        "control_flow_basic_blocks_truncated"
+    )
     if (
-        control_flow_summary.get("control_flow_basic_blocks_truncated") is True
-        or len(blocks) != block_count
+        "control_flow_basic_blocks_truncated" in control_flow_summary
+        and type(truncated_flag) is not bool
     ):
+        raise ValueError("control-flow truncation flag must be a boolean")
+    if has_declared_instruction_count and type(truncated_flag) is not bool:
+        raise ValueError(
+            "declared instruction windows require a boolean truncation flag"
+        )
+    if truncated_flag is True or len(blocks) != block_count:
         return {
             "control_flow_path_analysis_kind": "bounded_simple_path_enumeration",
             "control_flow_path_analysis_status": "cfg_truncated",
