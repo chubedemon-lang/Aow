@@ -45,7 +45,7 @@ and must be an exact built-in list or tuple of unsigned 32-bit integers.
 
 When an authorized offline pass has already produced FieldInfo usage tokens, the analyzer can optionally resolve each resulting FieldRef `TypeIndex` through the ARM64 relocation-backed native `Il2CppType` registration table. Use `--resolve-native-types` together with one or more `--field-info-usage-token` arguments. The reader reopens the same APK through the stable descriptor reader and requires its SHA-256 and metadata bytes to match the first metadata pass before joining the native table.
 
-The output adds only the symbolic native type code/name to each resolved FieldRef occurrence, plus the registration-table count and unique type-index count. It emits no native addresses, raw bytes, encoded usage tokens, or APK-derived field/default values. If no FieldRef occurrence resolves, native parsing is skipped. If the native table is malformed, missing, or ambiguous, the optional join fails closed.
+The output adds only the symbolic native type code/name to each resolved FieldRef occurrence, plus the registration-table count and unique type-index count. It emits no native addresses, raw bytes, encoded usage tokens, or NetworkSettings default values. If no FieldRef occurrence resolves, native parsing is skipped. If the native table is malformed, missing, or ambiguous, the optional join fails closed.
 
 Example:
 
@@ -59,10 +59,11 @@ This resolves only the native type category for the referenced TypeIndex. It doe
 
 ## Evidence boundary
 
-This correlation establishes only a static metadata-usage-token to FieldRef
-table-coordinate relationship. It does not resolve the native `Il2CppType`
-registration table, identify a managed owner, or prove that a native method
-uses a particular FieldRef. A FieldRef coordinate is not a packet field,
+This correlation establishes a static metadata-usage-token to FieldRef
+table-coordinate relationship. With `--resolve-native-types`, it additionally
+reports only the native type category for each resolved `TypeIndex`. It still
+does not identify a managed declaring type or field name, or prove that a
+native method uses a particular FieldRef. A FieldRef coordinate is not a packet field,
 message ID, serializer order, handshake step, runtime access, wire contract,
 or APK/server compatibility result.
 
