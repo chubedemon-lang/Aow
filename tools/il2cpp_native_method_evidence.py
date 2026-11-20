@@ -1381,6 +1381,54 @@ def _validate_control_flow_flag_producer(producer):
     return dict(producer)
 
 
+def _validate_control_flow_branch_condition(condition):
+    """Validate a redacted conditional-branch predicate object."""
+    if type(condition) is not dict or any(type(key) is not str for key in condition):
+        raise ValueError("conditional branch predicate must be a built-in dict")
+    kind = condition.get("kind")
+    if kind == "b_cond":
+        if set(condition) != {"kind", "condition_code", "condition_name"}:
+            raise ValueError("B.cond predicate fields are invalid")
+        code = condition.get("condition_code")
+        name = condition.get("condition_name")
+        if (
+            type(code) is not int or not 0 <= code < len(_AARCH64_CONDITION_NAMES)
+            or type(name) is not str or name != _AARCH64_CONDITION_NAMES[code]
+        ):
+            raise ValueError("B.cond predicate encoding is invalid")
+    elif kind == "cbz_cbnz":
+        if set(condition) != {
+            "kind", "register_index", "register_width_bits", "predicate"
+        }:
+            raise ValueError("CBZ/CBNZ predicate fields are invalid")
+        if (
+            type(condition.get("register_index")) is not int
+            or not 0 <= condition["register_index"] <= 31
+            or type(condition.get("register_width_bits")) is not int
+            or condition["register_width_bits"] not in (32, 64)
+            or type(condition.get("predicate")) is not str
+            or condition["predicate"] not in ("zero", "nonzero")
+        ):
+            raise ValueError("CBZ/CBNZ predicate encoding is invalid")
+    elif kind == "tbz_tbnz":
+        if set(condition) != {
+            "kind", "register_index", "bit_index", "predicate"
+        }:
+            raise ValueError("TBZ/TBNZ predicate fields are invalid")
+        if (
+            type(condition.get("register_index")) is not int
+            or not 0 <= condition["register_index"] <= 31
+            or type(condition.get("bit_index")) is not int
+            or not 0 <= condition["bit_index"] <= 63
+            or type(condition.get("predicate")) is not str
+            or condition["predicate"] not in ("zero", "nonzero")
+        ):
+            raise ValueError("TBZ/TBNZ predicate encoding is invalid")
+    else:
+        raise ValueError("conditional branch predicate kind is invalid")
+    return dict(condition)
+
+
 def _is_aarch64_return(word):
     """Recognize RET Xn, including RET X30, without interpreting its target."""
     return (
@@ -2040,7 +2088,8 @@ def _summarize_control_flow_helper_paths(
                 block["terminator_flag_producer"]
             )
             if (
-                condition.get("kind") != "b_cond"
+                condition is None
+                or condition.get("kind") != "b_cond"
                 or not has_instruction_range
             ):
                 raise ValueError(
