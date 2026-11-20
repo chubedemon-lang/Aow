@@ -210,6 +210,7 @@ def summarize_control_flow_memory_base_provenance(
                 predecessors[destination].add(source)
 
     outgoing_states = {}
+    outgoing_static_cell_value_origins = {}
     observations = []
     literal_load_observations = []
     total_literal_loads = sum(
@@ -227,6 +228,7 @@ def summarize_control_flow_memory_base_provenance(
     known_static_cell_match_count = 0
     known_static_cell_load_match_count = 0
     known_static_cell_store_match_count = 0
+    known_static_cell_derived_base_access_count = 0
 
     for block_index, (block_start, block_end) in enumerate(blocks):
         if block_index not in reachable:
@@ -234,13 +236,18 @@ def summarize_control_flow_memory_base_provenance(
         incoming = predecessors[block_index]
         if block_index == 0 or len(incoming) != 1:
             registers = {}
+            static_cell_value_origins = {}
         else:
             predecessor = next(iter(incoming))
             if (blocks[predecessor][0] < block_start
                     and predecessor in outgoing_states):
                 registers = dict(outgoing_states[predecessor])
+                static_cell_value_origins = dict(
+                    outgoing_static_cell_value_origins[predecessor]
+                )
             else:
                 registers = {}
+                static_cell_value_origins = {}
 
         for instruction_index in range(block_start, block_end):
             word = words[instruction_index]
@@ -253,6 +260,7 @@ def summarize_control_flow_memory_base_provenance(
                     registers[destination] = (
                         "adr_derived_address", address, instruction_index, 1
                     )
+                    static_cell_value_origins.pop(destination, None)
                 continue
 
             adrp = _decode_adrp(word, pc)
@@ -262,6 +270,7 @@ def summarize_control_flow_memory_base_provenance(
                     registers[destination] = (
                         "adrp_derived_address", address, instruction_index, 1
                     )
+                    static_cell_value_origins.pop(destination, None)
                 continue
 
             add_from_sp = _decode_add_from_stack_pointer(word)
@@ -273,6 +282,7 @@ def summarize_control_flow_memory_base_provenance(
                 registers[destination] = (
                     "stack_pointer", None, instruction_index, 1
                 )
+                static_cell_value_origins.pop(destination, None)
                 continue
 
             sub = _decode_sub_immediate(word)
@@ -281,6 +291,9 @@ def summarize_control_flow_memory_base_provenance(
                 if destination == 31:
                     # Writes to SP/XZR are outside the tracked general-register state.
                     continue
+                source_has_static_cell_origin = (
+                    static_cell_value_origins.get(source, False)
+                )
                 if source == 31:
                     registers[destination] = (
                         "stack_pointer", None, instruction_index, 1
@@ -296,11 +309,18 @@ def summarize_control_flow_memory_base_provenance(
                         registers.pop(destination, None)
                 else:
                     registers.pop(destination, None)
+                if source != 31 and source_has_static_cell_origin:
+                    static_cell_value_origins[destination] = True
+                else:
+                    static_cell_value_origins.pop(destination, None)
                 continue
 
             add = _decode_add_immediate(word)
             if add is not None:
                 destination, source, immediate, width_mask = add
+                source_has_static_cell_origin = (
+                    static_cell_value_origins.get(source, False)
+                )
                 if width_mask == _U64_MAX and source in registers:
                     kind, value, _definition, depth = registers[source]
                     result = None if value is None else value + immediate
@@ -312,12 +332,19 @@ def summarize_control_flow_memory_base_provenance(
                         registers.pop(destination, None)
                 else:
                     registers.pop(destination, None)
+                if width_mask == _U64_MAX and source_has_static_cell_origin:
+                    static_cell_value_origins[destination] = True
+                else:
+                    static_cell_value_origins.pop(destination, None)
                 continue
 
             move = _decode_move_register(word)
             if move is not None:
                 destination, source, width_mask = move
                 if destination != 31:
+                    source_has_static_cell_origin = (
+                        static_cell_value_origins.get(source, False)
+                    )
                     if width_mask == _U64_MAX and source in registers:
                         kind, value, definition, depth = registers[source]
                         registers[destination] = (
@@ -325,6 +352,10 @@ def summarize_control_flow_memory_base_provenance(
                         )
                     else:
                         registers.pop(destination, None)
+                    if width_mask == _U64_MAX and source_has_static_cell_origin:
+                        static_cell_value_origins[destination] = True
+                    else:
+                        static_cell_value_origins.pop(destination, None)
                 continue
 
             literal_load = _decode_ldr_literal(word, pc)
@@ -351,6 +382,7 @@ def summarize_control_flow_memory_base_provenance(
                             instruction_index,
                             1,
                         )
+                    static_cell_value_origins.pop(destination, None)
                 continue
 
             access = decode_integer_immediate_memory_access(word)
@@ -370,9 +402,14 @@ def summarize_control_flow_memory_base_provenance(
                         depth = 0
                     else:
                         provenance, _address, definition, depth = base_state
+                base_derived_from_known_static_cell = (
+                    base != 31 and static_cell_value_origins.get(base, False)
+                )
                 reachable_accesses += 1
                 if provenance != "unknown":
                     known_provenance_accesses += 1
+                if known_static_cells is not None and base_derived_from_known_static_cell:
+                    known_static_cell_derived_base_access_count += 1
                 matches_known_static_cell = None
                 if known_static_cells is not None:
                     matches_known_static_cell = _memory_access_overlaps_known_static_cell(
@@ -399,10 +436,18 @@ def summarize_control_flow_memory_base_provenance(
                     }
                     if known_static_cells is not None:
                         observation["matches_known_static_cell"] = matches_known_static_cell
+                        observation["base_derived_from_known_static_cell"] = (
+                            base_derived_from_known_static_cell
+                        )
                     observations.append(observation)
 
                 if access["operation"] == "load" and target != 31:
                     registers.pop(target, None)
+                    if (known_static_cells is not None
+                            and matches_known_static_cell):
+                        static_cell_value_origins[target] = True
+                    else:
+                        static_cell_value_origins.pop(target, None)
                     if (access["access_bytes"] == 8 and base_state is not None
                             and base_state[1] is not None):
                         effective_address = base_state[1] + access["byte_offset"]
@@ -438,6 +483,7 @@ def summarize_control_flow_memory_base_provenance(
                     or _is_indirect_call(word)):
                 for register in _CALLER_SAVED_REGISTERS:
                     registers.pop(register, None)
+                    static_cell_value_origins.pop(register, None)
                 continue
 
             if (_decode_conditional_branch_target(word, pc) is not None
@@ -447,8 +493,12 @@ def summarize_control_flow_memory_base_provenance(
                 continue
 
             registers.clear()
+            static_cell_value_origins.clear()
 
         outgoing_states[block_index] = registers
+        outgoing_static_cell_value_origins[block_index] = (
+            static_cell_value_origins
+        )
 
     result = {
         "analysis_kind": "bounded_cfg_memory_base_provenance",
@@ -472,4 +522,7 @@ def summarize_control_flow_memory_base_provenance(
         result["known_static_cell_match_count"] = known_static_cell_match_count
         result["known_static_cell_load_match_count"] = known_static_cell_load_match_count
         result["known_static_cell_store_match_count"] = known_static_cell_store_match_count
+        result["known_static_cell_derived_base_access_count"] = (
+            known_static_cell_derived_base_access_count
+        )
     return result
