@@ -25,6 +25,24 @@ from server.sqlite_authorized_character_service import (
 )
 
 
+class HostileString(str):
+    """A string subclass whose overridable operations must never be called."""
+
+    @staticmethod
+    def _blocked(*_args, **_kwargs):
+        raise AssertionError("string subclass hook was executed")
+
+    __len__ = _blocked
+    __iter__ = _blocked
+    __contains__ = _blocked
+    __eq__ = _blocked
+    __ne__ = _blocked
+    strip = _blocked
+    encode = _blocked
+    isascii = _blocked
+    isalnum = _blocked
+
+
 class SqliteAuthorizedCharacterServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -249,6 +267,25 @@ class SqliteAuthorizedCharacterServiceTests(unittest.TestCase):
                 self.service.create(self.owner_token, name)
         self.assertEqual(
             self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 0
+        )
+
+    def test_character_name_rejects_string_subclass_before_custom_hooks(self):
+        hostile = HostileString("Alice")
+        with self.assertRaisesRegex(ValueError, "invalid character name"):
+            self.service.create(self.owner_token, hostile)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 0
+        )
+
+    def test_default_map_id_rejects_string_subclass_before_custom_hooks(self):
+        hostile = HostileString("synthetic_map")
+        with self.assertRaisesRegex(ValueError, "invalid synthetic map identifier"):
+            SqliteAuthorizedCharacterService(self.db, default_map_id=hostile)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM sqlite_master WHERE name='durable_sessions'"
+            ).fetchone()[0],
+            1,
         )
 
     def test_invalid_default_map_id_is_rejected(self):
