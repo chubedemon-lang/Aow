@@ -77,9 +77,20 @@ per-access boolean and aggregate total, load, and store counts; no cell address
 is emitted. Counts cover every reachable decoded access even when the bounded
 per-access observation list is truncated. A load/store overlap is a static
 instruction-to-cell observation, not proof that the loaded value is consumed
-as a packet field. It does not identify a managed declaring type or field name.
+as a packet field. The analyzer now also carries a redacted origin bit from a
+load overlapping a known FieldInfo cell through supported 64-bit ADD/SUB and
+MOV operations, then marks later memory accesses whose base register derives
+from that loaded value. Calls, unknown instructions and ambiguous CFG joins
+drop this value-origin state. The report emits only a boolean per access and
+an aggregate count; it never emits the cell address or loaded value.
 
-This is a whole-section static-data inventory, not a use-def chain. A matching
+This remains a deliberately narrow static provenance chain: it does not
+decode the loaded contents, identify a managed declaring type or field name,
+prove the value reaches a serializer argument, or establish runtime execution.
+It is not packet-field attribution.
+
+This is a whole-section static-data inventory with a bounded value-origin
+taint, not a complete use-def chain. A matching
 cell does not prove that `Receiver.Cycle`, `Sender.Cycle` or any selected
 network method reads it. A FieldRef coordinate is not a managed declaring-type
 name, a native field offset, or proof of runtime access. If a token is found but

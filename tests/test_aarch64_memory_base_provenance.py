@@ -598,6 +598,68 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
         self.assertEqual(result["memory_accesses"][0]["operation"], "load")
         self.assertTrue(result["memory_accesses_truncated"])
 
+    def test_tracks_static_cell_loaded_value_into_later_memory_base_through_mov(self):
+        start = 0x9060
+        cell = 0xA400
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(
+                adr(8, start, cell),
+                ldr_x(9, 8),
+                mov_x(10, 9),
+                ldr_x(11, 10),
+            ),
+            start,
+            known_static_cells=(cell,),
+        )
+        self.assertEqual(result["known_static_cell_load_match_count"], 1)
+        self.assertEqual(
+            result["known_static_cell_derived_base_access_count"], 1
+        )
+        later_access = result["memory_accesses"][1]
+        self.assertEqual(later_access["base_provenance"], "unknown")
+        self.assertTrue(later_access["base_derived_from_known_static_cell"])
+        self.assertNotIn(hex(cell), json.dumps(result))
+
+    def test_static_cell_value_origin_is_clobbered_by_calls(self):
+        start = 0x9070
+        cell = 0xA500
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(
+                adr(8, start, cell),
+                ldr_x(9, 8),
+                0x94000000,
+                ldr_x(10, 9),
+            ),
+            start,
+            known_static_cells=(cell,),
+        )
+        self.assertEqual(
+            result["known_static_cell_derived_base_access_count"], 0
+        )
+        self.assertFalse(
+            result["memory_accesses"][1]["base_derived_from_known_static_cell"]
+        )
+
+    def test_static_cell_derived_base_count_survives_observation_truncation(self):
+        start = 0x9080
+        cell = 0xA600
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(
+                adr(8, start, cell),
+                ldr_x(9, 8),
+                ldr_x(10, 9),
+                ldr_x(11, 9),
+            ),
+            start,
+            max_accesses=1,
+            known_static_cells=(cell,),
+        )
+        self.assertEqual(
+            result["known_static_cell_derived_base_access_count"], 2
+        )
+        self.assertEqual(len(result["memory_accesses"]), 1)
+        self.assertTrue(result["memory_accesses_truncated"])
+
     def test_unrelated_and_unknown_accesses_do_not_match_known_static_cells(self):
         start = 0x9100
         cell = 0xA200
@@ -638,8 +700,13 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
         self.assertNotIn("known_static_cell_match_count", result)
         self.assertNotIn("known_static_cell_load_match_count", result)
         self.assertNotIn("known_static_cell_store_match_count", result)
+        self.assertNotIn("known_static_cell_derived_base_access_count", result)
         self.assertNotIn(
             "matches_known_static_cell", result["memory_accesses"][0]
+        )
+        self.assertNotIn(
+            "base_derived_from_known_static_cell",
+            result["memory_accesses"][0],
         )
 
 

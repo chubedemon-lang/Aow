@@ -229,7 +229,12 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         ldr_w9_x8 = 0xB9400000 | (8 << 5) | 9
         elf = make_elf(
             1,
-            text_words=(adrp_x8, add_x8_x8_0x70, ldr_w9_x8),
+            text_words=(
+                adrp_x8,
+                add_x8_x8_0x70,
+                ldr_w9_x8,
+                0xF9400000 | (9 << 5) | 10,  # LDR X10, [X9]
+            ),
             include_native_type_table=True,
             field_info_token=encoded,
         )
@@ -244,7 +249,13 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         self.assertEqual(provenance["known_static_cell_match_count"], 1)
         self.assertEqual(provenance["known_static_cell_load_match_count"], 1)
         self.assertEqual(provenance["known_static_cell_store_match_count"], 0)
+        self.assertEqual(
+            provenance["known_static_cell_derived_base_access_count"], 1
+        )
         self.assertTrue(provenance["memory_accesses"][0]["matches_known_static_cell"])
+        self.assertTrue(
+            provenance["memory_accesses"][1]["base_derived_from_known_static_cell"]
+        )
         self.assertEqual(
             report["field_info_usage_correlation"]["references"][0]["native_type"]["type_name"],
             "I4",
