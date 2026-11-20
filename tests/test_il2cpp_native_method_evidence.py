@@ -1157,6 +1157,47 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not adjacent"):
             _summarize_control_flow_helper_paths(summary)
 
+
+    def test_path_summary_rejects_malformed_flag_producer_width(self):
+        start = 0x5900
+        words = (
+            0xF1001C7F,
+            self._encode_b_cond(start + 4, start + 12, condition=0),
+            0xD65F03C0,
+            0xD65F03C0,
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code, start, {}, {}
+        )
+        branch_block = next(
+            block for block in summary["control_flow_basic_blocks"]
+            if block["terminator"] == "b_cond"
+        )
+        branch_block["terminator_flag_producer"]["width_bits"] = "64"
+        with self.assertRaisesRegex(ValueError, "metadata is invalid"):
+            _summarize_control_flow_helper_paths(summary)
+
+    def test_path_summary_rejects_flag_producer_without_branch_predicate(self):
+        start = 0x5A00
+        words = (
+            0xF1001C7F,
+            self._encode_b_cond(start + 4, start + 12, condition=0),
+            0xD65F03C0,
+            0xD65F03C0,
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code, start, {}, {}
+        )
+        branch_block = next(
+            block for block in summary["control_flow_basic_blocks"]
+            if block["terminator"] == "b_cond"
+        )
+        del branch_block["terminator_condition"]
+        with self.assertRaisesRegex(ValueError, "require a ranged B.cond"):
+            _summarize_control_flow_helper_paths(summary)
+
     def test_control_flow_paths_preserve_decoded_branch_predicates(self):
         start = 0x5200
         words = (
