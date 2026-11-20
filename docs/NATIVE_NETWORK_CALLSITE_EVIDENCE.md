@@ -794,3 +794,47 @@ all supported extension families, invalid options, and the unknown-offset
 provenance boundary. This is analyzer capability only; it is not a new APK
 disassembly, runtime observation, packet-field attribution or wire-contract
 finding.
+
+## Receiver second-integer static lookup revalidation — 2026-11-20
+
+A fresh offline pass read the unchanged authorized APK in a private workspace;
+the established SHA-256 and IL2CPP v31/ARM64 inventory matched. No APK,
+metadata, native library, address, raw instruction, packet, capture, endpoint,
+or proprietary asset was committed.
+
+The analyzer now records a redacted receiver_integer_lookup_summary when the
+bounded evidence chain is complete:
+
+- The second of exactly two direct SimpleDeserializer.deserializeInt
+  calls returns in W0, is copied to a temporary W register, and is forwarded
+  in W1 at the next direct lookup call.
+- Receiver.Cycle and NetworkSettings::.cctor load the same class-reference
+  cell. The initializer stores through the first static_fields slot, and
+  the receiver reads that same slot before the lookup call.
+- Metadata places m_zippetMessageTypes as the first field without a metadata
+  default after 20 default-backed fields. This is a **metadata-order candidate**,
+  not a proven FieldInfo-to-static-slot mapping; field flags/offsets are not
+  independently resolved by this report.
+- The lookup target is not uniquely mapped to an allowlisted metadata method.
+  Its exact .eh_frame_hdr FDE entry resolves to a bounded 480-byte
+  entry-to-next-FDE analysis window. The window contains the conservative
+  signed-division/remainder, bucket-index, entry-load, compare and conditional
+  loop pattern associated with a hash-bucket membership lookup.
+
+The best-supported static interpretation is therefore that the second
+receive-side integer is used as a key in a hash-bucket membership lookup on
+the first NetworkSettings static reference slot, whose metadata-order field
+candidate is m_zippetMessageTypes. This strengthens the earlier owner
+attribution, but it does **not** establish a stable numeric wire-message-ID
+mapping, prove the runtime branch outcome, or prove that compression is
+applied to a particular packet/payload range.
+
+Still unverified: complete framing, effective HeaderLength use, compression
+placement/format, encryption, sender/receiver symmetry, handshake sequence,
+LoginRequest field order, and unchanged-APK login. No provenance-reviewed
+authorized Client-to-Server byte fixture or local runtime trace is available;
+the real AOW adapter remains disabled. No official endpoint was contacted.
+
+Synthetic tests exercise the register-flow, class-cell/first-slot linkage,
+metadata-order candidate boundary, and hash-bucket-shape recognizer. The report
+emits no native addresses or instruction bytes.
