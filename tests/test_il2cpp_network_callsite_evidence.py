@@ -242,6 +242,8 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         )
         provenance = receiver["cfg_memory_base_provenance_observations"]
         self.assertEqual(provenance["known_static_cell_match_count"], 1)
+        self.assertEqual(provenance["known_static_cell_load_match_count"], 1)
+        self.assertEqual(provenance["known_static_cell_store_match_count"], 0)
         self.assertTrue(provenance["memory_accesses"][0]["matches_known_static_cell"])
         self.assertEqual(
             report["field_info_usage_correlation"]["references"][0]["native_type"]["type_name"],
