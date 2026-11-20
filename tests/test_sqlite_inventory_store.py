@@ -691,7 +691,13 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         awards.grant_once("hero", "quest-once", 1, 42, "gem", 2)
         self.assertEqual(
             self.store.verify_integrity(),
-            {"snapshots": 1, "items": 2, "mutations": 2},
+            {
+                "snapshots": 1,
+                "items": 2,
+                "mutations": 2,
+                "anchored_snapshots": 1,
+                "legacy_unanchored_snapshots": 0,
+            },
         )
 
     def test_verify_integrity_uses_one_snapshot_during_concurrent_mutation(self):
@@ -752,7 +758,13 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         self.assertNotIn("error", outcome)
         self.assertEqual(
             outcome["result"],
-            {"snapshots": 1, "items": 1, "mutations": 1},
+            {
+                "snapshots": 1,
+                "items": 1,
+                "mutations": 1,
+                "anchored_snapshots": 1,
+                "legacy_unanchored_snapshots": 0,
+            },
         )
         self.assertFalse(reader.in_transaction)
         self.assertEqual(self.store.get("hero").revision, 2)
