@@ -87,8 +87,16 @@ drop this value-origin state. The memory-access decoder rejects load-writeback
 encodings whose destination aliases the base because their architectural result
 is constrained-unpredictable; the provenance pass consequently treats such an
 instruction as unknown and clears tracked state rather than guessing.
-The report emits only a boolean per access and an aggregate count; it never
-emits the cell address or loaded value.
+Supported integer LDP/STP pair forms (32-bit and 64-bit, signed-offset,
+pre-indexed, and post-indexed) are represented as one instruction event covering
+two adjacent elements. Pair loads update provenance for both destination
+registers independently. For 64-bit pair loads, each element is checked
+separately against relocation targets and exact eight-byte FieldInfo cells; the
+full-width-load counter therefore counts matching elements, while the
+memory-access counter counts instructions. Non-temporal, LDPSW, SIMD/FP,
+reserved, and writeback/base-alias pair encodings remain unsupported and fail
+closed. The report emits only redacted register labels, booleans and aggregate
+counts; it never emits the cell address or loaded value.
 
 This remains a deliberately narrow static provenance chain: it does not
 decode the loaded contents, identify a managed declaring type or field name,

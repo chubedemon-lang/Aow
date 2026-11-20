@@ -190,8 +190,9 @@ def summarize_control_flow_memory_base_provenance(
     """Summarize memory-access base origins without emitting absolute addresses.
 
     Recognized origins are stack_pointer, adrp_derived_address,
-    relocation_loaded_pointer, and unknown. State crosses only a unique
-    forward CFG predecessor. Calls clobber modeled caller-saved registers;
+    relocation_loaded_pointer, and unknown. Scalar and supported integer pair
+    loads/stores are observed; pair loads update both destination-register states.
+    State crosses only a unique forward CFG predecessor. Calls clobber modeled caller-saved registers;
     unknown instructions clear state. Conditional edges assume both outcomes.
     If known_static_cells is supplied, access ranges are compared against
     private eight-byte cells and only redacted boolean matches/counts are emitted.
@@ -418,6 +419,11 @@ def summarize_control_flow_memory_base_provenance(
                     reachable_register_offset_accesses += 1
                 base = (word >> 5) & 0x1F
                 target = word & 0x1F
+                target2 = (
+                    (word >> 10) & 0x1F
+                    if access.get("access_count") == 2 else None
+                )
+                element_bytes = access.get("element_bytes", access["access_bytes"])
                 if base == 31:
                     provenance = "stack_pointer"
                     definition = None
@@ -464,6 +470,11 @@ def summarize_control_flow_memory_base_provenance(
                         "base_definition_instruction_index": definition,
                         "base_derivation_depth": depth,
                     }
+                    if access.get("access_count") == 2:
+                        observation["element_bytes"] = element_bytes
+                        observation["access_count"] = 2
+                        observation["target_register"] = access["target_register"]
+                        observation["target_register2"] = access["target_register2"]
                     for field in ("index_register", "index_extend", "scale_shift"):
                         if field in access:
                             observation[field] = access[field]
@@ -474,33 +485,51 @@ def summarize_control_flow_memory_base_provenance(
                         )
                     observations.append(observation)
 
-                if access["operation"] == "load" and target != 31:
-                    registers.pop(target, None)
-                    exact_static_cell_load = (
-                        known_static_cells is not None
-                        and _load_exactly_matches_known_static_cell(
-                            base_state, access, known_static_cells
+                if access["operation"] == "load":
+                    loaded_targets = [(target, 0)]
+                    if target2 is not None:
+                        loaded_targets.append((target2, element_bytes))
+                    for loaded_target, element_displacement in loaded_targets:
+                        if loaded_target == 31:
+                            continue
+                        registers.pop(loaded_target, None)
+                        static_cell_value_origins.pop(loaded_target, None)
+
+                        element_access = dict(access)
+                        element_access["access_bytes"] = element_bytes
+                        if type(access.get("byte_offset")) is int:
+                            element_access["byte_offset"] = (
+                                access["byte_offset"] + element_displacement
+                            )
+                        else:
+                            element_access["byte_offset"] = None
+
+                        exact_static_cell_load = (
+                            known_static_cells is not None
+                            and _load_exactly_matches_known_static_cell(
+                                base_state, element_access, known_static_cells
+                            )
                         )
-                    )
-                    if exact_static_cell_load:
-                        known_static_cell_full_width_load_match_count += 1
-                        static_cell_value_origins[target] = True
-                    else:
-                        static_cell_value_origins.pop(target, None)
-                    if (access["access_bytes"] == 8
-                            and type(access.get("byte_offset")) is int
-                            and base_state is not None
-                            and base_state[1] is not None):
-                        effective_address = base_state[1] + access["byte_offset"]
-                        if 0 <= effective_address <= _U64_MAX:
-                            relocated_target = relocations.get(effective_address)
-                            if relocated_target is not None:
-                                registers[target] = (
-                                    "relocation_loaded_pointer",
-                                    relocated_target,
-                                    instruction_index,
-                                    1,
-                                )
+                        if exact_static_cell_load:
+                            known_static_cell_full_width_load_match_count += 1
+                            static_cell_value_origins[loaded_target] = True
+
+                        if (element_bytes == 8
+                                and type(element_access.get("byte_offset")) is int
+                                and base_state is not None
+                                and base_state[1] is not None):
+                            effective_address = (
+                                base_state[1] + element_access["byte_offset"]
+                            )
+                            if 0 <= effective_address <= _U64_MAX:
+                                relocated_target = relocations.get(effective_address)
+                                if relocated_target is not None:
+                                    registers[loaded_target] = (
+                                        "relocation_loaded_pointer",
+                                        relocated_target,
+                                        instruction_index,
+                                        1,
+                                    )
 
                 # Pre/post-indexed forms update the base after the memory
                 # operation. Preserve only a previously known symbolic origin.
