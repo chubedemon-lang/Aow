@@ -570,8 +570,9 @@ def _networksettings_static_first_slot_store_cells(code, start_va):
             cells.add(load["cell"])
     return cells
 
+
 def _networksettings_static_first_slot_read_sequences(code, start_va, expected_cell):
-    """Return exact class/static_fields[0] read chains with their register roles."""
+    """Find exact three-load static_fields[0] reads after a validated class-cell load."""
     if type(code) is not bytes or len(code) % 4:
         raise ValueError("AArch64 code window must be aligned bytes")
     words = [
@@ -583,36 +584,35 @@ def _networksettings_static_first_slot_read_sequences(code, start_va, expected_c
         if load["cell"] != expected_cell:
             continue
         class_register = load["register"]
-        first_index = _skip_aarch64_nops(words, load["load_index"] + 1)
-        if first_index >= len(words):
-            continue
-        first = _decode_aarch64_ldr_x_unsigned(words[first_index][1])
-        if first is None or first[1] != class_register or first[2] != 0:
-            continue
-        object_register = first[0]
-        second_index = _skip_aarch64_nops(words, first_index + 1)
-        if second_index >= len(words):
-            continue
-        second = _decode_aarch64_ldr_x_unsigned(words[second_index][1])
-        if second is None or second[1] != object_register or second[2] != 0xB8:
-            continue
-        static_fields_register = second[0]
-        read_index = _skip_aarch64_nops(words, second_index + 1)
-        if read_index >= len(words):
-            continue
-        third = _decode_aarch64_ldr_x_unsigned(words[read_index][1])
-        if (
-            third is not None and third[1] == static_fields_register
-            and third[2] == 0
-        ):
-            sequences.append({
-                "first_index": first_index,
-                "read_index": read_index,
-                "class_register": class_register,
-                "object_register": object_register,
-                "static_fields_register": static_fields_register,
-                "value_register": third[0],
-            })
+        for first_index in range(load["load_index"] + 1, min(load["load_index"] + 513, len(words))):
+            first = _decode_aarch64_ldr_x_unsigned(words[first_index][1])
+            if first is None or first[1] != class_register or first[2] != 0:
+                continue
+            object_register = first[0]
+            second_index = _skip_aarch64_nops(words, first_index + 1)
+            if second_index >= len(words):
+                continue
+            second = _decode_aarch64_ldr_x_unsigned(words[second_index][1])
+            if second is None or second[1] != object_register or second[2] != 0xB8:
+                continue
+            static_fields_register = second[0]
+            read_index = _skip_aarch64_nops(words, second_index + 1)
+            if read_index >= len(words):
+                continue
+            third = _decode_aarch64_ldr_x_unsigned(words[read_index][1])
+            if (
+                third is not None and third[1] == static_fields_register
+                and third[2] == 0
+            ):
+                sequences.append({
+                    "load_index": load["load_index"],
+                    "first_index": first_index,
+                    "read_index": read_index,
+                    "class_register": class_register,
+                    "object_register": object_register,
+                    "static_fields_register": static_fields_register,
+                    "value_register": third[0],
+                })
     return sequences
 def _networksettings_first_non_default_field(metadata):
     """Return a metadata-order candidate, not a proven static-field map."""
@@ -692,6 +692,7 @@ def _contains_hash_bucket_opcode_families(code):
         and any((word & 0xFF000010) == 0x54000000 for word in words)
     )
 
+
 def _summarize_receiver_integer_lookup(
     receiver_code, receiver_start_va, networksettings_cctor_code,
     networksettings_cctor_start_va, deserialize_int_targets,
@@ -763,15 +764,27 @@ def _summarize_receiver_integer_lookup(
     sequences = _networksettings_static_first_slot_read_sequences(
         receiver_code, receiver_start_va, class_cell
     )
+    ordered_sequences = [
+        sequence for sequence in sequences
+        if _skip_aarch64_nops(words, sequence["load_index"] + 1) == deserialize_calls[0]
+        and sequence["first_index"] == _skip_aarch64_nops(words, copy_index + 1)
+    ]
+    if not ordered_sequences:
+        return {
+            "status": "unresolved_networksettings_static_slot_read",
+            "deserialize_int_call_count": len(deserialize_calls),
+        }, None
+
     candidates = []
-    for sequence in sequences:
-        if sequence["first_index"] != _skip_aarch64_nops(words, copy_index + 1):
-            continue
+    saw_key_alias = False
+    saw_key_argument = False
+    for sequence in ordered_sequences:
         chain_registers = {
             sequence["class_register"], sequence["object_register"],
             sequence["static_fields_register"], sequence["value_register"],
         }
         if key_register in chain_registers:
+            saw_key_alias = True
             continue
 
         argument_index = _skip_aarch64_nops(words, sequence["read_index"] + 1)
@@ -780,6 +793,7 @@ def _summarize_receiver_integer_lookup(
         argument = _decode_aarch64_mov_w_register(words[argument_index][1])
         if argument is None or argument[0] != 1 or argument[1] != key_register:
             continue
+        saw_key_argument = True
 
         call_index = _skip_aarch64_nops(words, argument_index + 1)
         if call_index >= len(words):
@@ -792,8 +806,14 @@ def _summarize_receiver_integer_lookup(
         candidates.append((lookup_target, sequence))
 
     if len(candidates) != 1:
+        if saw_key_alias:
+            status = "unresolved_key_register_alias"
+        elif not saw_key_argument:
+            status = "unresolved_key_argument"
+        else:
+            status = "unresolved_lookup_call"
         return {
-            "status": "unresolved_or_ambiguous_lookup_call",
+            "status": status,
             "deserialize_int_call_count": len(deserialize_calls),
             "candidate_count": len(candidates),
         }, None
