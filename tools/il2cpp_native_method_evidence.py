@@ -1315,6 +1315,23 @@ def _validate_control_flow_flag_producer(producer):
     if type(producer) is not dict or any(type(key) is not str for key in producer):
         raise ValueError("conditional branch flag producer must be a built-in dict")
     kind = producer.get("kind")
+    if type(kind) is not str:
+        raise ValueError("conditional branch flag producer kind is invalid")
+
+    width = producer.get("width_bits")
+    destination_is_zero = producer.get("destination_is_zero")
+    instruction_index = producer.get("instruction_index")
+    nop_count = producer.get("intervening_nop_count")
+    compare_alias = kind.startswith(("cmp_", "cmn_"))
+    if (
+        type(width) is not int or width not in (32, 64)
+        or type(destination_is_zero) is not bool
+        or destination_is_zero != compare_alias
+        or type(instruction_index) is not int or instruction_index < 0
+        or type(nop_count) is not int or not 0 <= nop_count <= 16383
+    ):
+        raise ValueError("conditional branch flag producer metadata is invalid")
+
     common = {
         "kind", "width_bits", "destination_is_zero",
         "instruction_index", "intervening_nop_count",
@@ -1356,74 +1373,12 @@ def _validate_control_flow_flag_producer(producer):
             or type(producer.get("shift_kind")) is not str
             or producer["shift_kind"] not in {"lsl", "lsr", "asr"}
             or type(producer.get("shift_amount")) is not int
-            or not 0 <= producer["shift_amount"] < producer.get("width_bits", 0)
+            or not 0 <= producer["shift_amount"] < width
         ):
             raise ValueError("shifted-register flag producer operands are invalid")
     else:
         raise ValueError("conditional branch flag producer kind is invalid")
-
-    width = producer.get("width_bits")
-    destination_is_zero = producer.get("destination_is_zero")
-    instruction_index = producer.get("instruction_index")
-    nop_count = producer.get("intervening_nop_count")
-    compare_alias = kind.startswith(("cmp_", "cmn_"))
-    if (
-        type(width) is not int or width not in (32, 64)
-        or type(destination_is_zero) is not bool
-        or destination_is_zero != compare_alias
-        or type(instruction_index) is not int or instruction_index < 0
-        or type(nop_count) is not int or nop_count < 0
-    ):
-        raise ValueError("conditional branch flag producer metadata is invalid")
     return dict(producer)
-
-
-def _validate_control_flow_branch_condition(condition):
-    """Validate a redacted conditional-branch predicate object."""
-    if type(condition) is not dict or any(type(key) is not str for key in condition):
-        raise ValueError("conditional branch predicate must be a built-in dict")
-    kind = condition.get("kind")
-    if kind == "b_cond":
-        if set(condition) != {"kind", "condition_code", "condition_name"}:
-            raise ValueError("B.cond predicate fields are invalid")
-        code = condition.get("condition_code")
-        name = condition.get("condition_name")
-        if (
-            type(code) is not int or not 0 <= code < len(_AARCH64_CONDITION_NAMES)
-            or type(name) is not str or name != _AARCH64_CONDITION_NAMES[code]
-        ):
-            raise ValueError("B.cond predicate encoding is invalid")
-    elif kind == "cbz_cbnz":
-        if set(condition) != {
-            "kind", "register_index", "register_width_bits", "predicate"
-        }:
-            raise ValueError("CBZ/CBNZ predicate fields are invalid")
-        if (
-            type(condition.get("register_index")) is not int
-            or not 0 <= condition["register_index"] <= 31
-            or type(condition.get("register_width_bits")) is not int
-            or condition["register_width_bits"] not in (32, 64)
-            or type(condition.get("predicate")) is not str
-            or condition["predicate"] not in ("zero", "nonzero")
-        ):
-            raise ValueError("CBZ/CBNZ predicate encoding is invalid")
-    elif kind == "tbz_tbnz":
-        if set(condition) != {
-            "kind", "register_index", "bit_index", "predicate"
-        }:
-            raise ValueError("TBZ/TBNZ predicate fields are invalid")
-        if (
-            type(condition.get("register_index")) is not int
-            or not 0 <= condition["register_index"] <= 31
-            or type(condition.get("bit_index")) is not int
-            or not 0 <= condition["bit_index"] <= 63
-            or type(condition.get("predicate")) is not str
-            or condition["predicate"] not in ("zero", "nonzero")
-        ):
-            raise ValueError("TBZ/TBNZ predicate encoding is invalid")
-    else:
-        raise ValueError("conditional branch predicate kind is invalid")
-    return dict(condition)
 
 
 def _is_aarch64_return(word):
@@ -2073,6 +2028,7 @@ def _summarize_control_flow_helper_paths(
             block["external_fallthrough_exit"]
         ) is not bool:
             raise ValueError("conditional fallthrough-exit flag is invalid")
+        condition = None
         if "terminator_condition" in block:
             condition = _validate_control_flow_branch_condition(
                 block["terminator_condition"]
