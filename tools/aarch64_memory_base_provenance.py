@@ -172,6 +172,8 @@ def summarize_control_flow_memory_base_provenance(
     relocation_loaded_pointer, and unknown. State crosses only a unique
     forward CFG predecessor. Calls clobber modeled caller-saved registers;
     unknown instructions clear state. Conditional edges assume both outcomes.
+    If known_static_cells is supplied, access ranges are compared against
+    private eight-byte cells and only redacted boolean matches/counts are emitted.
     """
     if type(code) is not bytes or len(code) % 4:
         raise ValueError("AArch64 code window must be exact bytes and word aligned")
