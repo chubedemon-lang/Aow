@@ -765,3 +765,24 @@ Synthetic instruction-vector tests cover both rejected partial cases and the
 accepted exact-width case. This narrows a static provenance heuristic; it does
 not decode the loaded value, identify a managed field, prove use as a serializer
 argument, or establish runtime execution or packet semantics.
+
+
+## Register-offset AArch64 memory access provenance — tooling only
+
+The bounded memory-base analyzer now also recognizes the non-sign-extending
+integer LDR/STR register-offset forms with UXTW, LSL/UXTX, SXTW or SXTX index
+extensions. Reports expose the index register, extension and scale shift, but
+leave `byte_offset` unknown because the runtime index value is not evaluated.
+
+A register-offset access through a value loaded from an exact FieldInfo cell
+can still be marked as using a FieldInfo-derived base. It is **not** counted
+as a known-cell overlap, and it cannot seed exact-width value provenance or
+relocation lookup. This prevents an unknown index from being mistaken for a
+known address. SIMD/FP, sign-extending, pair, atomic and reserved extension
+forms remain unsupported.
+
+Synthetic assembler-encoding tests cover byte/word/doubleword loads, stores,
+all supported extension families, invalid options, and the unknown-offset
+provenance boundary. This is analyzer capability only; it is not a new APK
+disassembly, runtime observation, packet-field attribution or wire-contract
+finding.

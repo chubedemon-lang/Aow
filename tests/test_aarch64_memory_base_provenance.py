@@ -69,6 +69,19 @@ def ldr_w(destination, base, immediate=0):
     return (2 << 30) | 0x39400000 | (immediate << 10) | (base << 5) | destination
 
 
+def ldr_register_offset_x(destination, base, index, *, option=3, scaled=False):
+    return (
+        (3 << 30)
+        | 0x38200800
+        | (1 << 22)
+        | (index << 16)
+        | (option << 13)
+        | (int(scaled) << 12)
+        | (base << 5)
+        | destination
+    )
+
+
 def str_w(source, base, immediate=0):
     return (2 << 30) | 0x39000000 | (immediate << 10) | (base << 5) | source
 
@@ -697,6 +710,36 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
                 self.assertFalse(
                     result["memory_accesses"][1]["base_derived_from_known_static_cell"]
                 )
+
+    def test_tracks_register_offset_access_without_guessing_dynamic_cell_overlap(self):
+        start = 0x9090
+        cell = 0xA700
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(
+                adr(8, start, cell),
+                ldr_x(9, 8),
+                ldr_register_offset_x(10, 9, 11, scaled=True),
+            ),
+            start,
+            known_static_cells=(cell,),
+        )
+        self.assertEqual(result["memory_access_count"], 2)
+        self.assertEqual(result["register_offset_memory_access_count"], 1)
+        self.assertEqual(
+            result["statically_reachable_register_offset_memory_access_count"], 1
+        )
+        self.assertEqual(result["known_static_cell_match_count"], 1)
+        self.assertEqual(result["known_static_cell_full_width_load_match_count"], 1)
+        self.assertEqual(result["known_static_cell_derived_base_access_count"], 1)
+        dynamic_access = result["memory_accesses"][1]
+        self.assertEqual(dynamic_access["addressing_mode"], "register_offset")
+        self.assertEqual(dynamic_access["index_register"], "x11")
+        self.assertEqual(dynamic_access["index_extend"], "lsl")
+        self.assertEqual(dynamic_access["scale_shift"], 3)
+        self.assertIsNone(dynamic_access["byte_offset"])
+        self.assertIsNone(dynamic_access["matches_known_static_cell"])
+        self.assertTrue(dynamic_access["base_derived_from_known_static_cell"])
+        self.assertNotIn(hex(cell), json.dumps(result))
 
     def test_static_cell_value_origin_is_clobbered_by_calls(self):
         start = 0x9070
