@@ -558,12 +558,50 @@ class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
             {
                 "battles": 1,
                 "mutations": 2,
+                "verified_transitions": 1,
                 "unanchored_battles": 1,
             },
         )
         self.assertEqual(
             self.service.get(self.owner_token, 101, "battle-1"),
             second.snapshot,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_rejects_disconnected_but_valid_receipt_transition(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-chain-first", 0, 101
+        )
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-chain-second", 1, 9001
+        )
+
+        raw = self.db.execute(
+            "SELECT result_json FROM combat_mutations WHERE request_id=?",
+            ("audit-chain-first",),
+        ).fetchone()[0]
+        receipt = json.loads(raw)
+        # The first receipt remains individually valid: changing the target's
+        # attack stat does not affect the first actor's already-recorded hit.
+        # It nevertheless cannot lead to the unchanged second receipt.
+        receipt["battle"]["second"][2] = 4
+        tampered = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+        self.db.execute(
+            "UPDATE combat_mutations SET result_json=? WHERE request_id=?",
+            (tampered, "audit-chain-first"),
+        )
+
+        with self.assertRaisesRegex(
+            CombatStoreError, "does not continue previous revision"
+        ):
+            self.service.verify_integrity()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT result_json FROM combat_mutations WHERE request_id=?",
+                ("audit-chain-first",),
+            ).fetchone()[0],
+            tampered,
         )
         self.assertFalse(self.db.in_transaction)
 
@@ -647,7 +685,12 @@ class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
         self.db.rollback()
         self.assertEqual(
             self.service.verify_integrity(),
-            {"battles": 1, "mutations": 0, "unanchored_battles": 1},
+            {
+                "battles": 1,
+                "mutations": 0,
+                "verified_transitions": 0,
+                "unanchored_battles": 1,
+            },
         )
 
 if __name__ == "__main__":
