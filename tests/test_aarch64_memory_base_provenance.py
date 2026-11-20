@@ -562,6 +562,40 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
         )
 
 
+    def test_load_writeback_alias_drops_ambiguous_register_and_value_origin(self):
+        for mode, base_adjustment in ((1, 0), (3, 8)):
+            with self.subTest(mode=mode):
+                start = 0x90A0
+                cell = 0xA800 + (mode * 0x10)
+                base_address = cell - base_adjustment
+                result = summarize_control_flow_memory_base_provenance(
+                    code_bytes(
+                        adr(8, start, base_address),
+                        unscaled_access(
+                            size=3,
+                            opc=1,
+                            base=8,
+                            target=8,
+                            immediate=8,
+                            mode=mode,
+                        ),
+                        ldr_x(9, 8),
+                    ),
+                    start,
+                    known_static_cells=(cell,),
+                )
+
+                load, later_access = result["memory_accesses"]
+                self.assertTrue(load["matches_known_static_cell"])
+                self.assertEqual(load["base_provenance"], "adr_derived_address")
+                self.assertEqual(later_access["base_provenance"], "unknown")
+                self.assertFalse(
+                    later_access["base_derived_from_known_static_cell"]
+                )
+                self.assertEqual(
+                    result["known_static_cell_derived_base_access_count"], 0
+                )
+
     def test_marks_partial_access_to_known_static_cell_without_emitting_address(self):
         start = 0x9000
         cell = 0xA100
