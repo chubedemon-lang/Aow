@@ -316,7 +316,13 @@ class EvidenceGatedTransportTests(unittest.TestCase):
                 raise AssertionError("custom collection iterator executed")
 
         with self.assertRaisesRegex(ValueError, "built-in list or tuple"):
-            self.make_adapter(HostileList())
+            EvidenceGatedTransportAdapter(
+                records=HostileList(),
+                artifact_sha256="a" * 64,
+                approved_evidence_digests=(),
+                decode=lambda raw: raw,
+                encode=lambda message: message,
+            )
 
     def test_gated_adapter_still_rejects_non_bytes_payload(self):
         records = [
