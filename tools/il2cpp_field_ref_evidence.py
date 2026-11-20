@@ -245,7 +245,8 @@ def correlate_field_info_usage_tokens(
         "interpretation": (
             "Static FieldInfo metadata-usage token to FieldRef table-coordinate "
             "correlation only. Unresolved tokens are not classified further. "
-            "This does not resolve native Il2CppType owners, prove a native "
+            "Optional native type categories are included only when an ELF "
+            "is supplied; this does not resolve managed owners, prove a native "
             "callsite or runtime field access, identify packet fields, establish "
             "serializer order, or demonstrate a wire contract or APK/server "
             "compatibility."
@@ -263,7 +264,9 @@ def inspect_apk(
     from tools.il2cpp_metadata_inventory import _read_metadata
 
     if type(resolve_native_types) is not bool:
-        raise FieldRefEvidenceError("resolve_native_types must be a built-in boolean")
+        raise FieldRefEvidenceError(
+            "resolve_native_types must be a built-in boolean"
+        )
     if resolve_native_types and encoded_field_info_tokens is None:
         raise FieldRefEvidenceError(
             "native type resolution requires FieldInfo usage tokens"
@@ -321,7 +324,9 @@ def main(argv=None) -> None:
     parser.add_argument("--output", help="optional local JSON report path")
     args = parser.parse_args(argv)
     if args.resolve_native_types and not args.field_info_usage_token:
-        parser.error("--resolve-native-types requires at least one --field-info-usage-token")
+        parser.error(
+            "--resolve-native-types requires at least one --field-info-usage-token"
+        )
     report = json.dumps(
         inspect_apk(
             args.apk,
