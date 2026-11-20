@@ -14,10 +14,6 @@ import struct
 from pathlib import Path
 
 from tools.il2cpp_metadata_usage_evidence import decode_field_info_usage_index
-from tools.il2cpp_default_value_evidence import (
-    DefaultValueEvidenceError,
-    resolve_native_type_codes,
-)
 
 METADATA_MAGIC = 0xFAB11BAF
 METADATA_VERSION = 31
@@ -208,6 +204,13 @@ def correlate_field_info_usage_tokens(
             records_by_index[index]["type_index"] for index in resolved_indexes
         })
         if type_indexes:
+            # Import lazily: the native callsite analyzer imports this module
+            # for FieldInfo correlation, so a top-level import would cycle.
+            from tools.il2cpp_default_value_evidence import (
+                DefaultValueEvidenceError,
+                resolve_native_type_codes,
+            )
+
             try:
                 native_report = resolve_native_type_codes(elf, type_indexes)
             except DefaultValueEvidenceError as exc:
