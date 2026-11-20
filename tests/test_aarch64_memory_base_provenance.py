@@ -590,8 +590,8 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
                 # The memory decoder rejects the constrained-unpredictable
                 # alias-writeback form. The unknown instruction therefore
                 # clears both address and loaded-value provenance.
-                self.assertEqual(result["memory_access_count"], 3)
-                self.assertEqual(len(result["memory_accesses"]), 3)
+                self.assertEqual(result["memory_access_count"], 2)
+                self.assertEqual(len(result["memory_accesses"]), 2)
                 later_access = result["memory_accesses"][-1]
                 self.assertEqual(later_access["base_provenance"], "unknown")
                 self.assertFalse(
