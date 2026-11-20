@@ -1763,8 +1763,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             (
                 strict_summary([
                     block(
-                        0, 0, successors=(1,),
-                        edges=((1, "fallthrough"),), terminator="indirect_branch",
+                        0, 0, terminator="indirect_branch",
                     ),
                     block(1, 1, terminator="return"),
                 ]),
