@@ -611,7 +611,12 @@ class SqliteSessionStoreTests(unittest.TestCase):
         self.now += 1
 
         self.assertEqual(
-            self.store.verify_integrity(), {"session_count": 2}
+            self.store.verify_integrity(),
+            {
+                "session_count": 2,
+                "active_session_count": 1,
+                "expired_session_count": 1,
+            },
         )
         self.assertFalse(self.db.in_transaction)
         self.assertEqual(
@@ -621,6 +626,28 @@ class SqliteSessionStoreTests(unittest.TestCase):
         self.assertEqual(self.store.resolve(active), 101)
         with self.assertRaises(SessionError):
             self.store.resolve(expired)
+
+    def test_verify_integrity_rejects_future_dated_session_without_mutating_it(self):
+        token = self.store.issue(103)
+        digest = hashlib.sha256(token.encode("ascii")).digest()
+        created_at = self.now + 1
+        expires_at = created_at + 60
+        self.db.execute(
+            "UPDATE durable_sessions SET created_at=?, expires_at=? WHERE token_hash=?",
+            (created_at, expires_at, digest),
+        )
+
+        with self.assertRaisesRegex(SessionError, "invalid session"):
+            self.store.verify_integrity()
+
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT created_at, expires_at FROM durable_sessions WHERE token_hash=?",
+                (digest,),
+            ).fetchone(),
+            (created_at, expires_at),
+        )
 
     def test_verify_integrity_rejects_non_blob_or_wrong_length_token_hash(self):
         legacy = sqlite3.connect(":memory:", isolation_level=None)
@@ -726,9 +753,23 @@ class SqliteSessionStoreTests(unittest.TestCase):
 
         self.assertFalse(worker.is_alive())
         self.assertEqual(errors, [])
-        self.assertEqual(results, [{"session_count": 1}])
+        self.assertEqual(
+            results,
+            [{
+                "session_count": 1,
+                "active_session_count": 1,
+                "expired_session_count": 0,
+            }],
+        )
         audit_store._validated_stored_session_row = original_validate
-        self.assertEqual(audit_store.verify_integrity(), {"session_count": 2})
+        self.assertEqual(
+            audit_store.verify_integrity(),
+            {
+                "session_count": 2,
+                "active_session_count": 2,
+                "expired_session_count": 0,
+            },
+        )
 
 
     def test_verify_integrity_rejects_duplicate_legacy_token_digests(self):
