@@ -1,6 +1,6 @@
-"""Redacted AArch64 unsigned-immediate memory-access evidence.
+"""Redacted AArch64 integer memory-access evidence.
 
-The module provides both a flat decoder summary and a bounded CFG-aware view.
+The module provides flat immediate summaries and bounded CFG-aware views.
 Neither resolves base-register provenance, identifies managed fields, or proves
 runtime execution.
 """
@@ -120,6 +120,58 @@ def decode_unscaled_immediate_memory_access(word):
     }
 
 
+def decode_register_offset_memory_access(word):
+    """Decode integer LDR/STR register-offset addressing, or return None.
+
+    Only the non-sign-extending integer forms with a legal extend option are
+    accepted. The runtime index makes the byte offset unknown; no effective
+    address is guessed. SIMD/FP, sign-extending, pair and atomic forms remain
+    outside this decoder.
+    """
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    if word & (1 << 26):  # SIMD/FP V bit
+        return None
+    if (word & 0x3B200C00) != 0x38200800:
+        return None
+
+    opc = (word >> 22) & 0x3
+    if opc not in (0, 1):  # STR / LDR only
+        return None
+
+    option = (word >> 13) & 0x7
+    if option not in (2, 3, 6, 7):
+        return None
+
+    size = (word >> 30) & 0x3
+    access_bytes = 1 << size
+    base = (word >> 5) & 0x1F
+    target = word & 0x1F
+    index = (word >> 16) & 0x1F
+    index_is_32_bit = option in (2, 6)
+    index_prefix = "w" if index_is_32_bit else "x"
+    target_prefix = "x" if access_bytes == 8 else "w"
+    extend = {2: "uxtw", 3: "lsl", 6: "sxtw", 7: "sxtx"}[option]
+    scaled = bool((word >> 12) & 1)
+
+    return {
+        "operation": "load" if opc == 1 else "store",
+        "access_bytes": access_bytes,
+        "base_register": "sp" if base == 31 else f"x{base}",
+        "target_register": (
+            f"{target_prefix}zr" if target == 31 else f"{target_prefix}{target}"
+        ),
+        "byte_offset": None,
+        "addressing_mode": "register_offset",
+        "base_update_bytes": 0,
+        "index_register": (
+            f"{index_prefix}zr" if index == 31 else f"{index_prefix}{index}"
+        ),
+        "index_extend": extend,
+        "scale_shift": size if scaled else 0,
+    }
+
+
 def decode_integer_immediate_memory_access(word):
     """Decode supported unsigned-scaled or unscaled/writeback integer LDR/STR."""
     unsigned = decode_unsigned_immediate_memory_access(word)
@@ -130,6 +182,14 @@ def decode_integer_immediate_memory_access(word):
             "base_update_bytes": 0,
         }
     return decode_unscaled_immediate_memory_access(word)
+
+
+def decode_integer_memory_access(word):
+    """Decode supported integer immediate or register-offset LDR/STR forms."""
+    immediate = decode_integer_immediate_memory_access(word)
+    if immediate is not None:
+        return immediate
+    return decode_register_offset_memory_access(word)
 
 
 def summarize_unsigned_immediate_memory_accesses(code, *, max_accesses=128):
