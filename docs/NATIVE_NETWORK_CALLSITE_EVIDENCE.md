@@ -657,3 +657,27 @@ predicate on a conditional terminator. This prevents malformed or partially
 constructed summaries from being presented as predicate-backed branch paths.
 These checks validate the internal consistency of static evidence only; they
 do not evaluate predicates, select runtime edges, or establish wire semantics.
+
+
+## CFG successor and external-exit contract validation — 2026-11-20
+
+Path summarization now validates the edge/exit contract for generated CFG
+summaries that declare a complete instruction-window extent. Conditional
+terminators must carry a decoded predicate and account for each possible
+outcome exactly once: either an internal taken/fallthrough edge or the
+corresponding external-exit flag. An internal edge cannot coexist with the
+same outcome being marked external.
+
+Non-conditional terminators are restricted to their compatible edge kinds:
+ordinary blocks may fall through, direct branches may have one branch target,
+resolved indirect branches must have one in-window target, and returns or
+unresolved indirect terminal branches cannot have successors. Exit flags must
+be explicit booleans and remain false for non-conditional terminators.
+Legacy summaries without a declared instruction extent retain their previous
+compatibility behavior.
+
+Synthetic tests cover valid two-way conditional paths, conflicting external
+flags, missing predicates, incompatible return edges, invalid resolved
+indirect-branch edges, and missing exit metadata. This is CFG consistency
+validation only; it does not evaluate branch predicates, select runtime paths,
+or establish AOW packet, handshake, login, or APK compatibility.
