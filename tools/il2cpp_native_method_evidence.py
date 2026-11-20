@@ -1280,7 +1280,13 @@ def _decode_aarch64_flag_setting_producer(word):
             "kind": operation + "_shifted_register",
             "width_bits": width_bits,
             "left_register_index": source,
+            "left_register_31_role": (
+                "zero_register" if source == 31 else "general_register"
+            ),
             "right_register_index": right,
+            "right_register_31_role": (
+                "zero_register" if right == 31 else "general_register"
+            ),
             "destination_is_zero": destination == 31,
             "shift_kind": shift_name,
             "shift_amount": shift_amount,
@@ -1360,16 +1366,25 @@ def _validate_control_flow_flag_producer(producer):
         "adds_shifted_register", "subs_shifted_register",
     }:
         expected = common | {
-            "left_register_index", "right_register_index",
+            "left_register_index", "left_register_31_role",
+            "right_register_index", "right_register_31_role",
             "shift_kind", "shift_amount",
         }
         if set(producer) != expected:
             raise ValueError("shifted-register flag producer fields are invalid")
+        left = producer.get("left_register_index")
+        right = producer.get("right_register_index")
         if (
-            type(producer.get("left_register_index")) is not int
-            or not 0 <= producer["left_register_index"] <= 31
-            or type(producer.get("right_register_index")) is not int
-            or not 0 <= producer["right_register_index"] <= 31
+            type(left) is not int or not 0 <= left <= 31
+            or type(producer.get("left_register_31_role")) is not str
+            or producer["left_register_31_role"] != (
+                "zero_register" if left == 31 else "general_register"
+            )
+            or type(right) is not int or not 0 <= right <= 31
+            or type(producer.get("right_register_31_role")) is not str
+            or producer["right_register_31_role"] != (
+                "zero_register" if right == 31 else "general_register"
+            )
             or type(producer.get("shift_kind")) is not str
             or producer["shift_kind"] not in {"lsl", "lsr", "asr"}
             or type(producer.get("shift_amount")) is not int

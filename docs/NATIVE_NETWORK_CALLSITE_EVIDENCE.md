@@ -841,11 +841,15 @@ unknown encoding, unsupported shift, block boundary, or missing producer
 leaves the relationship unresolved.
 
 For compare aliases (CMP/CMN), the report records the operand register indexes,
-width and a coarse immediate class or shifted-register form. For non-alias
-ADDS/SUBS it records that the destination is not the zero register. It does
-not compute NZCV values, evaluate the branch condition, model carry/overflow,
-or choose a taken/fallthrough edge. CBZ/CBNZ and TBZ/TBNZ remain register
-predicates and do not receive an NZCV producer.
+width and a coarse immediate class or shifted-register form. Immediate-form
+register index 31 is explicitly tagged as SP; in shifted-register form, index
+31 on either source operand is explicitly tagged as XZR. Extended-register
+ADD/SUB encodings (including SP-based forms) are not recognized by this
+decoder and remain unresolved. For non-alias ADDS/SUBS it records that the
+destination is not the zero register. It does not compute NZCV values,
+evaluate the branch condition, model carry/overflow, or choose a
+taken/fallthrough edge. CBZ/CBNZ and TBZ/TBNZ remain register predicates and
+do not receive an NZCV producer.
 
 The producer instruction index is relative to the bounded method window.
 Synthetic tests cover immediate and shifted-register aliases, NOP adjacency,
