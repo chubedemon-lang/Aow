@@ -500,8 +500,16 @@ def _decode_aarch64_mov_w_register(word):
     return destination, source
 
 
+
+def _skip_aarch64_nops(words, index):
+    """Skip only architectural NOPs; unknown instructions remain barriers."""
+    while index < len(words) and words[index][1] == 0xD503201F:
+        index += 1
+    return index
+
+
 def _aarch64_global_cell_loads(code, start_va):
-    """Find bounded ADRP/LDR same-register global-cell loads."""
+    """Find only adjacent ADRP/(NOP)/LDR same-register global-cell loads."""
     if type(code) is not bytes or len(code) % 4:
         raise ValueError("AArch64 code window must be aligned bytes")
     if type(start_va) is not int or start_va < 0 or start_va % 4:
@@ -516,35 +524,23 @@ def _aarch64_global_cell_loads(code, start_va):
         if adrp is None:
             continue
         register, page = adrp
-        for following in range(index + 1, min(index + 7, len(words))):
-            next_pc, next_word = words[following]
-            load = _decode_aarch64_ldr_x_unsigned(next_word)
-            if load is not None and load[0] == register and load[1] == register:
-                loads.append({
-                    "cell": page + load[2],
-                    "register": register,
-                    "load_index": following,
-                })
-                break
-            if _decode_aarch64_bl_target(next_word, next_pc) is not None:
-                break
-            move_w = _decode_aarch64_mov_w_register(next_word)
-            move_x = _decode_aarch64_mov_x_register(next_word)
-            add_x = _decode_aarch64_add_imm64(next_word)
-            other_adrp = _decode_aarch64_adrp(next_word, next_pc)
-            if (
-                (move_w is not None and move_w[0] == register)
-                or (move_x is not None and move_x[0] == register)
-                or (add_x is not None and add_x[0] == register)
-                or (other_adrp is not None and other_adrp[0] == register)
-                or (load is not None and load[0] == register)
-            ):
-                break
+        following = _skip_aarch64_nops(words, index + 1)
+        if following >= len(words):
+            continue
+        load = _decode_aarch64_ldr_x_unsigned(words[following][1])
+        if load is None or load[0] != register or load[1] != register:
+            continue
+        loads.append({
+            "cell": page + load[2],
+            "register": register,
+            "load_index": following,
+        })
     return loads
 
-
 def _networksettings_static_first_slot_store_cells(code, start_va):
-    """Find class cells whose cctor stores through static_fields[0]."""
+    """Find cctor class cells with a contiguous static_fields[0] store chain."""
+    if type(code) is not bytes or len(code) % 4:
+        raise ValueError("NetworkSettings cctor code must be aligned AArch64 bytes")
     words = [
         (start_va + offset, struct.unpack_from("<I", code, offset)[0])
         for offset in range(0, len(code), 4)
@@ -552,58 +548,72 @@ def _networksettings_static_first_slot_store_cells(code, start_va):
     cells = set()
     for load in _aarch64_global_cell_loads(code, start_va):
         class_register = load["register"]
-        for index in range(load["load_index"] + 1, min(load["load_index"] + 65, len(words))):
-            first = _decode_aarch64_ldr_x_unsigned(words[index][1])
-            if first is None or first[1] != class_register or first[2] != 0:
-                continue
-            object_register = first[0]
-            for second_index in range(index + 1, min(index + 9, len(words))):
-                second = _decode_aarch64_ldr_x_unsigned(words[second_index][1])
-                if second is None or second[1] != object_register or second[2] != 0xB8:
-                    continue
-                static_fields_register = second[0]
-                for store_index in range(second_index + 1, min(second_index + 9, len(words))):
-                    store = _decode_aarch64_str_x_unsigned(words[store_index][1])
-                    if store is not None and store[1] == static_fields_register and store[2] == 0:
-                        cells.add(load["cell"])
-                        break
-                break
+        first_index = _skip_aarch64_nops(words, load["load_index"] + 1)
+        if first_index >= len(words):
+            continue
+        first = _decode_aarch64_ldr_x_unsigned(words[first_index][1])
+        if first is None or first[1] != class_register or first[2] != 0:
+            continue
+        object_register = first[0]
+        second_index = _skip_aarch64_nops(words, first_index + 1)
+        if second_index >= len(words):
+            continue
+        second = _decode_aarch64_ldr_x_unsigned(words[second_index][1])
+        if second is None or second[1] != object_register or second[2] != 0xB8:
+            continue
+        static_fields_register = second[0]
+        store_index = _skip_aarch64_nops(words, second_index + 1)
+        if store_index >= len(words):
+            continue
+        store = _decode_aarch64_str_x_unsigned(words[store_index][1])
+        if store is not None and store[1] == static_fields_register and store[2] == 0:
+            cells.add(load["cell"])
     return cells
 
-
-def _networksettings_static_first_slot_read_indices(code, start_va, expected_cell):
-    """Find reads through the same class's static_fields[0] slot."""
+def _networksettings_static_first_slot_read_sequences(code, start_va, expected_cell):
+    """Return exact class/static_fields[0] read chains with their register roles."""
+    if type(code) is not bytes or len(code) % 4:
+        raise ValueError("AArch64 code window must be aligned bytes")
     words = [
         (start_va + offset, struct.unpack_from("<I", code, offset)[0])
         for offset in range(0, len(code), 4)
     ]
-    indices = set()
+    sequences = []
     for load in _aarch64_global_cell_loads(code, start_va):
         if load["cell"] != expected_cell:
             continue
         class_register = load["register"]
-        for index in range(load["load_index"] + 1, min(load["load_index"] + 513, len(words))):
-            first = _decode_aarch64_ldr_x_unsigned(words[index][1])
-            if first is None or first[1] != class_register or first[2] != 0:
-                continue
-            object_register = first[0]
-            for second_index in range(index + 1, min(index + 9, len(words))):
-                second = _decode_aarch64_ldr_x_unsigned(words[second_index][1])
-                if second is None or second[1] != object_register or second[2] != 0xB8:
-                    continue
-                static_fields_register = second[0]
-                for read_index in range(second_index + 1, min(second_index + 9, len(words))):
-                    third = _decode_aarch64_ldr_x_unsigned(words[read_index][1])
-                    if (
-                        third is not None and third[0] == 0
-                        and third[1] == static_fields_register and third[2] == 0
-                    ):
-                        indices.add(read_index)
-                        break
-                break
-    return indices
-
-
+        first_index = _skip_aarch64_nops(words, load["load_index"] + 1)
+        if first_index >= len(words):
+            continue
+        first = _decode_aarch64_ldr_x_unsigned(words[first_index][1])
+        if first is None or first[1] != class_register or first[2] != 0:
+            continue
+        object_register = first[0]
+        second_index = _skip_aarch64_nops(words, first_index + 1)
+        if second_index >= len(words):
+            continue
+        second = _decode_aarch64_ldr_x_unsigned(words[second_index][1])
+        if second is None or second[1] != object_register or second[2] != 0xB8:
+            continue
+        static_fields_register = second[0]
+        read_index = _skip_aarch64_nops(words, second_index + 1)
+        if read_index >= len(words):
+            continue
+        third = _decode_aarch64_ldr_x_unsigned(words[read_index][1])
+        if (
+            third is not None and third[1] == static_fields_register
+            and third[2] == 0
+        ):
+            sequences.append({
+                "first_index": first_index,
+                "read_index": read_index,
+                "class_register": class_register,
+                "object_register": object_register,
+                "static_fields_register": static_fields_register,
+                "value_register": third[0],
+            })
+    return sequences
 def _networksettings_first_non_default_field(metadata):
     """Return a metadata-order candidate, not a proven static-field map."""
     string_off, string_size, _ = _table(metadata, 0x18, 1, "string heap")
@@ -665,8 +675,9 @@ def _networksettings_first_non_default_field(metadata):
     return matches[0] if len(matches) == 1 else None
 
 
-def _looks_like_hash_bucket_lookup(code):
-    """Recognize a conservative hash-bucket lookup shape without naming its type."""
+
+def _contains_hash_bucket_opcode_families(code):
+    """Report broad opcode-family co-occurrence, not a hash-table data-flow shape."""
     if type(code) is not bytes or len(code) % 4:
         return False
     words = [
@@ -681,13 +692,12 @@ def _looks_like_hash_bucket_lookup(code):
         and any((word & 0xFF000010) == 0x54000000 for word in words)
     )
 
-
 def _summarize_receiver_integer_lookup(
     receiver_code, receiver_start_va, networksettings_cctor_code,
     networksettings_cctor_start_va, deserialize_int_targets,
     known_method_targets, field_candidate,
 ):
-    """Trace the second receive integer to a NetworkSettings static-slot lookup."""
+    """Trace only an uninterrupted, explicitly decoded receive-key lookup chain."""
     if type(receiver_code) is not bytes or len(receiver_code) % 4:
         raise ValueError("receiver code must be aligned AArch64 bytes")
     if type(networksettings_cctor_code) is not bytes or len(networksettings_cctor_code) % 4:
@@ -736,81 +746,89 @@ def _summarize_receiver_integer_lookup(
         }, None
 
     second_call = deserialize_calls[1]
-    key_register = None
-    key_copy_index = None
-    for index in range(second_call + 1, min(second_call + 33, len(words))):
-        move = _decode_aarch64_mov_w_register(words[index][1])
-        if move is not None and move[1] == 0:
-            key_register = move[0]
-            key_copy_index = index
-            break
-        if _decode_aarch64_bl_target(words[index][1], words[index][0]) is not None:
-            break
-    if key_register is None:
+    copy_index = _skip_aarch64_nops(words, second_call + 1)
+    if copy_index >= len(words):
         return {
             "status": "unresolved_second_result_copy",
             "deserialize_int_call_count": len(deserialize_calls),
         }, None
-
-    key_argument_index = None
-    for index in range(key_copy_index + 1, min(key_copy_index + 65, len(words))):
-        move = _decode_aarch64_mov_w_register(words[index][1])
-        if move is not None and move[0] == 1 and move[1] == key_register:
-            key_argument_index = index
-            break
-    if key_argument_index is None:
+    copy = _decode_aarch64_mov_w_register(words[copy_index][1])
+    if copy is None or copy[1] != 0 or copy[0] == 0:
         return {
-            "status": "unresolved_key_argument",
+            "status": "unresolved_second_result_copy",
             "deserialize_int_call_count": len(deserialize_calls),
         }, None
+    key_register = copy[0]
 
-    static_reads = _networksettings_static_first_slot_read_indices(
+    sequences = _networksettings_static_first_slot_read_sequences(
         receiver_code, receiver_start_va, class_cell
     )
-    for static_read_index in sorted(static_reads):
-        if static_read_index > key_argument_index:
+    candidates = []
+    for sequence in sequences:
+        if sequence["first_index"] != _skip_aarch64_nops(words, copy_index + 1):
             continue
-        start_index = max(static_read_index, key_argument_index) + 1
-        for index in range(start_index, min(start_index + 25, len(words))):
-            target = _decode_aarch64_bl_target(words[index][1], words[index][0])
-            if target is None:
-                continue
-            candidate_name = (
-                field_candidate.get("name")
-                if type(field_candidate) is dict else None
-            )
-            summary = {
-                "status": "static_key_lookup_candidate",
-                "deserialize_int_call_count": 2,
-                "source_call_ordinal": 2,
-                "second_result_copied_from_w0": True,
-                "key_forwarded_to_w1": True,
-                "networksettings_static_first_slot_store_observed": True,
-                "networksettings_static_first_slot_read_observed": True,
-                "lookup_target_is_metadata_method": target in known_method_targets,
-                "field_candidate_name": candidate_name,
-                "field_candidate_leading_default_count": (
-                    field_candidate.get("leading_default_backed_field_count")
-                    if type(field_candidate) is dict else None
-                ),
-                "field_attribution_status": (
-                    "metadata_order_candidate_only" if candidate_name else "unresolved"
-                ),
-                "callee_fde_entry_resolved": False,
-                "callee_entry_window_bytes": None,
-                "callee_hash_bucket_shape_observed": False,
-                "wire_message_id_verified": False,
-                "compression_behavior_verified": False,
-                "wire_contract_verified": False,
-                "apk_compatible": False,
-            }
-            return summary, target
-    return {
-        "status": "unresolved_networksettings_static_slot_read",
-        "deserialize_int_call_count": len(deserialize_calls),
-    }, None
+        chain_registers = {
+            sequence["class_register"], sequence["object_register"],
+            sequence["static_fields_register"], sequence["value_register"],
+        }
+        if key_register in chain_registers:
+            continue
 
+        argument_index = _skip_aarch64_nops(words, sequence["read_index"] + 1)
+        if argument_index >= len(words):
+            continue
+        argument = _decode_aarch64_mov_w_register(words[argument_index][1])
+        if argument is None or argument[0] != 1 or argument[1] != key_register:
+            continue
 
+        call_index = _skip_aarch64_nops(words, argument_index + 1)
+        if call_index >= len(words):
+            continue
+        lookup_target = _decode_aarch64_bl_target(
+            words[call_index][1], words[call_index][0]
+        )
+        if lookup_target is None or lookup_target in deserialize_int_targets:
+            continue
+        candidates.append((lookup_target, sequence))
+
+    if len(candidates) != 1:
+        return {
+            "status": "unresolved_or_ambiguous_lookup_call",
+            "deserialize_int_call_count": len(deserialize_calls),
+            "candidate_count": len(candidates),
+        }, None
+
+    target, _sequence = candidates[0]
+    candidate_name = (
+        field_candidate.get("name")
+        if type(field_candidate) is dict else None
+    )
+    summary = {
+        "status": "static_key_lookup_candidate",
+        "deserialize_int_call_count": 2,
+        "source_call_ordinal": 2,
+        "second_result_copied_from_w0": True,
+        "key_forwarded_to_w1": True,
+        "networksettings_static_first_slot_store_observed": True,
+        "networksettings_static_first_slot_read_observed": True,
+        "lookup_target_is_metadata_method": target in known_method_targets,
+        "field_candidate_name": candidate_name,
+        "field_candidate_leading_default_count": (
+            field_candidate.get("leading_default_backed_field_count")
+            if type(field_candidate) is dict else None
+        ),
+        "field_attribution_status": (
+            "metadata_order_candidate_only" if candidate_name else "unresolved"
+        ),
+        "callee_fde_entry_resolved": False,
+        "callee_entry_window_bytes": None,
+        "callee_hash_bucket_opcode_families_present": False,
+        "wire_message_id_verified": False,
+        "compression_behavior_verified": False,
+        "wire_contract_verified": False,
+        "apk_compatible": False,
+    }
+    return summary, target
 def _bounded_fde_code_for_target(elf, sections, target):
     """Return a private exact-FDE-entry window, or None when it cannot be bounded."""
     try:
@@ -2895,8 +2913,8 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
                 fde_size, fde_code = fde_window
                 receiver_integer_lookup_summary["callee_fde_entry_resolved"] = True
                 receiver_integer_lookup_summary["callee_entry_window_bytes"] = fde_size
-                receiver_integer_lookup_summary["callee_hash_bucket_shape_observed"] = (
-                    _looks_like_hash_bucket_lookup(fde_code)
+                receiver_integer_lookup_summary["callee_hash_bucket_opcode_families_present"] = (
+                    _contains_hash_bucket_opcode_families(fde_code)
                 )
 
     primitive_helper_summary = []
@@ -2958,8 +2976,8 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "redacted network callsite summaries. A separate bounded Receiver.Cycle pass can trace "
             "the second deserializeInt result into W1 while the receiver is loaded through the "
             "NetworkSettings static_fields first slot; the field name remains a metadata-order "
-            "candidate, not a proven FieldInfo-to-static-slot map. A callee is labeled hash-bucket-shaped "
-            "only when an exact FDE-entry window contains the conservative arithmetic/index/compare pattern. "
+            "candidate, not a proven FieldInfo-to-static-slot map. An exact FDE-entry window may report co-occurring broad opcode families, "
+            "but this does not establish a hash-bucket shape or register/data-flow relationship. "
             "Direct tail branches and indirect tail branches are "
             "reported separately. Direct B/BL targets are resolved against metadata-backed method "
             "entries where unique; unresolved and ambiguous targets remain counts only. Indirect calls "
