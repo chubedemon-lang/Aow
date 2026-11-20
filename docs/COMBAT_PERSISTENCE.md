@@ -159,3 +159,17 @@ individually valid intermediate receipt, a missing revision receipt, a
 current-snapshot/receipt mismatch, non-canonical mutation payload JSON, and
 the idle-connection requirement. This is synthetic persistence integrity only;
 it does not define AOW combat state, wire messages, or gameplay compatibility.
+
+## Exact combat snapshot input type — 2026-11-20
+
+The durable combat creation boundary requires an exact built-in `Battle`
+instance before reading any battle attributes. A subclass can override
+`__getattribute__`; using `isinstance()` and then inspecting `turn` or fighter
+fields would execute caller-defined code before the later canonical encoder
+rejects the subclass. The service now rejects subclasses immediately.
+
+A regression test constructs a hostile subclass whose `turn` access raises,
+then verifies creation rejects it without invoking the hook, inserting a row,
+or leaving an active transaction. This is Python input-boundary hardening for
+the synthetic combat domain only; it does not define AOW combat rules or wire
+compatibility.
