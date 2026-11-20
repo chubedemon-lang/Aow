@@ -10,9 +10,9 @@ APK build. Keep the JSON file outside the repository: its hexadecimal chunks
 are raw stream bytes and may contain credentials, tokens, player data, or other
 private material. Do not attach it to a public issue or pull request.
 
-The schema is intentionally narrow and supports three versions:
+The schema is intentionally narrow and supports four versions:
 
-- `schema_version`: exact integer `1`, `2`, or `3`.
+- `schema_version`: exact integer `1`, `2`, `3`, or `4`.
 - `apk_sha256`: lowercase SHA-256 asserted for the tested APK build.
 - `client_unchanged`: boolean `true`.
 - `capture_kind`: `authorized_local_runtime` or
@@ -36,7 +36,14 @@ The schema is intentionally narrow and supports three versions:
   must be monotonic non-decreasing and remain within a 24-hour relative span.
   The report exposes only the total event span and maximum inter-event gap,
   not individual times or absolute timestamps.
-- For schemas `2` and `3`, event order and range boundaries are
+- Schema `4` adds an asserted `observer_role` (`client` or `server`) and an
+  exact `operation` (`send` or `receive`) to each schema-3 event. The auditor
+  checks the direction mapping: a client send is client-to-server and a client
+  receive is server-to-client; a server send/receive uses the reverse mapping.
+  The redacted summary reports only send/receive event counts and the asserted
+  observer role. Operation labels remain operator assertions, not independent
+  proof of which local API produced the bytes.
+- For schemas `2`, `3`, and `4`, event order and range boundaries are
   operator-supplied provenance assertions. They are not cryptographically
   authenticated, do not prove capture timestamps, and must not be inferred
   from PCAP packet segmentation. Use only a local runtime logger or fixture
@@ -80,11 +87,12 @@ Schema `2` schematic shape (placeholders are not valid fixture bytes):
 
 The example event ranges are illustrative only and must exactly cover the
 actual private directional streams. The report exposes event counts and
-direction switches; schema `3` also exposes a relative timing span and maximum
-inter-event gap. It never emits event offsets, lengths, individual elapsed
-values, absolute timestamps, or stream bytes. Schema `1` remains accepted for
-older fixtures, but it cannot support cross-direction order or I/O-boundary
-correlation.
+direction switches; schemas `3` and `4` also expose a relative timing span and
+maximum inter-event gap. Schema `4` additionally exposes send/receive counts
+and the asserted observer role. It never emits event operations, offsets,
+lengths, individual elapsed values, absolute timestamps, or stream bytes.
+Schema `1` remains accepted for older fixtures, but it cannot support
+cross-direction order or I/O-boundary correlation.
 
 ## Run locally
 
