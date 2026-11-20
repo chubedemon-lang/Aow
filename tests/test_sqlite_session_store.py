@@ -726,11 +726,11 @@ class SqliteSessionStoreTests(unittest.TestCase):
         resume_audit = threading.Event()
         original_validate = audit_store._validated_stored_session_row
 
-        def pause_during_snapshot_scan(row):
+        def pause_during_snapshot_scan(row, now=None):
             snapshot_ready.set()
             if not resume_audit.wait(timeout=5):
                 raise RuntimeError("timed out waiting to resume session audit")
-            return original_validate(row)
+            return original_validate(row, now)
 
         audit_store._validated_stored_session_row = pause_during_snapshot_scan
         results = []
