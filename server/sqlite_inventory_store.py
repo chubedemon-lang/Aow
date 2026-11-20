@@ -428,7 +428,8 @@ class SqliteInventoryStore:
             baseline = decode_receipt_snapshot(
                 baseline_json,
             )
-            if (baseline.character_id != character_id
+            if (baseline_json != self._encode_snapshot(baseline)
+                    or baseline.character_id != character_id
                     or baseline.revision != 0
                     or baseline.capacity != stored.capacity
                     or baseline.max_stack != stored.max_stack
