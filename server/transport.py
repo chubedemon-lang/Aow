@@ -182,6 +182,9 @@ class EvidenceGatedTransportAdapter(TransportAdapter):
             if (
                 record.artifact_sha256 == artifact_sha256
                 and record.topic in required_stages
+                and record.verified
+                and record.method == "authorized_local_test"
+                and evidence_record_digest(record) in approved
             )
         )
 
