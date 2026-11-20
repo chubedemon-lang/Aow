@@ -2,7 +2,7 @@
 
 This is a local persistence boundary only. It does not verify quest completion,
 implement AOW quest packets, or establish original-game reward rules. The
-trusted quest domain must validate completion before granting a reward.
+trusted quest domain must validate completion before calling the award ledger.
 Every operation holds BEGIN IMMEDIATE across session resolution, ownership and
 the reward-ledger operation so revocation cannot race a grant or balance read.
 The reward ledger remains separate from authoritative inventory. Session
@@ -28,7 +28,7 @@ class SqliteAuthorizedQuestAwardService:
 
     def __init__(self, connection: sqlite3.Connection, *,
                  ttl_seconds: int = 900, clock=None):
-        if not isinstance(connection, sqlite3.Connection):
+        if type(connection) is not sqlite3.Connection:
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")
