@@ -82,7 +82,30 @@ class SqliteInventoryStore:
                 capacity INTEGER NOT NULL CHECK(capacity BETWEEN 1 AND 4096),
                 max_stack INTEGER NOT NULL CHECK(max_stack BETWEEN 1 AND 2147483647),
                 revision INTEGER NOT NULL
-                    CHECK(revision BETWEEN 0 AND 9223372036854775807)
+                    CHECK(revision BETWEEN 0 AND 9223372036854775807),
+                baseline_version INTEGER NOT NULL DEFAULT 0
+                    CHECK(baseline_version IN (0, 1))
+            )"""
+        )
+        snapshot_columns = {
+            row[1] for row in self.db.execute(
+                "PRAGMA table_info(inventory_snapshots)"
+            )
+        }
+        if "baseline_version" not in snapshot_columns:
+            # Existing rows remain explicitly legacy/unanchored after migration.
+            self.db.execute(
+                "ALTER TABLE inventory_snapshots ADD COLUMN "
+                "baseline_version INTEGER NOT NULL DEFAULT 0 "
+                "CHECK(baseline_version IN (0, 1))"
+            )
+        self.db.execute(
+            """CREATE TABLE IF NOT EXISTS inventory_creations (
+                character_id TEXT PRIMARY KEY
+                    CHECK(length(character_id) BETWEEN 1 AND 128),
+                baseline_json TEXT NOT NULL,
+                FOREIGN KEY(character_id) REFERENCES inventory_snapshots(character_id)
+                    ON DELETE CASCADE
             )"""
         )
         self.db.execute(
@@ -305,8 +328,33 @@ class SqliteInventoryStore:
         if self.db.execute("PRAGMA foreign_key_check").fetchall():
             raise InventoryStoreError("inventory foreign key check failed")
 
+        tables = {
+            row[0] for row in self.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        snapshot_columns = {
+            row[1] for row in self.db.execute(
+                "PRAGMA table_info(inventory_snapshots)"
+            )
+        }
+        has_baseline_version = "baseline_version" in snapshot_columns
+        has_creation_table = "inventory_creations" in tables
+        if has_baseline_version != has_creation_table:
+            raise InventoryStoreError("inventory creation schema is incomplete")
+        if has_creation_table:
+            creation_columns = {
+                row[1] for row in self.db.execute(
+                    "PRAGMA table_info(inventory_creations)"
+                )
+            }
+            if not {"character_id", "baseline_json"}.issubset(creation_columns):
+                raise InventoryStoreError("inventory creation schema is incomplete")
+
         def reject_constant(_value):
-            raise InventoryStoreError("non-finite JSON value in inventory mutation payload")
+            raise InventoryStoreError(
+                "non-finite JSON value in inventory mutation payload"
+            )
 
         def decode_receipt_snapshot(raw):
             # Reuse the strict replay decoder so integrity audits apply the same
@@ -314,6 +362,7 @@ class SqliteInventoryStore:
             return self._decode_snapshot(raw)
 
         snapshots = {}
+        baseline_versions = {}
         item_rows = {}
         for character_id, item_id, quantity in self.db.execute(
             """SELECT character_id, item_id, quantity
@@ -326,33 +375,75 @@ class SqliteInventoryStore:
             current = item_rows.setdefault(character_id, [])
             current.append((item_id, quantity))
 
-        for character_id, capacity, max_stack, revision in self.db.execute(
-            """SELECT character_id, capacity, max_stack, revision
-               FROM inventory_snapshots ORDER BY character_id"""
-        ):
+        baseline_column = ", baseline_version" if has_baseline_version else ""
+        snapshot_rows = self.db.execute(
+            "SELECT character_id, capacity, max_stack, revision"
+            + baseline_column
+            + " FROM inventory_snapshots ORDER BY character_id"
+        )
+        for row in snapshot_rows:
+            character_id, capacity, max_stack, revision = row[:4]
             character_id = self._character_id(character_id)
+            baseline_version = row[4] if has_baseline_version else 0
             if character_id in snapshots:
                 raise InventoryStoreError("duplicate inventory snapshot")
             if (type(capacity) is not int or not 1 <= capacity <= _MAX_CAPACITY
                     or type(max_stack) is not int
                     or not 1 <= max_stack <= _MAX_STACK
                     or type(revision) is not int
-                    or not 0 <= revision <= _MAX_REVISION):
+                    or not 0 <= revision <= _MAX_REVISION
+                    or type(baseline_version) is not int
+                    or baseline_version not in (0, 1)):
                 raise InventoryStoreError("invalid stored inventory snapshot")
             items = item_rows.pop(character_id, [])
             if (len(items) > capacity
                     or any(quantity > max_stack for _, quantity in items)):
-                raise InventoryStoreError("stored inventory exceeds capacity or stack limit")
+                raise InventoryStoreError(
+                    "stored inventory exceeds capacity or stack limit"
+                )
             snapshots[character_id] = InventorySnapshot(
                 character_id, capacity, max_stack, revision, tuple(items)
             )
+            baseline_versions[character_id] = baseline_version
         if item_rows:
             raise InventoryStoreError("inventory item has no snapshot")
 
-        replayed = {}
-        # Iterate the ordered receipt cursor instead of materializing the full
-        # mutation history in memory. The enclosing read transaction keeps the
-        # cursor and all other audit queries on one consistent snapshot.
+        baselines = {}
+        if has_creation_table:
+            creation_rows = self.db.execute(
+                """SELECT character_id, baseline_json
+                   FROM inventory_creations ORDER BY character_id"""
+            )
+        else:
+            creation_rows = ()
+        for character_id, baseline_json in creation_rows:
+            character_id = self._character_id(character_id)
+            if character_id in baselines:
+                raise InventoryStoreError("duplicate inventory creation receipt")
+            stored = snapshots.get(character_id)
+            if stored is None:
+                raise InventoryStoreError("creation receipt has no inventory snapshot")
+            if baseline_versions[character_id] != 1:
+                raise InventoryStoreError("creation receipt baseline marker mismatch")
+            baseline = decode_receipt_snapshot(
+                baseline_json,
+            )
+            if (baseline_json != self._encode_snapshot(baseline)
+                    or baseline.character_id != character_id
+                    or baseline.revision != 0
+                    or baseline.capacity != stored.capacity
+                    or baseline.max_stack != stored.max_stack
+                    or baseline.items != ()):
+                raise InventoryStoreError("invalid inventory creation baseline")
+            baselines[character_id] = baseline
+
+        for character_id, baseline_version in baseline_versions.items():
+            if baseline_version == 1 and character_id not in baselines:
+                raise InventoryStoreError("inventory creation receipt is missing")
+            if baseline_version == 0 and character_id in baselines:
+                raise InventoryStoreError("creation receipt baseline marker mismatch")
+
+        replayed = dict(baselines)
         mutation_rows = self.db.execute(
             """SELECT request_id, character_id, expected_revision,
                       payload_json, result_json, result_revision
@@ -382,7 +473,9 @@ class SqliteInventoryStore:
                 payload = json.loads(payload_json, parse_constant=reject_constant)
                 normalised = self._normalise_changes(payload)
             except (TypeError, ValueError, RecursionError) as exc:
-                raise InventoryStoreError("invalid inventory mutation payload") from exc
+                raise InventoryStoreError(
+                    "invalid inventory mutation payload"
+                ) from exc
             if not normalised or payload != [list(change) for change in normalised]:
                 raise InventoryStoreError("non-canonical inventory mutation payload")
 
@@ -391,47 +484,65 @@ class SqliteInventoryStore:
                     or recorded.revision != result_revision
                     or recorded.capacity != stored.capacity
                     or recorded.max_stack != stored.max_stack):
-                raise InventoryStoreError("inventory receipt identity or revision mismatch")
+                raise InventoryStoreError(
+                    "inventory receipt identity or revision mismatch"
+                )
 
             current = replayed.get(character_id)
             if current is None:
                 if expected_revision != 0:
                     raise InventoryStoreError("inventory mutation history has a gap")
-                baseline = dict(recorded.items)
-                for item_id, delta in normalised:
-                    previous = baseline.get(item_id, 0) - delta
-                    if not 0 <= previous <= recorded.max_stack:
-                        raise InventoryStoreError("invalid first inventory mutation baseline")
-                    if previous:
-                        baseline[item_id] = previous
-                    else:
-                        baseline.pop(item_id, None)
-                if len(baseline) > recorded.capacity:
-                    raise InventoryStoreError("first inventory baseline exceeds capacity")
-                current = InventorySnapshot(
-                    character_id, recorded.capacity, recorded.max_stack, 0,
-                    tuple(sorted(baseline.items())),
+                if character_id in baselines:
+                    current = baselines[character_id]
+                else:
+                    # Legacy schema/rows have no independent creation receipt.
+                    # Preserve their historical inverse-delta validation, but
+                    # report them as unanchored rather than claiming a baseline.
+                    baseline = dict(recorded.items)
+                    for item_id, delta in normalised:
+                        previous = baseline.get(item_id, 0) - delta
+                        if not 0 <= previous <= recorded.max_stack:
+                            raise InventoryStoreError(
+                                "invalid first inventory mutation baseline"
+                            )
+                        if previous:
+                            baseline[item_id] = previous
+                        else:
+                            baseline.pop(item_id, None)
+                    if len(baseline) > recorded.capacity:
+                        raise InventoryStoreError(
+                            "first inventory baseline exceeds capacity"
+                        )
+                    current = InventorySnapshot(
+                        character_id, recorded.capacity, recorded.max_stack, 0,
+                        tuple(sorted(baseline.items())),
+                    )
+
+            if current.revision != expected_revision:
+                raise InventoryStoreError("inventory mutation history has a gap")
+            candidate = dict(current.items)
+            for item_id, delta in normalised:
+                updated = candidate.get(item_id, 0) + delta
+                if not 0 <= updated <= current.max_stack:
+                    raise InventoryStoreError(
+                        "inventory mutation history exceeds stack limits"
+                    )
+                if updated:
+                    candidate[item_id] = updated
+                else:
+                    candidate.pop(item_id, None)
+            if len(candidate) > current.capacity:
+                raise InventoryStoreError(
+                    "inventory mutation history exceeds capacity"
                 )
-            else:
-                if current.revision != expected_revision:
-                    raise InventoryStoreError("inventory mutation history has a gap")
-                candidate = dict(current.items)
-                for item_id, delta in normalised:
-                    updated = candidate.get(item_id, 0) + delta
-                    if not 0 <= updated <= current.max_stack:
-                        raise InventoryStoreError("inventory mutation history exceeds stack limits")
-                    if updated:
-                        candidate[item_id] = updated
-                    else:
-                        candidate.pop(item_id, None)
-                if len(candidate) > current.capacity:
-                    raise InventoryStoreError("inventory mutation history exceeds capacity")
-                expected = InventorySnapshot(
-                    character_id, current.capacity, current.max_stack,
-                    result_revision, tuple(sorted(candidate.items())),
+            expected = InventorySnapshot(
+                character_id, current.capacity, current.max_stack,
+                result_revision, tuple(sorted(candidate.items())),
+            )
+            if recorded != expected:
+                raise InventoryStoreError(
+                    "inventory receipt does not match mutation history"
                 )
-                if recorded != expected:
-                    raise InventoryStoreError("inventory receipt does not match mutation history")
 
             replayed[character_id] = recorded
             mutation_count += 1
@@ -448,10 +559,13 @@ class SqliteInventoryStore:
                     "current inventory snapshot does not match mutation history"
                 )
 
+        anchored_count = len(baselines)
         return {
             "snapshots": len(snapshots),
             "items": sum(len(snapshot.items) for snapshot in snapshots.values()),
             "mutations": mutation_count,
+            "anchored_snapshots": anchored_count,
+            "legacy_unanchored_snapshots": len(snapshots) - anchored_count,
         }
 
     def create(self, character_id: str, *, capacity: int = 20,
@@ -461,24 +575,39 @@ class SqliteInventoryStore:
             raise InventoryStoreError("invalid inventory capacity")
         if type(max_stack) is not int or not 1 <= max_stack <= _MAX_STACK:
             raise InventoryStoreError("invalid inventory stack limit")
+        snapshot = InventorySnapshot(character_id, capacity, max_stack, 0, ())
         owns_transaction = not self.db.in_transaction
+        savepoint_name = "inventory_create"
         if owns_transaction:
             self.db.execute("BEGIN IMMEDIATE")
+        else:
+            self.db.execute("SAVEPOINT " + savepoint_name)
         try:
             try:
                 self.db.execute(
                     "INSERT INTO inventory_snapshots "
-                    "(character_id, capacity, max_stack, revision) VALUES (?, ?, ?, 0)",
+                    "(character_id, capacity, max_stack, revision, baseline_version) "
+                    "VALUES (?, ?, ?, 0, 1)",
                     (character_id, capacity, max_stack),
                 )
             except sqlite3.IntegrityError as exc:
                 raise InventoryAlreadyExists("inventory already exists") from exc
+            self.db.execute(
+                "INSERT INTO inventory_creations (character_id, baseline_json) "
+                "VALUES (?, ?)",
+                (character_id, self._encode_snapshot(snapshot)),
+            )
             if owns_transaction:
                 self.db.commit()
-            return InventorySnapshot(character_id, capacity, max_stack, 0, ())
+            else:
+                self.db.execute("RELEASE SAVEPOINT " + savepoint_name)
+            return snapshot
         except BaseException:
             if owns_transaction:
                 self.db.rollback()
+            else:
+                self.db.execute("ROLLBACK TO SAVEPOINT " + savepoint_name)
+                self.db.execute("RELEASE SAVEPOINT " + savepoint_name)
             raise
 
     def get(self, character_id: str) -> InventorySnapshot:
