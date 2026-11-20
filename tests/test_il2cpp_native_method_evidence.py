@@ -1063,7 +1063,9 @@ class NativeMethodEvidenceTests(unittest.TestCase):
                 "kind": "cmp_shifted_register",
                 "width_bits": 64,
                 "left_register_index": 4,
+                "left_register_31_role": "general_register",
                 "right_register_index": 6,
+                "right_register_31_role": "general_register",
                 "destination_is_zero": True,
                 "shift_kind": "lsl",
                 "shift_amount": 2,
@@ -1074,6 +1076,51 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertIsNone(
             _decode_aarch64_flag_setting_producer(0xEB06089F | (3 << 22))
         )
+
+    def test_shifted_register_flag_producer_models_register_31_as_zero_register(self):
+        self.assertEqual(
+            _decode_aarch64_flag_setting_producer(0xEB060BFF),
+            {
+                "kind": "cmp_shifted_register",
+                "width_bits": 64,
+                "left_register_index": 31,
+                "left_register_31_role": "zero_register",
+                "right_register_index": 6,
+                "right_register_31_role": "general_register",
+                "destination_is_zero": True,
+                "shift_kind": "lsl",
+                "shift_amount": 2,
+            },
+        )
+        self.assertEqual(
+            _decode_aarch64_flag_setting_producer(0xEB1F089F)["right_register_31_role"],
+            "zero_register",
+        )
+        # CMP SP, X6, LSL #2 uses the extended-register encoding, not this
+        # shifted-register decoder; it must remain unresolved.
+        self.assertIsNone(_decode_aarch64_flag_setting_producer(0xEB266BFF))
+
+    def test_path_summary_rejects_stack_pointer_role_for_shifted_register_31(self):
+        start = 0x5B00
+        words = (
+            0xEB060BFF,
+            self._encode_b_cond(start + 4, start + 12, condition=0),
+            0xD65F03C0,
+            0xD65F03C0,
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code, start, {}, {}
+        )
+        branch_block = next(
+            block for block in summary["control_flow_basic_blocks"]
+            if block["terminator"] == "b_cond"
+        )
+        branch_block["terminator_flag_producer"]["left_register_31_role"] = "stack_pointer"
+        with self.assertRaisesRegex(
+            ValueError, "shifted-register flag producer operands are invalid"
+        ):
+            _summarize_control_flow_helper_paths(summary)
 
     def test_b_cond_path_carries_only_adjacent_nzcv_producer(self):
         start = 0x5600
