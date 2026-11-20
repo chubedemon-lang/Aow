@@ -20,7 +20,7 @@ from tools.aarch64_call_argument_evidence import (
     _is_indirect_call,
 )
 from tools.aarch64_memory_access_evidence import (
-    decode_integer_immediate_memory_access,
+    decode_integer_memory_access,
 )
 
 _MAX_CODE_WINDOW_BYTES = 64 * 1024
@@ -145,8 +145,9 @@ def _validate_known_static_cells(known_static_cells):
 
 
 def _memory_access_overlaps_known_static_cell(base_state, access, known_static_cells):
-    if base_state is None or base_state[1] is None:
-        return False
+    if (base_state is None or base_state[1] is None
+            or type(access.get("byte_offset")) is not int):
+        return None
     effective_address = base_state[1] + access["byte_offset"]
     access_end = effective_address + access["access_bytes"]
     if (
@@ -168,6 +169,7 @@ def _load_exactly_matches_known_static_cell(base_state, access, known_static_cel
         or access["access_bytes"] != 8
         or base_state is None
         or base_state[1] is None
+        or type(access.get("byte_offset")) is not int
     ):
         return False
     effective_address = base_state[1] + access["byte_offset"]
@@ -238,10 +240,15 @@ def summarize_control_flow_memory_base_provenance(
     reachable_literal_loads = 0
     relocation_backed_literal_loads = 0
     total_accesses = sum(
-        decode_integer_immediate_memory_access(word) is not None
+        decode_integer_memory_access(word) is not None
         for word in words
     )
+    register_offset_access_count = sum(
+        (decoded is not None and decoded["addressing_mode"] == "register_offset")
+        for decoded in (decode_integer_memory_access(word) for word in words)
+    )
     reachable_accesses = 0
+    reachable_register_offset_accesses = 0
     known_provenance_accesses = 0
     known_static_cell_match_count = 0
     known_static_cell_load_match_count = 0
@@ -404,8 +411,10 @@ def summarize_control_flow_memory_base_provenance(
                     static_cell_value_origins.pop(destination, None)
                 continue
 
-            access = decode_integer_immediate_memory_access(word)
+            access = decode_integer_memory_access(word)
             if access is not None:
+                if access["addressing_mode"] == "register_offset":
+                    reachable_register_offset_accesses += 1
                 base = (word >> 5) & 0x1F
                 target = word & 0x1F
                 if base == 31:
@@ -453,6 +462,9 @@ def summarize_control_flow_memory_base_provenance(
                         "base_definition_instruction_index": definition,
                         "base_derivation_depth": depth,
                     }
+                    for field in ("index_register", "index_extend", "scale_shift"):
+                        if field in access:
+                            observation[field] = access[field]
                     if known_static_cells is not None:
                         observation["matches_known_static_cell"] = matches_known_static_cell
                         observation["base_derived_from_known_static_cell"] = (
@@ -473,7 +485,9 @@ def summarize_control_flow_memory_base_provenance(
                         static_cell_value_origins[target] = True
                     else:
                         static_cell_value_origins.pop(target, None)
-                    if (access["access_bytes"] == 8 and base_state is not None
+                    if (access["access_bytes"] == 8
+                            and type(access.get("byte_offset")) is int
+                            and base_state is not None
                             and base_state[1] is not None):
                         effective_address = base_state[1] + access["byte_offset"]
                         if 0 <= effective_address <= _U64_MAX:
@@ -536,6 +550,10 @@ def summarize_control_flow_memory_base_provenance(
         "literal_loads_truncated": reachable_literal_loads > len(literal_load_observations),
         "memory_access_count": total_accesses,
         "statically_reachable_memory_access_count": reachable_accesses,
+        "register_offset_memory_access_count": register_offset_access_count,
+        "statically_reachable_register_offset_memory_access_count": (
+            reachable_register_offset_accesses
+        ),
         "statically_unreachable_memory_access_count": total_accesses - reachable_accesses,
         "memory_accesses_with_known_base_provenance": known_provenance_accesses,
         "memory_accesses": observations,
