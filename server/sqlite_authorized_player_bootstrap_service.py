@@ -34,6 +34,7 @@ class AuthorizedPlayerBootstrapSnapshot:
     player_state: PlayerSnapshot
     map_position: MapPosition
     inventory: InventorySnapshot
+    wallet_balance: int
 
 
 class SqliteAuthorizedPlayerBootstrapService:
@@ -93,9 +94,21 @@ class SqliteAuthorizedPlayerBootstrapService:
                 raise SessionError("character not owned by session")
 
             character = character_snapshot_from_row(row)
+            wallet_row = self.db.execute(
+                "SELECT balance FROM wallets WHERE character_id = ?",
+                (character_id,),
+            ).fetchone()
+            if (
+                wallet_row is None
+                or type(wallet_row[0]) is not int
+                or wallet_row[0] < 0
+            ):
+                raise SessionError("wallet unavailable")
+
             return AuthorizedPlayerBootstrapSnapshot(
                 character=character,
                 player_state=self.players.get(owned_id),
                 map_position=self.positions.get(owned_id),
                 inventory=self.inventories.get(owned_id),
+                wallet_balance=wallet_row[0],
             )
