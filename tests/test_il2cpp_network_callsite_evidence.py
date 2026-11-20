@@ -433,6 +433,45 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         self.assertFalse(report["raw_instructions_emitted"])
 
 
+    def test_inspect_bytes_can_resolve_fieldref_native_type_categories(self):
+        metadata = bytearray(make_metadata(
+            ["Cycle"],
+            fields=[("probeField", 0, 0x04000001)],
+        ))
+        metadata.extend(bytes((-len(metadata)) % 8))
+        field_ref_offset = len(metadata)
+        metadata.extend(struct.pack("<ii", 0, 0))
+        struct.pack_into("<II", metadata, 0xB8, field_ref_offset, 8)
+
+        encoded = encode_field_info_usage_index(0, 31)
+        elf = make_elf(
+            1,
+            include_native_type_table=True,
+            field_info_token=encoded,
+        )
+        report = inspect_bytes(
+            bytes(metadata), elf, resolve_fieldref_native_types=True
+        )
+        correlation = report["field_info_usage_correlation"]
+        self.assertEqual(report["field_info_usage_static_cell_count"], 1)
+        self.assertEqual(
+            correlation["native_type_resolution"],
+            {
+                "status": "resolved",
+                "type_table_count": 4,
+                "unique_type_index_count": 1,
+            },
+        )
+        self.assertEqual(
+            correlation["references"][0]["native_type"],
+            {"type_code": 0x08, "type_name": "I4"},
+        )
+        rendered = json.dumps(report)
+        self.assertNotIn(hex(encoded), rendered)
+        self.assertNotIn("0x3070", rendered)
+        self.assertFalse(report["native_addresses_emitted"])
+
+
 class OfflineApkPathReadTests(unittest.TestCase):
     @staticmethod
     def write_apk(path, metadata=b"metadata-fixture", elf=b"elf-fixture"):
@@ -578,6 +617,42 @@ class OfflineApkPathReadTests(unittest.TestCase):
                 )
             inspect.assert_called_once_with(b"metadata", b"elf", expected_digest)
 
+
+
+    def test_inspect_apk_forwards_optional_fieldref_native_type_resolution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sample.apk"
+            self.write_apk(path, b"metadata", b"elf")
+            expected_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            with patch(
+                "tools.il2cpp_network_callsite_evidence.inspect_bytes",
+                return_value={"synthetic": True},
+            ) as inspect:
+                self.assertEqual(
+                    inspect_apk(
+                        path,
+                        expected_sha256=expected_digest,
+                        resolve_fieldref_native_types=True,
+                    ),
+                    {"synthetic": True},
+                )
+            inspect.assert_called_once_with(
+                b"metadata",
+                b"elf",
+                expected_digest,
+                resolve_fieldref_native_types=True,
+            )
+
+
+    def test_inspect_apk_rejects_non_boolean_native_type_flag_before_reading(self):
+        with patch(
+            "tools.il2cpp_network_callsite_evidence._read_apk_members"
+        ) as read_members:
+            with self.assertRaisesRegex(
+                CodegenInventoryError, "must be a built-in boolean"
+            ):
+                inspect_apk("/missing.apk", resolve_fieldref_native_types=1)
+            read_members.assert_not_called()
 
 
 if __name__ == "__main__":

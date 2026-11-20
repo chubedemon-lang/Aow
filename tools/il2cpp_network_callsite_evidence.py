@@ -159,8 +159,14 @@ CALLSITE_ARGUMENT_TARGET_PREFIXES = (
 )
 
 
-def inspect_bytes(metadata, elf, apk_sha256=None):
-    """Inspect metadata and arm64 IL2CPP bytes without publishing addresses."""
+def inspect_bytes(
+    metadata, elf, apk_sha256=None, resolve_fieldref_native_types=False
+):
+    """Inspect native callsites and optionally resolve FieldRef type categories."""
+    if type(resolve_fieldref_native_types) is not bool:
+        raise CodegenInventoryError(
+            "resolve_fieldref_native_types must be a built-in boolean"
+        )
     info = _metadata_images(metadata)
     allowlist = dict(TARGET_METHODS)
     for key, names in NETWORK_SUPPORT_METHODS.items():
@@ -245,7 +251,11 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         for address in sorted(static_field_info_values)
     ]
     field_info_correlation = (
-        correlate_field_info_usage_tokens(metadata, field_info_tokens)
+        correlate_field_info_usage_tokens(
+            metadata,
+            field_info_tokens,
+            elf=elf if resolve_fieldref_native_types else None,
+        )
         if field_info_tokens else None
     )
     encoded_values = set(static_memory_values.values())
@@ -400,9 +410,10 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "callee return-type or semantic proof. These observations do not establish runtime execution, managed-field "
             "identity, packet framing, compression activation, message IDs, "
             "handshake semantics or APK/server compatibility. Relocation-backed "
-            "FieldInfo usage cells are correlated only to static FieldRef table "
-            "coordinates; they do not identify a declaring managed type or "
-            "prove that a selected network method accesses the field."
+            "FieldInfo usage cells are correlated to static FieldRef coordinates; "
+            "the optional native-type flag adds only a symbolic Il2CppType "
+            "category. Neither result identifies a managed owner or proves that "
+            "a selected network method accesses the field."
         ),
     }
 
@@ -536,9 +547,19 @@ def _read_apk_members(apk_path, expected_sha256=None):
             os.close(descriptor)
 
 
-def inspect_apk(apk_path, expected_sha256=None):
-    """Read bounded IL2CPP members, optionally requiring an exact APK fingerprint."""
+def inspect_apk(
+    apk_path, expected_sha256=None, resolve_fieldref_native_types=False
+):
+    """Read bounded APK members and optionally resolve FieldRef type categories."""
+    if type(resolve_fieldref_native_types) is not bool:
+        raise CodegenInventoryError(
+            "resolve_fieldref_native_types must be a built-in boolean"
+        )
     digest, metadata, elf = _read_apk_members(apk_path, expected_sha256)
+    if resolve_fieldref_native_types:
+        return inspect_bytes(
+            metadata, elf, digest, resolve_fieldref_native_types=True
+        )
     return inspect_bytes(metadata, elf, digest)
 
 
@@ -552,9 +573,18 @@ def main(argv=None):
         "--expected-sha256",
         help="require this exact lowercase SHA-256 before parsing APK members",
     )
+    parser.add_argument(
+        "--resolve-fieldref-native-types",
+        action="store_true",
+        help="resolve static FieldInfo-to-FieldRef TypeIndexes through the ARM64 native type table",
+    )
     args = parser.parse_args(argv)
     report = json.dumps(
-        inspect_apk(args.apk, expected_sha256=args.expected_sha256),
+        inspect_apk(
+            args.apk,
+            expected_sha256=args.expected_sha256,
+            resolve_fieldref_native_types=args.resolve_fieldref_native_types,
+        ),
         indent=2,
         sort_keys=True,
     ) + "\n"

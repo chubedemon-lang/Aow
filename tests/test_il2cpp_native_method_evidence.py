@@ -80,8 +80,11 @@ def make_metadata(method_names, wrong_owner=False, *, image="ScriptsAssembly.dll
             + bytes(field_data) + bytes(default_data) + bytes(image_data))
 
 
-def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
-             image="ScriptsAssembly.dll", text_words=(), method_entry_targets=None):
+def make_elf(
+    method_count, unrelocated=(), omit_table=False, target=0x5000,
+    image="ScriptsAssembly.dll", text_words=(), method_entry_targets=None,
+    include_native_type_table=False, field_info_token=None,
+):
     names = b"\0.shstrtab\0.rodata\0.data.rel.ro\0.text\0.rela.dyn\0"
     offsets = {
         name: names.index(name.encode())
@@ -95,6 +98,13 @@ def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
         method_entry_targets = tuple(
             target + index * 4 for index in range(method_count)
         )
+    if type(include_native_type_table) is not bool:
+        raise ValueError("include_native_type_table must be a built-in boolean")
+    if (
+        field_info_token is not None
+        and (type(field_info_token) is not int or not 0 <= field_info_token <= 0xFFFFFFFF)
+    ):
+        raise ValueError("field_info_token must be an unsigned 32-bit integer")
     if (
         type(method_entry_targets) not in (tuple, list)
         or len(method_entry_targets) != method_count
@@ -113,6 +123,23 @@ def make_elf(method_count, unrelocated=(), omit_table=False, target=0x5000,
     struct.pack_into("<Q", relro, 16, pointer_table)
 
     relocations = [(0x3000, (1 << 32) | 1027, 0x2000)]
+    if field_info_token is not None:
+        struct.pack_into("<Q", relro, 0x70, field_info_token)
+        relocations.append((0x3068, (1 << 32) | 1027, 0x3070))
+    if include_native_type_table:
+        struct.pack_into("<Q", relro, 0x78, 4)
+        struct.pack_into("<Q", relro, 0x80, 0x30A0)
+        type_codes = (0x08, 0x12, 0x15, 0x02)
+        for index, type_code in enumerate(type_codes):
+            target_address = 0x30C0 + index * 0x10
+            struct.pack_into("<Q", relro, 0xA0 + index * 8, target_address)
+            struct.pack_into(
+                "<I", relro, target_address - 0x3000 + 8, type_code << 16
+            )
+            relocations.append((
+                0x30A0 + index * 8, (1 << 32) | 1027, target_address,
+            ))
+        relocations.append((0x3080, (1 << 32) | 1027, 0x30A0))
     if not omit_table:
         relocations.append((0x3010, (1 << 32) | 1027, pointer_table))
     for index, entry_target in enumerate(method_entry_targets):

@@ -29,7 +29,8 @@ preserves the existing behavior.
 
 The command is offline and emits method labels, bounded entry-window sizes,
 aggregate call counts, and—when relocation-backed FieldInfo usage cells are
-found—validated FieldRef table coordinates. It does not emit APK bytes, native
+found—validated FieldRef table coordinates. Native type-category resolution is
+separately opt-in with `--resolve-fieldref-native-types`. It does not emit APK bytes, native
 addresses, raw instructions, raw metadata-usage tokens, packet bytes or endpoint
 values.
 
@@ -66,7 +67,12 @@ The analyzer also scans relocation-referenced eight-byte cells in the ELF
 tokens. When such cells are found, their token indexes are joined to the
 validated metadata FieldRef table. The report preserves deterministic cell
 order and emits only FieldRef index, TypeIndex and the field index local to that
-type; it never emits the encoded token or the cell address.
+type; it never emits the encoded token or the cell address. By default, this
+stops at FieldRef coordinates. The opt-in `--resolve-fieldref-native-types`
+flag also resolves each referenced TypeIndex through the relocation-backed
+ARM64 `Il2CppType` registration table and adds only the symbolic native type
+category and aggregate table counts. It does not identify a managed declaring
+type or field name.
 
 This is a whole-section static-data inventory, not a use-def chain. A matching
 cell does not prove that `Receiver.Cycle`, `Sender.Cycle` or any selected
