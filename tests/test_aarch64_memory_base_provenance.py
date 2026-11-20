@@ -105,6 +105,21 @@ def ldur_x(destination, base, immediate):
     )
 
 
+def pair_access(*, element_bytes, load, base, target, target2, immediate, mode=2):
+    """Encode an integer LDP/STP pair operation for provenance tests."""
+    opc = 0 if element_bytes == 4 else 2
+    return (
+        (opc << 30)
+        | 0x28000000
+        | (mode << 23)
+        | (int(load) << 22)
+        | ((immediate & 0x7F) << 15)
+        | (target2 << 10)
+        | (base << 5)
+        | target
+    )
+
+
 def ldr_literal_x(destination, pc, target):
     displacement = target - pc
     if displacement % 4 or not -(1 << 20) <= displacement < (1 << 20):
@@ -577,6 +592,95 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
             "relocation_loaded_pointer",
         )
 
+
+    def test_pair_load_tracks_two_relocation_backed_targets_and_post_index_base(self):
+        start = 0x8300
+        slot = 0x8400
+        first_target = 0xA000
+        second_target = 0xB000
+        words = (
+            adr(8, start, slot),
+            pair_access(
+                element_bytes=8, load=True, base=8, target=9,
+                target2=10, immediate=2, mode=1,
+            ),
+            str_w(0, 8),
+            str_w(0, 9),
+            str_w(0, 10),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words),
+            start,
+            relocation_targets={
+                slot: first_target,
+                slot + 8: second_target,
+            },
+        )
+        pair, updated_base, first_pointer, second_pointer = result["memory_accesses"]
+        self.assertEqual(pair["addressing_mode"], "post_index")
+        self.assertEqual(pair["access_bytes"], 16)
+        self.assertEqual(pair["element_bytes"], 8)
+        self.assertEqual(pair["access_count"], 2)
+        self.assertEqual(pair["target_register"], "x9")
+        self.assertEqual(pair["target_register2"], "x10")
+        self.assertEqual(updated_base["base_definition_instruction_index"], 1)
+        self.assertEqual(updated_base["base_derivation_depth"], 2)
+        self.assertEqual(first_pointer["base_provenance"], "relocation_loaded_pointer")
+        self.assertEqual(second_pointer["base_provenance"], "relocation_loaded_pointer")
+        rendered = json.dumps(result)
+        self.assertNotIn(hex(slot), rendered)
+        self.assertNotIn(hex(first_target), rendered)
+        self.assertNotIn(hex(second_target), rendered)
+
+    def test_pair_load_seeds_two_exact_static_cell_value_origins(self):
+        start = 0x8400
+        cell = 0xA800
+        words = (
+            adr(8, start, cell),
+            pair_access(
+                element_bytes=8, load=True, base=8, target=9,
+                target2=10, immediate=0, mode=2,
+            ),
+            str_w(0, 9),
+            str_w(0, 10),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words),
+            start,
+            known_static_cells=(cell, cell + 8),
+        )
+        self.assertEqual(result["known_static_cell_full_width_load_match_count"], 2)
+        self.assertEqual(result["known_static_cell_derived_base_access_count"], 2)
+        self.assertTrue(
+            result["memory_accesses"][1]["base_derived_from_known_static_cell"]
+        )
+        self.assertTrue(
+            result["memory_accesses"][2]["base_derived_from_known_static_cell"]
+        )
+        self.assertEqual(result["memory_accesses"][0]["matches_known_static_cell"], True)
+
+    def test_pair_store_pre_index_updates_the_base_origin(self):
+        start = 0x8500
+        target = 0x9000
+        words = (
+            adr(8, start, target),
+            pair_access(
+                element_bytes=8, load=False, base=8, target=9,
+                target2=10, immediate=-2, mode=3,
+            ),
+            str_w(0, 8),
+        )
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(*words), start
+        )
+        pair, after = result["memory_accesses"]
+        self.assertEqual(pair["addressing_mode"], "pre_index")
+        self.assertEqual(pair["byte_offset"], -16)
+        self.assertEqual(pair["base_update_bytes"], -16)
+        self.assertEqual(after["base_provenance"], "adr_derived_address")
+        self.assertEqual(after["base_definition_instruction_index"], 1)
+        self.assertEqual(after["base_derivation_depth"], 2)
+        self.assertNotIn(hex(target), json.dumps(result))
 
     def test_rejected_load_writeback_alias_clears_static_cell_value_origin(self):
         for mode in (1, 3):
