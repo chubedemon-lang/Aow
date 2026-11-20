@@ -11,10 +11,19 @@ from server.protocol_evidence_registry import (
     validate_local_evidence_reference,
     validate_public_evidence_text,
 )
+from server.protocol_evidence_gates import (
+    STAGES,
+    evaluate_evidence,
+    evidence_record_digest,
+)
 
 
 class UnverifiedProtocolError(RuntimeError):
     """The original APK wire format has not been established."""
+
+    def __init__(self, message, *, missing_stages=()):
+        self.missing_stages = tuple(missing_stages)
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -85,3 +94,111 @@ class TransportAdapter:
         if len(payload) > MAX_SYNTHETIC_PAYLOAD_BYTES:
             raise ValueError("encoded payload exceeds local safety limit")
         return payload
+
+
+
+class EvidenceGatedTransportAdapter(TransportAdapter):
+    """Codec boundary enabled only by an approved evidence prefix.
+
+    This class still does not open sockets or prove that the injected callbacks
+    implement the observed wire contract. It prevents a future integration
+    from treating arbitrary ProtocolEvidence metadata as sufficient readiness.
+    """
+
+    def __init__(
+        self,
+        *,
+        records,
+        artifact_sha256,
+        approved_evidence_digests,
+        decode,
+        encode,
+        required_through="serialization",
+    ):
+        if type(required_through) is not str or required_through not in STAGES:
+            raise ValueError("required_through must be a known protocol stage")
+        if type(records) not in (list, tuple):
+            raise EvidenceError("records must be a built-in list or tuple")
+
+        stage_index = STAGES.index(required_through)
+        required_stages = STAGES[:stage_index + 1]
+        if not records:
+            raise UnverifiedProtocolError(
+                "no protocol evidence records supplied",
+                missing_stages=required_stages,
+            )
+
+        gates = evaluate_evidence(
+            records,
+            artifact_sha256=artifact_sha256,
+            approved_evidence_digests=approved_evidence_digests,
+        )
+        selected_gate = gates[stage_index]
+        if not selected_gate.ready:
+            raise UnverifiedProtocolError(
+                "protocol evidence is incomplete through "
+                + required_through
+                + ": "
+                + ", ".join(selected_gate.missing),
+                missing_stages=selected_gate.missing,
+            )
+
+        approved = set(approved_evidence_digests)
+        terminal_record = next(
+            (
+                record for record in reversed(records)
+                if (
+                    record.artifact_sha256 == artifact_sha256
+                    and record.topic == required_through
+                    and record.verified
+                    and record.method == "authorized_local_test"
+                    and evidence_record_digest(record) in approved
+                )
+            ),
+            None,
+        )
+        if terminal_record is None:
+            # The ordered gate should make this unreachable, but keep the
+            # constructor fail-closed if its implementation changes later.
+            raise UnverifiedProtocolError(
+                "approved terminal-stage evidence is unavailable",
+                missing_stages=(required_through,),
+            )
+
+        super().__init__(
+            ProtocolEvidence(
+                terminal_record.artifact_sha256,
+                terminal_record.observation,
+                terminal_record.test_reference,
+            ),
+            decode=decode,
+            encode=encode,
+        )
+        self._artifact_sha256 = artifact_sha256
+        self._required_through = required_through
+        self._gate_results = tuple(gates[:stage_index + 1])
+        self._evidence_records = tuple(
+            record for record in records
+            if (
+                record.artifact_sha256 == artifact_sha256
+                and record.topic in required_stages
+            )
+        )
+
+    @property
+    def artifact_sha256(self):
+        return self._artifact_sha256
+
+    @property
+    def required_through(self):
+        return self._required_through
+
+    @property
+    def gate_results(self):
+        """Ordered evidence readiness results through the selected stage."""
+        return self._gate_results
+
+    @property
+    def evidence_records(self):
+        """Selected artifact's records for the required stage prefix."""
+        return self._evidence_records
