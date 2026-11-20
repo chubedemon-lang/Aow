@@ -73,9 +73,11 @@ flag also resolves each referenced TypeIndex through the relocation-backed
 ARM64 `Il2CppType` registration table and adds only the symbolic native type
 category and aggregate table counts. In selected method windows it also marks
 memory-access ranges that overlap one of those static FieldInfo cells using a
-boolean and an aggregate count; no cell address is emitted. This is a static
-instruction-to-cell overlap, not proof that the loaded value is consumed as a
-packet field. It does not identify a managed declaring type or field name.
+per-access boolean and aggregate total, load, and store counts; no cell address
+is emitted. Counts cover every reachable decoded access even when the bounded
+per-access observation list is truncated. A load/store overlap is a static
+instruction-to-cell observation, not proof that the loaded value is consumed
+as a packet field. It does not identify a managed declaring type or field name.
 
 This is a whole-section static-data inventory, not a use-def chain. A matching
 cell does not prove that `Receiver.Cycle`, `Sender.Cycle` or any selected

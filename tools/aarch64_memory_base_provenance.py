@@ -225,6 +225,8 @@ def summarize_control_flow_memory_base_provenance(
     reachable_accesses = 0
     known_provenance_accesses = 0
     known_static_cell_match_count = 0
+    known_static_cell_load_match_count = 0
+    known_static_cell_store_match_count = 0
 
     for block_index, (block_start, block_end) in enumerate(blocks):
         if block_index not in reachable:
@@ -378,6 +380,10 @@ def summarize_control_flow_memory_base_provenance(
                     )
                     if matches_known_static_cell:
                         known_static_cell_match_count += 1
+                        if access["operation"] == "load":
+                            known_static_cell_load_match_count += 1
+                        elif access["operation"] == "store":
+                            known_static_cell_store_match_count += 1
                 if len(observations) < max_accesses:
                     observation = {
                         "instruction_index": instruction_index,
@@ -464,4 +470,6 @@ def summarize_control_flow_memory_base_provenance(
     }
     if known_static_cells is not None:
         result["known_static_cell_match_count"] = known_static_cell_match_count
+        result["known_static_cell_load_match_count"] = known_static_cell_load_match_count
+        result["known_static_cell_store_match_count"] = known_static_cell_store_match_count
     return result

@@ -571,9 +571,32 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
             known_static_cells=(cell,),
         )
         self.assertEqual(result["known_static_cell_match_count"], 1)
+        self.assertEqual(result["known_static_cell_load_match_count"], 0)
+        self.assertEqual(result["known_static_cell_store_match_count"], 1)
         self.assertTrue(result["memory_accesses"][0]["matches_known_static_cell"])
         self.assertNotIn(hex(cell), json.dumps(result))
         self.assertFalse(result["absolute_addresses_emitted"])
+
+    def test_reports_load_and_store_matches_even_when_observations_are_truncated(self):
+        start = 0x9050
+        cell = 0xA300
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(
+                adr(8, start, cell),
+                ldr_x(9, 8),
+                str_w(9, 8),
+                ldr_x(10, 8),
+            ),
+            start,
+            max_accesses=1,
+            known_static_cells=(cell,),
+        )
+        self.assertEqual(result["known_static_cell_match_count"], 3)
+        self.assertEqual(result["known_static_cell_load_match_count"], 2)
+        self.assertEqual(result["known_static_cell_store_match_count"], 1)
+        self.assertEqual(len(result["memory_accesses"]), 1)
+        self.assertEqual(result["memory_accesses"][0]["operation"], "load")
+        self.assertTrue(result["memory_accesses_truncated"])
 
     def test_unrelated_and_unknown_accesses_do_not_match_known_static_cells(self):
         start = 0x9100
@@ -613,6 +636,8 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
             code_bytes(str_w(0, 31)), 0x9200
         )
         self.assertNotIn("known_static_cell_match_count", result)
+        self.assertNotIn("known_static_cell_load_match_count", result)
+        self.assertNotIn("known_static_cell_store_match_count", result)
         self.assertNotIn(
             "matches_known_static_cell", result["memory_accesses"][0]
         )
