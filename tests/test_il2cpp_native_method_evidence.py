@@ -2586,7 +2586,7 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
             self._code(receiver_words), start, cctor, start, {deserialize_target}, set(),
             {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
         )
-        self.assertEqual(summary["status"], "unresolved_key_register_alias")
+        self.assertEqual(summary["status"], "unresolved_networksettings_static_slot_read")
         self.assertIsNone(target)
 
     def test_requires_two_direct_deserializer_calls(self):
@@ -2642,7 +2642,7 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
             receiver, start, cctor, start, {deserialize_target}, set(),
             {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
         )
-        self.assertEqual(summary["status"], "unresolved_lookup_call")
+        self.assertEqual(summary["status"], "unresolved_key_register_alias")
         self.assertIsNone(target)
 
     def test_requires_direct_lookup_call_after_key_argument_move(self):
@@ -2653,7 +2653,7 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
             self._code(words), start, cctor, start, {deserialize_target}, set(),
             {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
         )
-        self.assertEqual(summary["status"], "unresolved_networksettings_static_slot_read")
+        self.assertEqual(summary["status"], "unresolved_lookup_call")
         self.assertIsNone(target)
 
     def test_rejects_non_nop_gap_in_static_slot_read_chain(self):
@@ -2664,7 +2664,7 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
             self._code(words), start, cctor, start, {deserialize_target}, set(),
             {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
         )
-        self.assertEqual(summary["status"], "unresolved_or_ambiguous_lookup_call")
+        self.assertEqual(summary["status"], "unresolved_networksettings_static_slot_read")
         self.assertIsNone(target)
 
     def test_network_field_summary_includes_zipped_message_collection_names(self):
