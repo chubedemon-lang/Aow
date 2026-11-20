@@ -644,5 +644,16 @@ class OfflineApkPathReadTests(unittest.TestCase):
             )
 
 
+    def test_inspect_apk_rejects_non_boolean_native_type_flag_before_reading(self):
+        with patch(
+            "tools.il2cpp_network_callsite_evidence._read_apk_members"
+        ) as read_members:
+            with self.assertRaisesRegex(
+                CodegenInventoryError, "must be a built-in boolean"
+            ):
+                inspect_apk("/missing.apk", resolve_fieldref_native_types=1)
+            read_members.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
