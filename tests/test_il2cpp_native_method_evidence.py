@@ -10,7 +10,7 @@ from tools.il2cpp_native_method_evidence import (
     _decode_aarch64_str_x_unsigned, _decode_aarch64_mov_w_register,
     _decode_aarch64_bl_target,
     _networksettings_first_non_default_field, _summarize_receiver_integer_lookup,
-    _looks_like_hash_bucket_lookup,
+    _contains_hash_bucket_opcode_families,
     _decode_aarch64_b_target, _decode_aarch64_conditional_branch,
     _decode_aarch64_conditional_branch_condition,
     _summarize_aarch64_calls, _summarize_control_flow_serializer_helper_blocks,
@@ -2616,10 +2616,56 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
         self.assertEqual(candidate["leading_default_backed_field_count"], 1)
         self.assertEqual(candidate["field_count"], 3)
 
-    def test_hash_bucket_shape_requires_arithmetic_index_and_compare(self):
+    def test_hash_bucket_opcode_families_are_not_reported_as_a_shape(self):
         words = [0x1ACA0C09, 0x1B0A8129, 0xB9401908, 0x6B0A013F, 0x54000561]
-        self.assertTrue(_looks_like_hash_bucket_lookup(self._code(words)))
-        self.assertFalse(_looks_like_hash_bucket_lookup(self._code(words[:1] + words[2:])))
+        self.assertTrue(_contains_hash_bucket_opcode_families(self._code(words)))
+        self.assertTrue(_contains_hash_bucket_opcode_families(self._code(list(reversed(words)))))
+        self.assertFalse(_contains_hash_bucket_opcode_families(self._code(words[:1] + words[2:])))
+
+
+    def test_rejects_w0_clobber_before_second_result_copy(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows()
+        words = [struct.unpack_from("<I", receiver, offset)[0] for offset in range(0, len(receiver), 4)]
+        words.insert(4, self._encode_mov_w(0, 21))
+        summary, target = _summarize_receiver_integer_lookup(
+            self._code(words), start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_second_result_copy")
+        self.assertIsNone(target)
+
+    def test_rejects_key_register_alias_with_static_slot_load(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows(
+            key_source=8
+        )
+        summary, target = _summarize_receiver_integer_lookup(
+            receiver, start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_or_ambiguous_lookup_call")
+        self.assertIsNone(target)
+
+    def test_requires_direct_lookup_call_after_key_argument_move(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows()
+        words = [struct.unpack_from("<I", receiver, offset)[0] for offset in range(0, len(receiver), 4)]
+        words.insert(9, self._encode_mov_w(1, 22))
+        summary, target = _summarize_receiver_integer_lookup(
+            self._code(words), start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_or_ambiguous_lookup_call")
+        self.assertIsNone(target)
+
+    def test_rejects_non_nop_gap_in_static_slot_read_chain(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows()
+        words = [struct.unpack_from("<I", receiver, offset)[0] for offset in range(0, len(receiver), 4)]
+        words.insert(6, self._encode_mov_w(8, 19))
+        summary, target = _summarize_receiver_integer_lookup(
+            self._code(words), start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_or_ambiguous_lookup_call")
+        self.assertIsNone(target)
 
     def test_network_field_summary_includes_zipped_message_collection_names(self):
         metadata = make_metadata(
