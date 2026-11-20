@@ -819,10 +819,7 @@ bounded evidence chain is complete:
   Its exact .eh_frame_hdr FDE entry resolves to a bounded 480-byte
   entry-to-next-FDE analysis window. The window contains at least one instruction from each of several broad opcode families (division, multiply/subtract, load, compare and conditional branch). This presence-only check does not establish their order, register relationships, a hash-bucket algorithm, or a data-flow chain.
 
-The best-supported static interpretation is therefore that the second
-receive-side integer is used as a key in a hash-bucket membership lookup on
-the first NetworkSettings static reference slot, whose metadata-order field
-candidate is m_zippetMessageTypes. This strengthens the static lookup-candidate attribution only. The callee's opcode-family summary is presence-only and is not treated as proof of a hash-bucket algorithm. It does **not** establish a stable numeric wire-message-ID mapping, prove the runtime branch outcome, or prove that compression is applied to a particular packet/payload range.
+The best-supported static interpretation is that the second receive-side integer is copied from the deserializer return register and forwarded as the first integer argument to a direct helper call after a read through the first NetworkSettings static reference slot. The helper's exact semantic role remains unresolved; the field name m_zippetMessageTypes is only a metadata-order candidate. This strengthens the static lookup-candidate attribution only. The callee's opcode-family summary is presence-only and is not treated as proof of a hash-bucket algorithm. It does **not** establish a stable numeric wire-message-ID mapping, prove the runtime branch outcome, or prove that compression is applied to a particular packet/payload range.
 
 Still unverified: complete framing, effective HeaderLength use, compression
 placement/format, encryption, sender/receiver symmetry, handshake sequence,
