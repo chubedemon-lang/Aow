@@ -1610,6 +1610,8 @@ class NativeMethodEvidenceTests(unittest.TestCase):
                         {"target_block": 1, "kind": "branch_target"},
                     ],
                     "terminator": "b",
+                    "external_branch_exit": False,
+                    "external_fallthrough_exit": False,
                     "callsite_observations": [],
                 },
                 {
@@ -1619,6 +1621,8 @@ class NativeMethodEvidenceTests(unittest.TestCase):
                     "successors": [],
                     "successor_edges": [],
                     "terminator": "return",
+                    "external_branch_exit": False,
+                    "external_fallthrough_exit": False,
                     "callsite_observations": [],
                 },
             ],
