@@ -172,6 +172,81 @@ def decode_register_offset_memory_access(word):
     }
 
 
+def decode_integer_pair_memory_access(word):
+    """Decode non-temporal-excluded integer LDP/STP pair addressing.
+
+    Supports 32-bit and 64-bit general-register pairs with signed-offset,
+    pre-indexed, and post-indexed addressing. LDPSW, SIMD/FP, non-temporal,
+    reserved, and writeback/base-alias forms are deliberately omitted.
+    """
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    if word & (1 << 26):  # SIMD/FP V bit
+        return None
+    if (word & 0x3A000000) != 0x28000000:
+        return None
+
+    opc = (word >> 30) & 0x3
+    if opc not in (0, 2):  # 32-bit or 64-bit GPR pair; omit LDPSW/reserved.
+        return None
+    mode = (word >> 23) & 0x3
+    if mode == 0:  # LDNP/STNP non-temporal hint family is not modeled.
+        return None
+
+    element_bytes = 4 if opc == 0 else 8
+    load = bool((word >> 22) & 1)
+    base = (word >> 5) & 0x1F
+    target = word & 0x1F
+    target2 = (word >> 10) & 0x1F
+
+    if load and target == target2:
+        return None
+    if mode in (1, 3) and base != 31 and base in (target, target2):
+        return None
+
+    encoded_offset = (word >> 15) & 0x7F
+    signed_offset = (
+        encoded_offset - 0x80 if encoded_offset & 0x40
+        else encoded_offset
+    )
+    displacement = signed_offset * element_bytes
+    if mode == 1:
+        addressing_mode = "post_index"
+        byte_offset = 0
+        base_update_bytes = displacement
+    elif mode == 3:
+        addressing_mode = "pre_index"
+        byte_offset = displacement
+        base_update_bytes = displacement
+    else:
+        addressing_mode = "signed_offset"
+        byte_offset = displacement
+        base_update_bytes = 0
+
+    register_prefix = "x" if element_bytes == 8 else "w"
+    base_register = "sp" if base == 31 else f"x{base}"
+    target_register = (
+        f"{register_prefix}zr" if target == 31
+        else f"{register_prefix}{target}"
+    )
+    target_register2 = (
+        f"{register_prefix}zr" if target2 == 31
+        else f"{register_prefix}{target2}"
+    )
+    return {
+        "operation": "load" if load else "store",
+        "access_bytes": element_bytes * 2,
+        "element_bytes": element_bytes,
+        "access_count": 2,
+        "base_register": base_register,
+        "target_register": target_register,
+        "target_register2": target_register2,
+        "byte_offset": byte_offset,
+        "addressing_mode": addressing_mode,
+        "base_update_bytes": base_update_bytes,
+    }
+
+
 def decode_integer_immediate_memory_access(word):
     """Decode supported unsigned-scaled or unscaled/writeback integer LDR/STR."""
     unsigned = decode_unsigned_immediate_memory_access(word)
@@ -185,11 +260,14 @@ def decode_integer_immediate_memory_access(word):
 
 
 def decode_integer_memory_access(word):
-    """Decode supported integer immediate or register-offset LDR/STR forms."""
+    """Decode supported integer scalar or pair LDR/STR memory forms."""
     immediate = decode_integer_immediate_memory_access(word)
     if immediate is not None:
         return immediate
-    return decode_register_offset_memory_access(word)
+    register_offset = decode_register_offset_memory_access(word)
+    if register_offset is not None:
+        return register_offset
+    return decode_integer_pair_memory_access(word)
 
 
 def summarize_unsigned_immediate_memory_accesses(code, *, max_accesses=128):
