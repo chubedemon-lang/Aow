@@ -11,6 +11,10 @@ import json
 import struct
 import zipfile
 from collections import Counter, defaultdict
+
+from tools.aarch64_eh_frame_index import (
+    EhFrameIndexError, find_entry_window, parse_eh_frame_header,
+)
 from pathlib import Path
 
 from tools.il2cpp_codegen_inventory import (
@@ -173,7 +177,10 @@ def _network_methods(metadata, info, allowlist_map=None):
 
 
 NETWORK_FIELDS = {
-    ("com.geargames.common.network", "NetworkSettings"): {"HeaderLength"},
+    ("com.geargames.common.network", "NetworkSettings"): {
+        "HeaderLength", "m_zippetMessageTypes", "m_notSessionedMessageTypes",
+        "m_notEnumeratedMessageTypes", "m_unimportantMessageTypes",
+    },
     ("com.geargames.common.network", "MessageHelper"): {
         "m_messageTypeByMessageClass", "m_messageClassByMessageType",
     },
@@ -462,6 +469,424 @@ def _decode_aarch64_ldr_x_unsigned(word):
     if target == 31 or base == 31:
         return None
     return target, base, offset
+
+
+def _decode_aarch64_str_x_unsigned(word):
+    """Decode 64-bit unsigned-offset STR as (rt, rn, byte_offset)."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    if (word & 0xFFC00000) != 0xF9000000:
+        return None
+    target = word & 0x1F
+    base = (word >> 5) & 0x1F
+    offset = ((word >> 10) & 0xFFF) * 8
+    if target == 31 or base == 31:
+        return None
+    return target, base, offset
+
+
+def _decode_aarch64_mov_w_register(word):
+    """Decode the unshifted MOV Wd, Wm register alias."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    if word & 0x80000000:
+        return None
+    if (word & 0x7FE0FFE0) != 0x2A0003E0:
+        return None
+    destination = word & 0x1F
+    source = (word >> 16) & 0x1F
+    if destination == 31 or source == 31:
+        return None
+    return destination, source
+
+
+
+def _skip_aarch64_nops(words, index):
+    """Skip only architectural NOPs; unknown instructions remain barriers."""
+    while index < len(words) and words[index][1] == 0xD503201F:
+        index += 1
+    return index
+
+
+def _aarch64_global_cell_loads(code, start_va):
+    """Find only adjacent ADRP/(NOP)/LDR same-register global-cell loads."""
+    if type(code) is not bytes or len(code) % 4:
+        raise ValueError("AArch64 code window must be aligned bytes")
+    if type(start_va) is not int or start_va < 0 or start_va % 4:
+        raise ValueError("AArch64 code window start must be aligned")
+    words = [
+        (start_va + offset, struct.unpack_from("<I", code, offset)[0])
+        for offset in range(0, len(code), 4)
+    ]
+    loads = []
+    for index, (pc, word) in enumerate(words):
+        adrp = _decode_aarch64_adrp(word, pc)
+        if adrp is None:
+            continue
+        register, page = adrp
+        following = _skip_aarch64_nops(words, index + 1)
+        if following >= len(words):
+            continue
+        load = _decode_aarch64_ldr_x_unsigned(words[following][1])
+        if load is None or load[0] != register or load[1] != register:
+            continue
+        loads.append({
+            "cell": page + load[2],
+            "register": register,
+            "load_index": following,
+        })
+    return loads
+
+def _networksettings_static_first_slot_store_cells(code, start_va):
+    """Find cctor class cells with a contiguous static_fields[0] store chain."""
+    if type(code) is not bytes or len(code) % 4:
+        raise ValueError("NetworkSettings cctor code must be aligned AArch64 bytes")
+    words = [
+        (start_va + offset, struct.unpack_from("<I", code, offset)[0])
+        for offset in range(0, len(code), 4)
+    ]
+    cells = set()
+    for load in _aarch64_global_cell_loads(code, start_va):
+        class_register = load["register"]
+        first_index = _skip_aarch64_nops(words, load["load_index"] + 1)
+        if first_index >= len(words):
+            continue
+        first = _decode_aarch64_ldr_x_unsigned(words[first_index][1])
+        if first is None or first[1] != class_register or first[2] != 0:
+            continue
+        object_register = first[0]
+        second_index = _skip_aarch64_nops(words, first_index + 1)
+        if second_index >= len(words):
+            continue
+        second = _decode_aarch64_ldr_x_unsigned(words[second_index][1])
+        if second is None or second[1] != object_register or second[2] != 0xB8:
+            continue
+        static_fields_register = second[0]
+        store_index = _skip_aarch64_nops(words, second_index + 1)
+        if store_index >= len(words):
+            continue
+        store = _decode_aarch64_str_x_unsigned(words[store_index][1])
+        if store is not None and store[1] == static_fields_register and store[2] == 0:
+            cells.add(load["cell"])
+    return cells
+
+
+def _networksettings_static_first_slot_read_sequences(code, start_va, expected_cell):
+    """Find exact three-load static_fields[0] reads after a validated class-cell load."""
+    if type(code) is not bytes or len(code) % 4:
+        raise ValueError("AArch64 code window must be aligned bytes")
+    words = [
+        (start_va + offset, struct.unpack_from("<I", code, offset)[0])
+        for offset in range(0, len(code), 4)
+    ]
+    sequences = []
+    for load in _aarch64_global_cell_loads(code, start_va):
+        if load["cell"] != expected_cell:
+            continue
+        class_register = load["register"]
+        for first_index in range(load["load_index"] + 1, min(load["load_index"] + 513, len(words))):
+            first = _decode_aarch64_ldr_x_unsigned(words[first_index][1])
+            if first is None or first[1] != class_register or first[2] != 0:
+                continue
+            object_register = first[0]
+            second_index = _skip_aarch64_nops(words, first_index + 1)
+            if second_index >= len(words):
+                continue
+            second = _decode_aarch64_ldr_x_unsigned(words[second_index][1])
+            if second is None or second[1] != object_register or second[2] != 0xB8:
+                continue
+            static_fields_register = second[0]
+            read_index = _skip_aarch64_nops(words, second_index + 1)
+            if read_index >= len(words):
+                continue
+            third = _decode_aarch64_ldr_x_unsigned(words[read_index][1])
+            if (
+                third is not None and third[1] == static_fields_register
+                and third[2] == 0
+            ):
+                sequences.append({
+                    "load_index": load["load_index"],
+                    "first_index": first_index,
+                    "read_index": read_index,
+                    "class_register": class_register,
+                    "object_register": object_register,
+                    "static_fields_register": static_fields_register,
+                    "value_register": third[0],
+                })
+    return sequences
+def _networksettings_first_non_default_field(metadata):
+    """Return a metadata-order candidate, not a proven static-field map."""
+    string_off, string_size, _ = _table(metadata, 0x18, 1, "string heap")
+    field_off, _, field_total = _table(metadata, 0x60, 0x0C, "fields")
+    default_off, _, default_total = _table(
+        metadata, 0x40, 0x0C, "field default values"
+    )
+    type_off, _, type_total = _table(metadata, 0xA0, 0x58, "types")
+    heap = _slice(metadata, string_off, string_size, "string heap")
+
+    def read_string(index):
+        if type(index) is not int or not 0 <= index < len(heap):
+            raise ValueError("invalid NetworkSettings metadata string index")
+        end = heap.find(b"\0", index)
+        if end < 0:
+            raise ValueError("unterminated NetworkSettings metadata string")
+        try:
+            return heap[index:end].decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError("invalid NetworkSettings metadata UTF-8") from exc
+
+    default_fields = set()
+    for index in range(default_total):
+        field_index = struct.unpack_from("<i", metadata, default_off + index * 0x0C)[0]
+        if not 0 <= field_index < field_total:
+            raise ValueError("field default index is out of range")
+        if field_index in default_fields:
+            raise ValueError("duplicate field default index")
+        default_fields.add(field_index)
+
+    matches = []
+    for type_index in range(type_total):
+        type_pos = type_off + type_index * 0x58
+        name_index, namespace_index = struct.unpack_from("<II", metadata, type_pos)
+        name = read_string(name_index)
+        namespace = read_string(namespace_index)
+        if name != "NetworkSettings" or namespace != "com.geargames.common.network":
+            continue
+        field_start = struct.unpack_from("<i", metadata, type_pos + 0x20)[0]
+        field_count = struct.unpack_from("<H", metadata, type_pos + 0x44)[0]
+        if (
+            field_start < 0 or field_start > field_total
+            or field_count > field_total - field_start
+        ):
+            raise ValueError("NetworkSettings field range is invalid")
+        fields = []
+        for field_index in range(field_start, field_start + field_count):
+            field_name_index = struct.unpack_from("<I", metadata, field_off + field_index * 0x0C)[0]
+            fields.append((read_string(field_name_index), field_index in default_fields))
+        first = next(
+            ((field_name, index) for index, (field_name, has_default) in enumerate(fields) if not has_default),
+            None,
+        )
+        matches.append({
+            "name": first[0] if first is not None else None,
+            "leading_default_backed_field_count": first[1] if first is not None else len(fields),
+            "field_count": len(fields),
+        })
+    return matches[0] if len(matches) == 1 else None
+
+
+
+def _contains_hash_bucket_opcode_families(code):
+    """Report broad opcode-family co-occurrence, not a hash-table data-flow shape."""
+    if type(code) is not bytes or len(code) % 4:
+        return False
+    words = [
+        struct.unpack_from("<I", code, offset)[0]
+        for offset in range(0, len(code), 4)
+    ]
+    return (
+        any((word & 0x7FE0FC00) == 0x1AC00C00 for word in words)
+        and any((word & 0x7FE08000) == 0x1B008000 for word in words)
+        and any((word & 0xFFC00000) == 0xB9400000 for word in words)
+        and any((word & 0x7F20001F) == 0x6B00001F for word in words)
+        and any((word & 0xFF000010) == 0x54000000 for word in words)
+    )
+
+
+def _summarize_receiver_integer_lookup(
+    receiver_code, receiver_start_va, networksettings_cctor_code,
+    networksettings_cctor_start_va, deserialize_int_targets,
+    known_method_targets, field_candidate,
+):
+    """Trace only an uninterrupted, explicitly decoded receive-key lookup chain."""
+    if type(receiver_code) is not bytes or len(receiver_code) % 4:
+        raise ValueError("receiver code must be aligned AArch64 bytes")
+    if type(networksettings_cctor_code) is not bytes or len(networksettings_cctor_code) % 4:
+        raise ValueError("NetworkSettings cctor code must be aligned AArch64 bytes")
+    if (
+        type(receiver_start_va) is not int or receiver_start_va < 0
+        or receiver_start_va % 4
+    ):
+        raise ValueError("receiver start must be aligned")
+    if (
+        type(networksettings_cctor_start_va) is not int
+        or networksettings_cctor_start_va < 0
+        or networksettings_cctor_start_va % 4
+    ):
+        raise ValueError("NetworkSettings cctor start must be aligned")
+    if (
+        type(deserialize_int_targets) is not set or not deserialize_int_targets
+        or any(type(target) is not int or target < 0 or target % 4 for target in deserialize_int_targets)
+    ):
+        raise ValueError("deserialize targets must be aligned integer addresses")
+    if (
+        type(known_method_targets) is not set
+        or any(type(target) is not int or target < 0 or target % 4 for target in known_method_targets)
+    ):
+        raise ValueError("known method targets must be an aligned integer set")
+
+    class_cells = _networksettings_static_first_slot_store_cells(
+        networksettings_cctor_code, networksettings_cctor_start_va
+    )
+    if len(class_cells) != 1:
+        return {"status": "unresolved_networksettings_static_slot"}, None
+    class_cell = next(iter(class_cells))
+
+    words = [
+        (receiver_start_va + offset, struct.unpack_from("<I", receiver_code, offset)[0])
+        for offset in range(0, len(receiver_code), 4)
+    ]
+    deserialize_calls = [
+        index for index, (pc, word) in enumerate(words)
+        if _decode_aarch64_bl_target(word, pc) in deserialize_int_targets
+    ]
+    if len(deserialize_calls) != 2:
+        return {
+            "status": "unresolved_deserialize_call_count",
+            "deserialize_int_call_count": len(deserialize_calls),
+        }, None
+
+    second_call = deserialize_calls[1]
+    copy_index = _skip_aarch64_nops(words, second_call + 1)
+    if copy_index >= len(words):
+        return {
+            "status": "unresolved_second_result_copy",
+            "deserialize_int_call_count": len(deserialize_calls),
+        }, None
+    copy = _decode_aarch64_mov_w_register(words[copy_index][1])
+    if copy is None or copy[1] != 0 or copy[0] == 0:
+        return {
+            "status": "unresolved_second_result_copy",
+            "deserialize_int_call_count": len(deserialize_calls),
+        }, None
+    key_register = copy[0]
+
+    sequences = _networksettings_static_first_slot_read_sequences(
+        receiver_code, receiver_start_va, class_cell
+    )
+    ordered_sequences = [
+        sequence for sequence in sequences
+        if _skip_aarch64_nops(words, sequence["load_index"] + 1) == deserialize_calls[0]
+        and sequence["first_index"] == _skip_aarch64_nops(words, copy_index + 1)
+    ]
+    if not ordered_sequences:
+        return {
+            "status": "unresolved_networksettings_static_slot_read",
+            "deserialize_int_call_count": len(deserialize_calls),
+        }, None
+
+    candidates = []
+    saw_key_alias = False
+    saw_key_argument = False
+    for sequence in ordered_sequences:
+        chain_registers = {
+            sequence["class_register"], sequence["object_register"],
+            sequence["static_fields_register"], sequence["value_register"],
+        }
+        if key_register in chain_registers:
+            saw_key_alias = True
+            continue
+
+        argument_index = _skip_aarch64_nops(words, sequence["read_index"] + 1)
+        if argument_index >= len(words):
+            continue
+        argument = _decode_aarch64_mov_w_register(words[argument_index][1])
+        if argument is None or argument[0] != 1 or argument[1] != key_register:
+            continue
+        saw_key_argument = True
+
+        call_index = _skip_aarch64_nops(words, argument_index + 1)
+        if call_index >= len(words):
+            continue
+        lookup_target = _decode_aarch64_bl_target(
+            words[call_index][1], words[call_index][0]
+        )
+        if lookup_target is None or lookup_target in deserialize_int_targets:
+            continue
+        candidates.append((lookup_target, sequence))
+
+    if len(candidates) != 1:
+        if saw_key_alias:
+            status = "unresolved_key_register_alias"
+        elif not saw_key_argument:
+            status = "unresolved_key_argument"
+        else:
+            status = "unresolved_lookup_call"
+        return {
+            "status": status,
+            "deserialize_int_call_count": len(deserialize_calls),
+            "candidate_count": len(candidates),
+        }, None
+
+    target, _sequence = candidates[0]
+    candidate_name = (
+        field_candidate.get("name")
+        if type(field_candidate) is dict else None
+    )
+    summary = {
+        "status": "static_key_lookup_candidate",
+        "deserialize_int_call_count": 2,
+        "source_call_ordinal": 2,
+        "second_result_copied_from_w0": True,
+        "key_forwarded_to_w1": True,
+        "networksettings_static_first_slot_store_observed": True,
+        "networksettings_static_first_slot_read_observed": True,
+        "lookup_target_is_metadata_method": target in known_method_targets,
+        "field_candidate_name": candidate_name,
+        "field_candidate_leading_default_count": (
+            field_candidate.get("leading_default_backed_field_count")
+            if type(field_candidate) is dict else None
+        ),
+        "field_attribution_status": (
+            "metadata_order_candidate_only" if candidate_name else "unresolved"
+        ),
+        "callee_fde_entry_resolved": False,
+        "callee_entry_window_bytes": None,
+        "callee_hash_bucket_opcode_families_present": False,
+        "wire_message_id_verified": False,
+        "compression_behavior_verified": False,
+        "wire_contract_verified": False,
+        "apk_compatible": False,
+    }
+    return summary, target
+def _bounded_fde_code_for_target(elf, sections, target):
+    """Return a private exact-FDE-entry window, or None when it cannot be bounded."""
+    try:
+        header_section = sections[".eh_frame_hdr"]
+        frame_section = sections[".eh_frame"]
+        header = _slice(
+            elf, header_section["offset"], header_section["size"], ".eh_frame_hdr"
+        )
+        executable_ranges = tuple(
+            (section["address"], section["address"] + section["size"])
+            for section in sections.values()
+            if section["type"] == 1 and (section["flags"] & 0x4)
+        )
+        entries = parse_eh_frame_header(
+            header,
+            header_section["address"],
+            (
+                frame_section["address"],
+                frame_section["address"] + frame_section["size"],
+            ),
+            executable_ranges,
+        )
+        window = find_entry_window(entries, target)
+        if window is None:
+            return None
+        matches = [
+            section for section in sections.values()
+            if section["type"] == 1 and (section["flags"] & 0x4)
+            and section["address"] <= target < section["address"] + section["size"]
+        ]
+        if len(matches) != 1:
+            return None
+        section = matches[0]
+        file_offset = section["offset"] + target - section["address"]
+        code = _slice(elf, file_offset, window.size_bytes, "bounded native helper FDE window")
+        return window.size_bytes, code
+    except (EhFrameIndexError, KeyError, ValueError):
+        return None
 
 
 def _decode_aarch64_mov_x_register(word):
@@ -2470,6 +2895,48 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         key=lambda x: (x["namespace"], x["type"], x["method"], x["parameter_count"])
     )
 
+    receiver_integer_lookup_summary = {
+        "status": "not_available",
+        "wire_message_id_verified": False,
+        "compression_behavior_verified": False,
+        "wire_contract_verified": False,
+        "apk_compatible": False,
+    }
+    receiver_window = next((
+        item for item in network_windows
+        if item[0]["namespace"] == "com.geargames.common.network"
+        and item[0]["type"] == "Receiver" and item[0]["method"] == "Cycle"
+    ), None)
+    networksettings_cctor_window = next((
+        item for item in network_windows
+        if item[0]["namespace"] == "com.geargames.common.network"
+        and item[0]["type"] == "NetworkSettings" and item[0]["method"] == ".cctor"
+    ), None)
+    deserialize_int_targets = {
+        target for target, labels in helper_targets.items()
+        if "com.geargames.serialization.SimpleDeserializer::deserializeInt" in labels
+    }
+    if (
+        receiver_window is not None
+        and networksettings_cctor_window is not None
+        and len(deserialize_int_targets) == 1
+    ):
+        field_candidate = _networksettings_first_non_default_field(metadata)
+        receiver_integer_lookup_summary, lookup_target = _summarize_receiver_integer_lookup(
+            receiver_window[5], receiver_window[2],
+            networksettings_cctor_window[5], networksettings_cctor_window[2],
+            deserialize_int_targets, set(method_targets), field_candidate,
+        )
+        if lookup_target is not None:
+            fde_window = _bounded_fde_code_for_target(elf, sections, lookup_target)
+            if fde_window is not None:
+                fde_size, fde_code = fde_window
+                receiver_integer_lookup_summary["callee_fde_entry_resolved"] = True
+                receiver_integer_lookup_summary["callee_entry_window_bytes"] = fde_size
+                receiver_integer_lookup_summary["callee_hash_bucket_opcode_families_present"] = (
+                    _contains_hash_bucket_opcode_families(fde_code)
+                )
+
     primitive_helper_summary = []
     for method in helper_methods:
         status, section_name, target = resolve(method)
@@ -2514,6 +2981,7 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
         "serializer_callsite_summary": callsite_summary,
         "serializer_deserializer_path_comparisons": serializer_deserializer_path_comparisons,
         "network_callsite_summary": network_callsite_summary,
+        "receiver_integer_lookup_summary": receiver_integer_lookup_summary,
         "network_field_summary": network_fields,
         "primitive_helper_callsite_summary": primitive_helper_summary,
         "native_addresses_emitted": False,
@@ -2525,7 +2993,12 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             "to allowlisted SimpleSerializer/SimpleDeserializer helpers inside a "
             "bounded entry window ending at the next distinct executable entry "
             "in the same section. Selected Receiver/Sender/dispatcher/helper entry windows also emit "
-            "redacted network callsite summaries. Direct tail branches and indirect tail branches are "
+            "redacted network callsite summaries. A separate bounded Receiver.Cycle pass can trace "
+            "the second deserializeInt result into W1 while the receiver is loaded through the "
+            "NetworkSettings static_fields first slot; the field name remains a metadata-order "
+            "candidate, not a proven FieldInfo-to-static-slot map. An exact FDE-entry window may report co-occurring broad opcode families, "
+            "but this does not establish a hash-bucket shape or register/data-flow relationship. "
+            "Direct tail branches and indirect tail branches are "
             "reported separately. Direct B/BL targets are resolved against metadata-backed method "
             "entries where unique; unresolved and ambiguous targets remain counts only. Indirect calls "
             "and other direct calls are counted but not assigned field semantics. This is static "

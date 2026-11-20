@@ -7,7 +7,10 @@ from tools.il2cpp_native_method_evidence import (
     R_AARCH64_RELATIVE,
     _decode_aarch64_adr, _decode_aarch64_adrp, _decode_aarch64_add_imm64,
     _decode_aarch64_ldr_x_unsigned, _decode_aarch64_mov_x_register,
+    _decode_aarch64_str_x_unsigned, _decode_aarch64_mov_w_register,
     _decode_aarch64_bl_target,
+    _networksettings_first_non_default_field, _summarize_receiver_integer_lookup,
+    _contains_hash_bucket_opcode_families,
     _decode_aarch64_b_target, _decode_aarch64_conditional_branch,
     _decode_aarch64_conditional_branch_condition,
     _summarize_aarch64_calls, _summarize_control_flow_serializer_helper_blocks,
@@ -2441,6 +2444,254 @@ class SerializerDeserializerPathAlignmentTests(unittest.TestCase):
         )
         self.assertEqual(comparisons[0]["serializer_entry_count"], 2)
         self.assertEqual(comparisons[0]["deserializer_entry_count"], 0)
+
+
+
+class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
+    @staticmethod
+    def _encode_adrp(register, pc, target):
+        immediate = ((target & ~0xFFF) - (pc & ~0xFFF)) >> 12
+        if not -(1 << 20) <= immediate < (1 << 20):
+            raise ValueError("ADRP target out of range")
+        immediate &= (1 << 21) - 1
+        return (
+            0x90000000 | ((immediate & 0x3) << 29)
+            | (((immediate >> 2) & 0x7FFFF) << 5) | register
+        )
+
+    @staticmethod
+    def _encode_ldr_x(target, base, byte_offset):
+        if byte_offset % 8 or not 0 <= byte_offset // 8 < 4096:
+            raise ValueError("invalid LDR offset")
+        return 0xF9400000 | ((byte_offset // 8) << 10) | (base << 5) | target
+
+    @staticmethod
+    def _encode_str_x(target, base, byte_offset):
+        if byte_offset % 8 or not 0 <= byte_offset // 8 < 4096:
+            raise ValueError("invalid STR offset")
+        return 0xF9000000 | ((byte_offset // 8) << 10) | (base << 5) | target
+
+    @staticmethod
+    def _encode_mov_w(destination, source):
+        return 0x2A0003E0 | (source << 16) | destination
+
+    @staticmethod
+    def _encode_bl(pc, target):
+        delta = target - pc
+        if delta % 4:
+            raise ValueError("unaligned BL target")
+        return 0x94000000 | ((delta >> 2) & 0x03FFFFFF)
+
+    @staticmethod
+    def _code(words):
+        return b"".join(struct.pack("<I", word) for word in words)
+
+    def _synthetic_windows(self, *, key_source=20, key_argument=20, class_cell=0x2970,
+                           deserialize_count=2):
+        start = 0x1000
+        deserialize_target = 0x3000
+        lookup_target = 0x4000
+        cctor = self._code([
+            self._encode_adrp(20, start, class_cell),
+            0xD503201F,
+            self._encode_ldr_x(20, 20, class_cell - (start & ~0xFFF)),
+            self._encode_ldr_x(8, 20, 0),
+            self._encode_ldr_x(8, 8, 0xB8),
+            self._encode_str_x(19, 8, 0),
+            0xD65F03C0,
+        ])
+        receiver_words = [
+            self._encode_adrp(28, start, class_cell),
+            self._encode_ldr_x(28, 28, class_cell - (start & ~0xFFF)),
+        ]
+        for index in range(deserialize_count):
+            pc = start + len(receiver_words) * 4
+            receiver_words.append(self._encode_bl(pc, deserialize_target))
+        if deserialize_count == 2:
+            receiver_words.extend([
+                self._encode_mov_w(key_source, 0),
+                self._encode_ldr_x(0, 28, 0),
+                self._encode_ldr_x(8, 0, 0xB8),
+                self._encode_ldr_x(0, 8, 0),
+                self._encode_mov_w(1, key_argument),
+                self._encode_bl(start + (len(receiver_words) + 5) * 4, lookup_target),
+                0xD65F03C0,
+            ])
+        return start, cctor, self._code(receiver_words), deserialize_target, lookup_target
+
+    def test_decodes_static_store_and_32_bit_register_move(self):
+        self.assertEqual(
+            _decode_aarch64_str_x_unsigned(self._encode_str_x(19, 8, 0)),
+            (19, 8, 0),
+        )
+        self.assertEqual(
+            _decode_aarch64_mov_w_register(self._encode_mov_w(20, 0)),
+            (20, 0),
+        )
+        self.assertIsNone(_decode_aarch64_mov_w_register(0xAA0003F4))
+
+    def test_second_receive_integer_is_forwarded_to_static_slot_lookup_candidate(self):
+        start, cctor, receiver, deserialize_target, lookup_target = self._synthetic_windows()
+        summary, target = _summarize_receiver_integer_lookup(
+            receiver, start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "static_key_lookup_candidate")
+        self.assertEqual(summary["deserialize_int_call_count"], 2)
+        self.assertEqual(summary["source_call_ordinal"], 2)
+        self.assertTrue(summary["second_result_copied_from_w0"])
+        self.assertTrue(summary["key_forwarded_to_w1"])
+        self.assertTrue(summary["networksettings_static_first_slot_store_observed"])
+        self.assertTrue(summary["networksettings_static_first_slot_read_observed"])
+        self.assertEqual(summary["field_candidate_name"], "m_zippetMessageTypes")
+        self.assertEqual(summary["field_attribution_status"], "metadata_order_candidate_only")
+        self.assertEqual(target, lookup_target)
+        self.assertFalse(summary["wire_message_id_verified"])
+        self.assertFalse(summary["compression_behavior_verified"])
+        self.assertFalse(summary["wire_contract_verified"])
+        self.assertFalse(summary["apk_compatible"])
+        rendered = json.dumps(summary)
+        self.assertNotIn("0x", rendered)
+        self.assertNotIn(hex(lookup_target), rendered)
+
+    def test_rejects_second_integer_when_key_register_is_not_forwarded(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows(
+            key_argument=19
+        )
+        summary, target = _summarize_receiver_integer_lookup(
+            receiver, start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_key_argument")
+        self.assertIsNone(target)
+
+    def test_rejects_static_slot_from_a_different_class_cell(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows(
+            class_cell=0x2970
+        )
+        other_cell = 0x3970
+        receiver_words = [
+            self._encode_adrp(28, start, other_cell),
+            self._encode_ldr_x(28, 28, other_cell - (start & ~0xFFF)),
+            self._encode_bl(start + 8, deserialize_target),
+            self._encode_bl(start + 12, deserialize_target),
+            self._encode_mov_w(20, 0),
+            self._encode_ldr_x(0, 28, 0),
+            self._encode_ldr_x(8, 0, 0xB8),
+            self._encode_ldr_x(0, 8, 0),
+            self._encode_mov_w(1, 20),
+            self._encode_bl(start + 36, 0x4000),
+        ]
+        summary, target = _summarize_receiver_integer_lookup(
+            self._code(receiver_words), start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_networksettings_static_slot_read")
+        self.assertIsNone(target)
+
+    def test_requires_two_direct_deserializer_calls(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows(
+            deserialize_count=1
+        )
+        summary, target = _summarize_receiver_integer_lookup(
+            receiver, start, cctor, start, {deserialize_target}, set(), None,
+        )
+        self.assertEqual(summary["status"], "unresolved_deserialize_call_count")
+        self.assertEqual(summary["deserialize_int_call_count"], 1)
+        self.assertIsNone(target)
+
+    def test_networksettings_first_non_default_field_is_only_a_metadata_candidate(self):
+        metadata = make_metadata(
+            [".cctor"],
+            type_name="NetworkSettings",
+            fields=(
+                ("HeaderLength", 1, 0x04000001),
+                ("m_zippetMessageTypes", 2, 0x04000002),
+                ("m_notSessionedMessageTypes", 3, 0x04000003),
+            ),
+            default_fields=(0,),
+        )
+        candidate = _networksettings_first_non_default_field(metadata)
+        self.assertEqual(candidate["name"], "m_zippetMessageTypes")
+        self.assertEqual(candidate["leading_default_backed_field_count"], 1)
+        self.assertEqual(candidate["field_count"], 3)
+
+    def test_hash_bucket_opcode_families_are_not_reported_as_a_shape(self):
+        words = [0x1ACA0C09, 0x1B0A8129, 0xB9401908, 0x6B0A013F, 0x54000561]
+        self.assertTrue(_contains_hash_bucket_opcode_families(self._code(words)))
+        self.assertTrue(_contains_hash_bucket_opcode_families(self._code(list(reversed(words)))))
+        self.assertFalse(_contains_hash_bucket_opcode_families(self._code(words[:1] + words[2:])))
+
+
+    def test_rejects_w0_clobber_before_second_result_copy(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows()
+        words = [struct.unpack_from("<I", receiver, offset)[0] for offset in range(0, len(receiver), 4)]
+        words.insert(4, self._encode_mov_w(0, 21))
+        summary, target = _summarize_receiver_integer_lookup(
+            self._code(words), start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_second_result_copy")
+        self.assertIsNone(target)
+
+    def test_rejects_key_register_alias_with_static_slot_load(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows(
+            key_source=8
+        )
+        summary, target = _summarize_receiver_integer_lookup(
+            receiver, start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_key_register_alias")
+        self.assertIsNone(target)
+
+    def test_requires_direct_lookup_call_after_key_argument_move(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows()
+        words = [struct.unpack_from("<I", receiver, offset)[0] for offset in range(0, len(receiver), 4)]
+        words.insert(9, self._encode_mov_w(1, 22))
+        summary, target = _summarize_receiver_integer_lookup(
+            self._code(words), start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_lookup_call")
+        self.assertIsNone(target)
+
+    def test_rejects_non_nop_gap_in_static_slot_read_chain(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows()
+        words = [struct.unpack_from("<I", receiver, offset)[0] for offset in range(0, len(receiver), 4)]
+        words.insert(6, self._encode_mov_w(8, 19))
+        summary, target = _summarize_receiver_integer_lookup(
+            self._code(words), start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_networksettings_static_slot_read")
+        self.assertIsNone(target)
+
+    def test_network_field_summary_includes_zipped_message_collection_names(self):
+        metadata = make_metadata(
+            [".cctor"],
+            type_name="NetworkSettings",
+            fields=(
+                ("HeaderLength", 1, 0x04000001),
+                ("m_zippetMessageTypes", 2, 0x04000002),
+                ("m_notSessionedMessageTypes", 3, 0x04000003),
+                ("m_notEnumeratedMessageTypes", 4, 0x04000004),
+                ("m_unimportantMessageTypes", 5, 0x04000005),
+            ),
+            default_fields=(0,),
+        )
+        report = inspect_bytes(metadata, make_elf(1))
+        fields = {item["field"]: item for item in report["network_field_summary"]}
+        self.assertEqual(
+            set(fields),
+            {
+                "HeaderLength", "m_zippetMessageTypes",
+                "m_notSessionedMessageTypes", "m_notEnumeratedMessageTypes",
+                "m_unimportantMessageTypes",
+            },
+        )
+        self.assertTrue(fields["HeaderLength"]["has_default_value"])
+        self.assertFalse(fields["m_zippetMessageTypes"]["has_default_value"])
 
 
 if __name__ == "__main__":
