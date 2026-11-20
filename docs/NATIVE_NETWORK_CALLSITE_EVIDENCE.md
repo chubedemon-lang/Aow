@@ -673,8 +673,11 @@ ordinary blocks may fall through, direct branches may have one branch target,
 resolved indirect branches must have one in-window target, and returns or
 unresolved indirect terminal branches cannot have successors. Exit flags must
 be explicit booleans and remain false for non-conditional terminators.
+The CFG truncation marker is also type-checked: complete-window summaries
+must explicitly provide a boolean marker, and malformed values such as integers,
+strings, or null are rejected rather than being treated as an untruncated CFG.
 Legacy summaries without a declared instruction extent retain their previous
-compatibility behavior.
+compatibility behavior when the marker is absent.
 
 Synthetic tests cover valid two-way conditional paths, conflicting external
 flags, missing predicates, incompatible return edges, invalid resolved

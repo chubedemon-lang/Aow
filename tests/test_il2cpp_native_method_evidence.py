@@ -1787,6 +1787,50 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "require boolean branch and fallthrough exit flags"):
             _summarize_control_flow_helper_paths(missing_exit_flag)
 
+    def test_path_summary_requires_boolean_truncation_flag_for_declared_window(self):
+        summary = {
+            "control_flow_instruction_count": 1,
+            "control_flow_block_count": 1,
+            "control_flow_basic_blocks_truncated": False,
+            "control_flow_basic_blocks": [{
+                "block_index": 0,
+                "instruction_start": 0,
+                "instruction_count": 1,
+                "successors": [],
+                "successor_edges": [],
+                "terminator": "return",
+                "external_branch_exit": False,
+                "external_fallthrough_exit": False,
+                "callsite_observations": [],
+            }],
+        }
+
+        for invalid_flag in (1, "false", None):
+            with self.subTest(invalid_flag=invalid_flag):
+                candidate = dict(summary)
+                candidate["control_flow_basic_blocks_truncated"] = invalid_flag
+                with self.assertRaisesRegex(
+                    ValueError, "truncation flag must be a boolean"
+                ):
+                    _summarize_control_flow_helper_paths(candidate)
+
+        missing_flag = dict(summary)
+        del missing_flag["control_flow_basic_blocks_truncated"]
+        with self.assertRaisesRegex(
+            ValueError, "require a boolean truncation flag"
+        ):
+            _summarize_control_flow_helper_paths(missing_flag)
+
+        # Older summaries without a declared instruction window remain
+        # compatible when they omit the newer truncation metadata.
+        legacy = dict(summary)
+        del legacy["control_flow_instruction_count"]
+        del legacy["control_flow_basic_blocks_truncated"]
+        self.assertEqual(
+            _summarize_control_flow_helper_paths(legacy)["control_flow_path_count"],
+            1,
+        )
+
     def test_control_flow_paths_preserve_mutually_exclusive_helper_sequences(self):
         summary = {
             "control_flow_block_count": 4,
