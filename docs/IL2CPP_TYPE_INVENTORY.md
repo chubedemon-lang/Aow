@@ -4,9 +4,13 @@ Run the read-only inventory against an authorized local APK:
 
     python tools/il2cpp_type_inventory.py /private/path/aow.apk --output /private/path/type-inventory.json
 
-The report contains allowlisted type, field and method associations. It also
-records whether a field has a default-value metadata record and preserves the
-field and default-value type indexes as separate values.
+The report contains allowlisted type, field and method associations. Field
+records are emitted in metadata field-table order and carry
+`field_order_kind=metadata_field_table_order_only` plus
+`field_order_is_serialization_order=false`. This ordering is not serializer
+execution order or wire field order. The report also records whether a field
+has a default-value metadata record and preserves the field and default-value
+type indexes as separate values.
 
 ## Default-value type-index comparison
 
@@ -22,6 +26,8 @@ resolve either index to a managed type, prove that two unequal indexes
 represent incompatible types, decode the default-data bytes, or establish
 the runtime value of a field. In particular, a `false` result must remain
 unresolved until the relevant IL2CPP type-registration mapping is recovered.
+Likewise, metadata field-table order must never be promoted to serialization
+order without a separately verified serializer data-flow analysis.
 
 The inventory intentionally emits no raw default-data bytes. Do not publish
 APK files, extracted assets, native addresses, endpoint values, credentials,

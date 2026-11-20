@@ -176,6 +176,14 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
             result = inspect_type_tables(apk)
             by_name = {item["name"]: item for item in result["observed_type_definitions"]}
             self.assertEqual(by_name["LoginRequest"]["field_names"], ["protocolVersion", "token"])
+            self.assertEqual(
+                by_name["LoginRequest"]["field_order_kind"],
+                "metadata_field_table_order_only",
+            )
+            self.assertIs(
+                by_name["LoginRequest"]["field_order_is_serialization_order"],
+                False,
+            )
             fields_by_name = {
                 item["name"]: item for item in by_name["LoginRequest"]["field_records"]
             }
@@ -222,6 +230,11 @@ class Il2CppTypeInventoryTests(unittest.TestCase):
             self.assertTrue(network_fields["MatchingDefault"]["default_value_type_index_matches_field_type_index"])
             self.assertFalse(network_fields["HeartbeatTimeout"]["default_value_record_present"])
             self.assertTrue(all(item["method_owner_matches"] for item in by_name.values()))
+            self.assertTrue(all(
+                item["field_order_kind"] == "metadata_field_table_order_only"
+                and item["field_order_is_serialization_order"] is False
+                for item in by_name.values()
+            ))
 
     def test_maps_dispatcher_listener_delegate_signature(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -318,6 +318,11 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
         summaries.append({
             "namespace": namespace,
             "name": name,
+            # This sequence comes from the IL2CPP metadata field table. It is
+            # deliberately labeled so consumers do not mistake declaration
+            # metadata order for serializer execution order or wire field order.
+            "field_order_kind": "metadata_field_table_order_only",
+            "field_order_is_serialization_order": False,
             "field_count": field_n,
             "field_names": field_names,
             "field_records": field_records,
@@ -344,10 +349,12 @@ def inspect_type_tables(apk_path: str | Path) -> dict:
         "observed_type_definitions": summaries,
         "interpretation": (
             "Static metadata type/field/method associations and raw type indexes only. "
-            "Default-value type comparison reports exact index equality, not semantic type equivalence. "
-            "Native type-index resolution, default-value decoding, method bodies, "
-            "serialization order, numeric wire message IDs, framing, transport "
-            "activation, and APK compatibility are not established."
+            "Field records retain metadata field-table order only; this is not serializer "
+            "execution order or wire field order. Default-value type comparison reports "
+            "exact index equality, not semantic type equivalence. Native type-index "
+            "resolution, default-value decoding, method bodies, serialization order, "
+            "numeric wire message IDs, framing, transport activation, and APK "
+            "compatibility are not established."
         ),
     }
 
