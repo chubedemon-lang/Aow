@@ -696,9 +696,11 @@ def _contains_hash_bucket_opcode_families(code):
 def _summarize_receiver_integer_lookup(
     receiver_code, receiver_start_va, networksettings_cctor_code,
     networksettings_cctor_start_va, deserialize_int_targets,
-    known_method_targets, field_candidate,
+    known_method_targets, field_candidate, *,
+    receiver_window_truncated=False,
+    networksettings_cctor_window_truncated=False,
 ):
-    """Trace only an uninterrupted, explicitly decoded receive-key lookup chain."""
+    """Trace a receive-key lookup only when both bounded entry windows are complete."""
     if type(receiver_code) is not bytes or len(receiver_code) % 4:
         raise ValueError("receiver code must be aligned AArch64 bytes")
     if type(networksettings_cctor_code) is not bytes or len(networksettings_cctor_code) % 4:
@@ -724,6 +726,23 @@ def _summarize_receiver_integer_lookup(
         or any(type(target) is not int or target < 0 or target % 4 for target in known_method_targets)
     ):
         raise ValueError("known method targets must be an aligned integer set")
+    if (
+        type(receiver_window_truncated) is not bool
+        or type(networksettings_cctor_window_truncated) is not bool
+    ):
+        raise ValueError("entry-window truncation flags must be built-in booleans")
+    if receiver_window_truncated or networksettings_cctor_window_truncated:
+        return {
+            "status": "unresolved_truncated_entry_window",
+            "receiver_entry_window_truncated": receiver_window_truncated,
+            "networksettings_cctor_entry_window_truncated": (
+                networksettings_cctor_window_truncated
+            ),
+            "wire_message_id_verified": False,
+            "compression_behavior_verified": False,
+            "wire_contract_verified": False,
+            "apk_compatible": False,
+        }, None
 
     class_cells = _networksettings_static_first_slot_store_cells(
         networksettings_cctor_code, networksettings_cctor_start_va
@@ -3132,6 +3151,8 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             receiver_window[5], receiver_window[2],
             networksettings_cctor_window[5], networksettings_cctor_window[2],
             deserialize_int_targets, set(method_targets), field_candidate,
+            receiver_window_truncated=receiver_window[4],
+            networksettings_cctor_window_truncated=networksettings_cctor_window[4],
         )
         if lookup_target is not None:
             fde_window = _bounded_fde_code_for_target(elf, sections, lookup_target)
