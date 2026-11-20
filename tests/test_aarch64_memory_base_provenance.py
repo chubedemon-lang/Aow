@@ -65,6 +65,9 @@ def mov_x(destination, source):
 def ldr_x(destination, base, immediate=0):
     return (3 << 30) | 0x39400000 | (immediate << 10) | (base << 5) | destination
 
+def ldr_w(destination, base, immediate=0):
+    return (2 << 30) | 0x39400000 | (immediate << 10) | (base << 5) | destination
+
 
 def str_w(source, base, immediate=0):
     return (2 << 30) | 0x39000000 | (immediate << 10) | (base << 5) | source
@@ -652,12 +655,48 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
         )
         self.assertEqual(result["known_static_cell_load_match_count"], 1)
         self.assertEqual(
+            result["known_static_cell_full_width_load_match_count"], 1
+        )
+        self.assertEqual(
             result["known_static_cell_derived_base_access_count"], 1
         )
         later_access = result["memory_accesses"][1]
         self.assertEqual(later_access["base_provenance"], "unknown")
         self.assertTrue(later_access["base_derived_from_known_static_cell"])
         self.assertNotIn(hex(cell), json.dumps(result))
+
+    def test_partial_or_interior_overlapping_load_does_not_seed_value_origin(self):
+        start = 0x9068
+        cell = 0xA480
+        cases = (
+            ("partial_width_at_cell_start", adr(8, start, cell), ldr_w(9, 8)),
+            (
+                "full_width_from_cell_interior",
+                adr(8, start, cell + 4),
+                ldr_x(9, 8),
+            ),
+        )
+        for name, address_instruction, load_instruction in cases:
+            with self.subTest(name=name):
+                result = summarize_control_flow_memory_base_provenance(
+                    code_bytes(
+                        address_instruction,
+                        load_instruction,
+                        ldr_x(10, 9),
+                    ),
+                    start,
+                    known_static_cells=(cell,),
+                )
+                self.assertEqual(result["known_static_cell_load_match_count"], 1)
+                self.assertEqual(
+                    result["known_static_cell_full_width_load_match_count"], 0
+                )
+                self.assertEqual(
+                    result["known_static_cell_derived_base_access_count"], 0
+                )
+                self.assertFalse(
+                    result["memory_accesses"][1]["base_derived_from_known_static_cell"]
+                )
 
     def test_static_cell_value_origin_is_clobbered_by_calls(self):
         start = 0x9070
@@ -739,6 +778,7 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
         self.assertNotIn("known_static_cell_match_count", result)
         self.assertNotIn("known_static_cell_load_match_count", result)
         self.assertNotIn("known_static_cell_store_match_count", result)
+        self.assertNotIn("known_static_cell_full_width_load_match_count", result)
         self.assertNotIn("known_static_cell_derived_base_access_count", result)
         self.assertNotIn(
             "matches_known_static_cell", result["memory_accesses"][0]
