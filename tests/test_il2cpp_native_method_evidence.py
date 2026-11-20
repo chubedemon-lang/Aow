@@ -13,6 +13,7 @@ from tools.il2cpp_native_method_evidence import (
     _contains_hash_bucket_opcode_families,
     _decode_aarch64_b_target, _decode_aarch64_conditional_branch,
     _decode_aarch64_conditional_branch_condition,
+    _decode_aarch64_flag_setting_producer,
     _summarize_aarch64_calls, _summarize_control_flow_serializer_helper_blocks,
     _summarize_relocated_indirect_calls,
     _summarize_ordered_serializer_helper_calls,
@@ -1016,6 +1017,186 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         )
         self.assertIsNone(_decode_aarch64_conditional_branch_condition(True))
         self.assertIsNone(_decode_aarch64_conditional_branch_condition(0xD65F03C0))
+
+
+    def test_flag_setting_decoder_recognizes_cmp_and_cmn_aliases(self):
+        self.assertEqual(
+            _decode_aarch64_flag_setting_producer(0xF1001C7F),
+            {
+                "kind": "cmp_immediate",
+                "width_bits": 64,
+                "source_register_index": 3,
+                "source_register_31_role": "general_register",
+                "destination_is_zero": True,
+                "immediate_class": "nonzero_12bit",
+            },
+        )
+        self.assertEqual(
+            _decode_aarch64_flag_setting_producer(0xB100043F),
+            {
+                "kind": "cmn_immediate",
+                "width_bits": 64,
+                "source_register_index": 1,
+                "source_register_31_role": "general_register",
+                "destination_is_zero": True,
+                "immediate_class": "nonzero_12bit",
+            },
+        )
+        self.assertEqual(
+            _decode_aarch64_flag_setting_producer(0xF10003FF),
+            {
+                "kind": "cmp_immediate",
+                "width_bits": 64,
+                "source_register_index": 31,
+                "source_register_31_role": "stack_pointer",
+                "destination_is_zero": True,
+                "immediate_class": "zero",
+            },
+        )
+        self.assertEqual(
+            _decode_aarch64_flag_setting_producer(0xF1001C60)["kind"],
+            "subs_immediate",
+        )
+        self.assertEqual(
+            _decode_aarch64_flag_setting_producer(0xEB06089F),
+            {
+                "kind": "cmp_shifted_register",
+                "width_bits": 64,
+                "left_register_index": 4,
+                "right_register_index": 6,
+                "destination_is_zero": True,
+                "shift_kind": "lsl",
+                "shift_amount": 2,
+            },
+        )
+        self.assertIsNone(_decode_aarch64_flag_setting_producer(0xD1001C7F))
+        self.assertIsNone(_decode_aarch64_flag_setting_producer(True))
+        self.assertIsNone(
+            _decode_aarch64_flag_setting_producer(0xEB06089F | (3 << 22))
+        )
+
+    def test_b_cond_path_carries_only_adjacent_nzcv_producer(self):
+        start = 0x5600
+        words = (
+            0xF1001C7F,  # cmp x3, #7
+            0xD503201F,  # nop
+            self._encode_b_cond(start + 8, start + 16, condition=1),
+            0xD65F03C0,
+            0xD65F03C0,
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code, start, {}, {}
+        )
+        branch_block = next(
+            block for block in summary["control_flow_basic_blocks"]
+            if block["terminator"] == "b_cond"
+        )
+        expected = {
+            "kind": "cmp_immediate",
+            "width_bits": 64,
+            "source_register_index": 3,
+            "source_register_31_role": "general_register",
+            "destination_is_zero": True,
+            "immediate_class": "nonzero_12bit",
+            "instruction_index": 0,
+            "intervening_nop_count": 1,
+        }
+        self.assertEqual(branch_block["terminator_flag_producer"], expected)
+        paths = _summarize_control_flow_helper_paths(summary)
+        records = [
+            item for path in paths["control_flow_paths"]
+            for item in path["branch_conditions"]
+        ]
+        self.assertEqual(len(records), 2)
+        self.assertTrue(all(item["flag_producer"] == expected for item in records))
+
+    def test_b_cond_does_not_infer_flag_producer_across_non_nop_instruction(self):
+        start = 0x5700
+        words = (
+            0xF1001C7F,  # cmp xzr, x3, #7
+            0xAA0103E0,  # mov x0, x1; does not set NZCV
+            self._encode_b_cond(start + 8, start + 16, condition=1),
+            0xD65F03C0,
+            0xD65F03C0,
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code, start, {}, {}
+        )
+        branch_block = next(
+            block for block in summary["control_flow_basic_blocks"]
+            if block["terminator"] == "b_cond"
+        )
+        self.assertNotIn("terminator_flag_producer", branch_block)
+        paths = _summarize_control_flow_helper_paths(summary)
+        records = [
+            item for path in paths["control_flow_paths"]
+            for item in path["branch_conditions"]
+        ]
+        self.assertTrue(all("flag_producer" not in item for item in records))
+
+    def test_path_summary_rejects_non_adjacent_flag_producer_metadata(self):
+        start = 0x5800
+        words = (
+            0xF1001C7F,
+            self._encode_b_cond(start + 4, start + 12, condition=0),
+            0xD65F03C0,
+            0xD65F03C0,
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code, start, {}, {}
+        )
+        branch_block = next(
+            block for block in summary["control_flow_basic_blocks"]
+            if block["terminator"] == "b_cond"
+        )
+        branch_block["terminator_flag_producer"]["instruction_index"] = 0
+        branch_block["terminator_flag_producer"]["intervening_nop_count"] = 1
+        with self.assertRaisesRegex(ValueError, "not adjacent"):
+            _summarize_control_flow_helper_paths(summary)
+
+
+    def test_path_summary_rejects_malformed_flag_producer_width(self):
+        start = 0x5900
+        words = (
+            0xF1001C7F,
+            self._encode_b_cond(start + 4, start + 12, condition=0),
+            0xD65F03C0,
+            0xD65F03C0,
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code, start, {}, {}
+        )
+        branch_block = next(
+            block for block in summary["control_flow_basic_blocks"]
+            if block["terminator"] == "b_cond"
+        )
+        branch_block["terminator_flag_producer"]["width_bits"] = "64"
+        with self.assertRaisesRegex(ValueError, "metadata is invalid"):
+            _summarize_control_flow_helper_paths(summary)
+
+    def test_path_summary_rejects_flag_producer_without_branch_predicate(self):
+        start = 0x5A00
+        words = (
+            0xF1001C7F,
+            self._encode_b_cond(start + 4, start + 12, condition=0),
+            0xD65F03C0,
+            0xD65F03C0,
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_control_flow_serializer_helper_blocks(
+            code, start, {}, {}
+        )
+        branch_block = next(
+            block for block in summary["control_flow_basic_blocks"]
+            if block["terminator"] == "b_cond"
+        )
+        del branch_block["terminator_condition"]
+        with self.assertRaisesRegex(ValueError, "require a ranged B.cond"):
+            _summarize_control_flow_helper_paths(summary)
 
     def test_control_flow_paths_preserve_decoded_branch_predicates(self):
         start = 0x5200

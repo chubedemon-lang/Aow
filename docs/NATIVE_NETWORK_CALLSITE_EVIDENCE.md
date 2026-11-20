@@ -830,3 +830,25 @@ the real AOW adapter remains disabled. No official endpoint was contacted.
 Synthetic tests exercise the register-flow, class-cell/first-slot linkage,
 metadata-order candidate boundary, and opcode-family presence check. The report
 emits no native addresses or instruction bytes.
+
+
+## Adjacent NZCV producer evidence for B.cond — tooling only
+
+The bounded CFG summary now optionally recognizes an immediately preceding
+ADDS/SUBS (immediate) or ADDS/SUBS (shifted-register) instruction for a
+B.cond terminator. Architectural NOPs may intervene; any other instruction,
+unknown encoding, unsupported shift, block boundary, or missing producer
+leaves the relationship unresolved.
+
+For compare aliases (CMP/CMN), the report records the operand register indexes,
+width and a coarse immediate class or shifted-register form. For non-alias
+ADDS/SUBS it records that the destination is not the zero register. It does
+not compute NZCV values, evaluate the branch condition, model carry/overflow,
+or choose a taken/fallthrough edge. CBZ/CBNZ and TBZ/TBNZ remain register
+predicates and do not receive an NZCV producer.
+
+The producer instruction index is relative to the bounded method window.
+Synthetic tests cover immediate and shifted-register aliases, NOP adjacency,
+non-NOP separation, and malformed producer metadata. This is static
+instruction-provenance tooling only; it adds no APK observation, packet field,
+framing, handshake, login, or compatibility finding.
