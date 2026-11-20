@@ -556,10 +556,11 @@ def inspect_apk(
             "resolve_fieldref_native_types must be a built-in boolean"
         )
     digest, metadata, elf = _read_apk_members(apk_path, expected_sha256)
-    return inspect_bytes(
-        metadata, elf, digest,
-        resolve_fieldref_native_types=resolve_fieldref_native_types,
-    )
+    if resolve_fieldref_native_types:
+        return inspect_bytes(
+            metadata, elf, digest, resolve_fieldref_native_types=True
+        )
+    return inspect_bytes(metadata, elf, digest)
 
 
 def main(argv=None):
