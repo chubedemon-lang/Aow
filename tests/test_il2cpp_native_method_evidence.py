@@ -2514,10 +2514,21 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
                 self._encode_ldr_x(8, 0, 0xB8),
                 self._encode_ldr_x(0, 8, 0),
                 self._encode_mov_w(1, key_argument),
-                self._encode_bl(start + len(receiver_words) * 4 + 20, lookup_target),
+                self._encode_bl(start + len(receiver_words) * 4, lookup_target),
                 0xD65F03C0,
             ])
         return start, cctor, self._code(receiver_words), deserialize_target, lookup_target
+
+    def test_decodes_static_store_and_32_bit_register_move(self):
+        self.assertEqual(
+            _decode_aarch64_str_x_unsigned(self._encode_str_x(19, 8, 0)),
+            (19, 8, 0),
+        )
+        self.assertEqual(
+            _decode_aarch64_mov_w_register(self._encode_mov_w(20, 0)),
+            (20, 0),
+        )
+        self.assertIsNone(_decode_aarch64_mov_w_register(0xAA0003F4))
 
     def test_second_receive_integer_is_forwarded_to_static_slot_lookup_candidate(self):
         start, cctor, receiver, deserialize_target, lookup_target = self._synthetic_windows()
