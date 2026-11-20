@@ -318,8 +318,8 @@ class SqliteSessionStore:
         The connection must be idle. The audit pins a SQLite read snapshot,
         runs quick_check, and streams every row through the same strict
         account/expiry validator used by token resolution. It never deletes
-        expired rows or repairs data. The returned count includes expired
-        sessions because cleanup is a separate explicit operation.
+        expired rows or repairs data. The report separates active and expired
+        rows at one captured clock value; cleanup remains a separate operation.
         """
         if self.db.in_transaction:
             raise ValueError("connection must not have an active transaction")
@@ -339,19 +339,32 @@ class SqliteSessionStore:
             if duplicate_digest is not None:
                 raise SessionError("invalid session store")
 
+            now = self._now()
             session_count = 0
+            active_session_count = 0
+            expired_session_count = 0
             rows = self.db.execute(
                 "SELECT token_hash, account_id, created_at, expires_at "
                 "FROM durable_sessions"
             )
             for token_hash, account_id, created_at, expires_at in rows:
-                if not isinstance(token_hash, bytes) or len(token_hash) != 32:
+                if type(token_hash) is not bytes or len(token_hash) != 32:
                     raise SessionError("invalid session store")
-                self._validated_stored_session_row(
-                    (account_id, created_at, expires_at)
+                _validated_account_id, validated_expiry = (
+                    self._validated_stored_session_row(
+                        (account_id, created_at, expires_at), now
+                    )
                 )
                 session_count += 1
-            return {"session_count": session_count}
+                if now >= validated_expiry:
+                    expired_session_count += 1
+                else:
+                    active_session_count += 1
+            return {
+                "session_count": session_count,
+                "active_session_count": active_session_count,
+                "expired_session_count": expired_session_count,
+            }
         finally:
             if self.db.in_transaction:
                 self.db.rollback()

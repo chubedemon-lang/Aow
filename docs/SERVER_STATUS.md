@@ -54,3 +54,11 @@ No APK output should be expected from this server-only repository. CI reports te
 ## Privacy and security
 
 This GitHub repository is public. Never commit the original APK, proprietary extracted assets, player secrets, private network captures or credentials. Do not probe publisher infrastructure without authorization.
+
+
+## Durable session integrity audit — 2026-11-20
+
+- The synthetic SQLite session store now reports total, active, and expired row counts from one consistent read snapshot.
+- Integrity validation passes the captured clock value into the shared row validator, so future-dated sessions are rejected just as they are during token resolution.
+- The audit remains read-only: it does not purge expired rows, repair state, or emit token digests. Added regression coverage for counts, future timestamps, and preservation of corrupt rows on failure.
+- This is local persistence hardening only. It does not establish AOW authentication, handshake, login messages, or APK compatibility. See [SESSION_STORE_INTEGRITY.md](SESSION_STORE_INTEGRITY.md).
