@@ -2586,7 +2586,7 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
             self._code(receiver_words), start, cctor, start, {deserialize_target}, set(),
             {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
         )
-        self.assertEqual(summary["status"], "unresolved_networksettings_static_slot_read")
+        self.assertEqual(summary["status"], "unresolved_or_ambiguous_lookup_call")
         self.assertIsNone(target)
 
     def test_requires_two_direct_deserializer_calls(self):
