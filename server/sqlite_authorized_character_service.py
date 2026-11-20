@@ -122,7 +122,7 @@ class SqliteAuthorizedCharacterService:
     @staticmethod
     def _validate_name(name: str) -> str:
         if (
-            not isinstance(name, str)
+            type(name) is not str
             or not name
             or name != name.strip()
             or "\x00" in name
@@ -139,7 +139,7 @@ class SqliteAuthorizedCharacterService:
     @staticmethod
     def _validate_map_id(map_id: str) -> str:
         if (
-            not isinstance(map_id, str)
+            type(map_id) is not str
             or not 1 <= len(map_id) <= 64
             or not all(
                 ch.isascii() and (ch.isalnum() or ch in "._-")
