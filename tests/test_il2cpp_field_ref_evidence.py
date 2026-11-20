@@ -195,6 +195,9 @@ class FieldRefEvidenceTests(unittest.TestCase):
         report = correlate_field_info_usage_tokens(metadata, [token, token])
         self.assertEqual(report["resolved_reference_count"], 2)
         self.assertEqual(report["unique_resolved_field_ref_count"], 1)
+        self.assertEqual(
+            report["native_type_resolution"], {"status": "not_requested"}
+        )
         self.assertTrue(report["no_out_of_range_resolved_indexes"])
         self.assertEqual(
             [entry["position"] for entry in report["references"]],
@@ -289,7 +292,11 @@ class FieldRefEvidenceTests(unittest.TestCase):
 
         metadata = make_metadata(((0, 0),))
         token = encode_field_info_usage_index(0, 31)
-        for elf in (bytearray(make_native_type_elf()), HostileBytes(make_native_type_elf())):
+        invalid_elf_inputs = (
+            bytearray(make_native_type_elf()),
+            HostileBytes(make_native_type_elf()),
+        )
+        for elf in invalid_elf_inputs:
             with self.subTest(elf_type=type(elf).__name__):
                 with self.assertRaisesRegex(
                     FieldRefEvidenceError, "exact immutable bytes"
