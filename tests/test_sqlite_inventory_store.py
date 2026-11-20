@@ -416,7 +416,125 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         self.store.apply("hero", "audit-second", 1, [("potion", -2)])
         self.assertEqual(
             self.store.verify_integrity(),
-            {"snapshots": 2, "items": 1, "mutations": 2},
+            {
+                "snapshots": 2,
+                "items": 1,
+                "mutations": 2,
+                "anchored_snapshots": 2,
+                "legacy_unanchored_snapshots": 0,
+            },
+        )
+
+    def test_verify_integrity_rejects_missing_creation_receipt(self):
+        self.store.create("hero")
+        self.db.execute(
+            "DELETE FROM inventory_creations WHERE character_id='hero'"
+        )
+        with self.assertRaisesRegex(
+            InventoryStoreError, "creation receipt is missing"
+        ):
+            self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_rejects_tampered_creation_baseline(self):
+        self.store.create("hero", capacity=3, max_stack=10)
+        self.db.execute(
+            "UPDATE inventory_creations SET baseline_json=? "
+            "WHERE character_id='hero'",
+            ('{"character_id":"hero","capacity":3,"max_stack":10,'
+             '"revision":0,"items":[["gem",1]]}',),
+        )
+        with self.assertRaisesRegex(
+            InventoryStoreError, "invalid inventory creation baseline"
+        ):
+            self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_rejects_unrecorded_initial_items(self):
+        self.store.create("hero", capacity=3, max_stack=10)
+        self.store.apply("hero", "audit-first", 0, [("potion", 2)])
+        self.db.execute(
+            "UPDATE inventory_mutations SET result_json=? "
+            "WHERE request_id='audit-first'",
+            ('{"character_id":"hero","capacity":3,"max_stack":10,'
+             '"revision":1,"items":[["gem",1],["potion",2]]}',),
+        )
+        self.db.execute(
+            "INSERT INTO inventory_items (character_id,item_id,quantity) "
+            "VALUES ('hero','gem',1)"
+        )
+        with self.assertRaisesRegex(
+            InventoryStoreError, "receipt does not match mutation history"
+        ):
+            self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
+    def test_create_and_creation_receipt_are_atomic(self):
+        self.db.execute(
+            """CREATE TRIGGER reject_inventory_creation_receipt
+               BEFORE INSERT ON inventory_creations
+               BEGIN SELECT RAISE(ABORT, 'blocked'); END"""
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.create("hero")
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM inventory_snapshots WHERE character_id='hero'"
+            ).fetchone()[0],
+            0,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_legacy_inventory_rows_remain_unanchored_after_migration(self):
+        legacy = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(legacy.close)
+        legacy.executescript(
+            """CREATE TABLE inventory_snapshots (
+                   character_id TEXT PRIMARY KEY,
+                   capacity INTEGER NOT NULL,
+                   max_stack INTEGER NOT NULL,
+                   revision INTEGER NOT NULL
+               );
+               CREATE TABLE inventory_items (
+                   character_id TEXT NOT NULL,
+                   item_id TEXT NOT NULL,
+                   quantity INTEGER NOT NULL,
+                   PRIMARY KEY(character_id,item_id)
+               );
+               CREATE TABLE inventory_mutations (
+                   request_id TEXT PRIMARY KEY,
+                   character_id TEXT NOT NULL,
+                   expected_revision INTEGER NOT NULL,
+                   payload_json TEXT NOT NULL,
+                   result_json TEXT NOT NULL,
+                   result_revision INTEGER NOT NULL
+               );
+               INSERT INTO inventory_snapshots
+                   VALUES ('legacy',20,99,1);
+               INSERT INTO inventory_items VALUES ('legacy','potion',2);
+               INSERT INTO inventory_mutations VALUES (
+                   'legacy-first','legacy',0,'[["potion",2]]',
+                   '{"character_id":"legacy","capacity":20,"max_stack":99,'
+                   '"revision":1,"items":[["potion",2]]}',1
+               );"""
+        )
+        migrated = SqliteInventoryStore(legacy)
+        self.assertEqual(
+            migrated.verify_integrity(),
+            {
+                "snapshots": 1,
+                "items": 1,
+                "mutations": 1,
+                "anchored_snapshots": 0,
+                "legacy_unanchored_snapshots": 1,
+            },
+        )
+        migrated.create("new")
+        self.assertEqual(
+            migrated.verify_integrity()["anchored_snapshots"], 1
+        )
+        self.assertEqual(
+            migrated.verify_integrity()["legacy_unanchored_snapshots"], 1
         )
 
     def test_verify_integrity_rejects_missing_first_receipt(self):
