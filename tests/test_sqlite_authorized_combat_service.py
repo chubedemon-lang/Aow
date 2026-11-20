@@ -77,6 +77,36 @@ class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
         with self.assertRaises(CombatAlreadyExists):
             self.create_battle()
 
+    def test_create_rejects_battle_subclass_before_attribute_access(self):
+        class HostileBattle(Battle):
+            def __post_init__(self):
+                # Bypass base validation only to construct the hostile test value.
+                pass
+
+            def __getattribute__(self, name):
+                if name == "turn":
+                    raise AssertionError(
+                        "custom battle attribute hook must not run"
+                    )
+                return super().__getattribute__(name)
+
+        hostile = HostileBattle(
+            Fighter(101, 20, 7, 2),
+            Fighter(9001, 10, 3, 4),
+            101,
+        )
+        with self.assertRaisesRegex(
+            CombatStoreError, "battle snapshot required"
+        ):
+            self.service.create(
+                self.owner_token, 101, "hostile-battle", hostile
+            )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM combat_battles").fetchone()[0],
+            0,
+        )
+        self.assertFalse(self.db.in_transaction)
+
     def test_character_must_be_a_battle_participant(self):
         battle = Battle(Fighter(9002, 20, 7, 2), Fighter(9001, 10, 3, 4), 9002)
         with self.assertRaises(SessionError):
