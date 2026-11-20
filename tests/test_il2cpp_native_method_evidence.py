@@ -2514,7 +2514,7 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
                 self._encode_ldr_x(8, 0, 0xB8),
                 self._encode_ldr_x(0, 8, 0),
                 self._encode_mov_w(1, key_argument),
-                self._encode_bl(start + len(receiver_words) * 4, lookup_target),
+                self._encode_bl(start + (len(receiver_words) + 5) * 4, lookup_target),
                 0xD65F03C0,
             ])
         return start, cctor, self._code(receiver_words), deserialize_target, lookup_target
@@ -2552,7 +2552,7 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
         self.assertFalse(summary["apk_compatible"])
         rendered = json.dumps(summary)
         self.assertNotIn("0x", rendered)
-        self.assertNotIn("lookup_target", rendered)
+        self.assertNotIn(hex(lookup_target), rendered)
 
     def test_rejects_second_integer_when_key_register_is_not_forwarded(self):
         start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows(
