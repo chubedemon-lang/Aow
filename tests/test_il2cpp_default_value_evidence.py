@@ -43,12 +43,50 @@ def make_type_tables():
     return bytes(elf), sections, relocations
 
 
+DEFAULT_FIELD_VALUES = {
+    "SocketTimeoutDefault": 101,
+    "NetworkReadTimeout": 102,
+    "SocketAbortingTimeout": 103,
+    "ImmediatelyStopTimeout": 104,
+    "HeartbeatTimeoutDefault": 105,
+    "SocketReceiveBufferSize": 106,
+    "SocketSendBufferSize": 107,
+    "HeaderLength": 4,
+    "ZipIntermediateBufferSize": 4096,
+    "ReceiverEncryptedBufferDefaultCapacity": 110,
+    "ReceiverEncryptedBufferMaxCapacity": 111,
+    "ReceiverDecryptedBufferDefaultCapacity": 112,
+    "ReceiverDecryptedBufferMaxCapacity": 113,
+    "ReceiverUnzippedBufferDefaultCapacity": 114,
+    "ReceiverUnzippedBufferMaxCapacityDefault": 115,
+    "SenderEncryptedBufferDefaultCapacity": 116,
+    "SenderEncryptedBufferMaxCapacity": 117,
+    "SenderDecryptedBufferDefaultCapacity": 118,
+    "SenderDecryptedBufferMaxCapacity": 119,
+    "SenderZippedBufferDefaultCapacity": 120,
+}
+
+
+def _encode_compressed_signed_int32(value):
+    encoded = (value << 1) ^ (value >> 31)
+    if encoded < 0x80:
+        return bytes((encoded,))
+    if encoded < 0x4000:
+        return bytes((0x80 | (encoded >> 8), encoded & 0xFF))
+    return bytes((
+        0xC0 | ((encoded >> 24) & 0x1F),
+        (encoded >> 16) & 0xFF,
+        (encoded >> 8) & 0xFF,
+        encoded & 0xFF,
+    ))
+
+
 def make_metadata():
     strings = bytearray()
     indexes = {}
     for value in (
         "com.geargames.common.network", "NetworkSettings",
-        "HeaderLength", "ZipIntermediateBufferSize",
+        *DEFAULT_FIELD_VALUES,
     ):
         indexes[value] = len(strings)
         strings.extend(value.encode() + b"\0")
@@ -56,12 +94,17 @@ def make_metadata():
     strings_offset = header_size
     methods_offset = strings_offset + len(strings)
     fields_offset = methods_offset
-    field_blob = bytearray(24)
-    struct.pack_into("<IiI", field_blob, 0, indexes["HeaderLength"], 0, 0x04000001)
-    struct.pack_into(
-        "<IiI", field_blob, 12,
-        indexes["ZipIntermediateBufferSize"], 0, 0x04000002,
-    )
+    field_blob = bytearray(len(DEFAULT_FIELD_VALUES) * 0x0C)
+    defaults = bytearray()
+    default_data = bytearray()
+    for index, (name, value) in enumerate(DEFAULT_FIELD_VALUES.items()):
+        struct.pack_into(
+            "<IiI", field_blob, index * 0x0C,
+            indexes[name], 0, 0x04000001 + index,
+        )
+        data_index = len(default_data)
+        default_data.extend(_encode_compressed_signed_int32(value))
+        defaults.extend(struct.pack("<iii", index, 0, data_index))
     types_offset = fields_offset + len(field_blob)
     type_record = bytearray(0x58)
     struct.pack_into(
@@ -69,11 +112,11 @@ def make_metadata():
         indexes["NetworkSettings"], indexes["com.geargames.common.network"],
     )
     struct.pack_into("<ii", type_record, 0x20, 0, 0)
-    struct.pack_into("<HHH", type_record, 0x40, 0, 0, 2)
+    struct.pack_into(
+        "<HHH", type_record, 0x40, 0, 0, len(DEFAULT_FIELD_VALUES)
+    )
     defaults_offset = types_offset + len(type_record)
-    defaults = struct.pack("<iiiiii", 0, 0, 0, 1, 0, 1)
     data_offset = defaults_offset + len(defaults)
-    default_data = b"\x08\xa0\x00"
     header = bytearray(header_size)
     struct.pack_into("<II", header, 0, 0xFAB11BAF, 31)
     struct.pack_into("<II", header, 0x18, strings_offset, len(strings))
@@ -82,7 +125,9 @@ def make_metadata():
     struct.pack_into("<II", header, 0x48, data_offset, len(default_data))
     struct.pack_into("<II", header, 0x60, fields_offset, len(field_blob))
     struct.pack_into("<II", header, 0xA0, types_offset, len(type_record))
-    return bytes(header + strings + field_blob + type_record + defaults + default_data)
+    return bytes(
+        header + strings + field_blob + type_record + defaults + default_data
+    )
 
 
 def make_elf():
@@ -263,10 +308,12 @@ class DefaultValueIntegrationTests(unittest.TestCase):
     def test_decodes_allowlisted_network_settings_defaults_after_native_type_resolution(self):
         report = inspect_bytes(make_metadata(), make_elf(), "a" * 64)
         fields = {item["name"]: item for item in report["fields"]}
-        self.assertEqual(fields["HeaderLength"]["field_type"], "I4")
-        self.assertEqual(fields["HeaderLength"]["default_type"], "I4")
-        self.assertEqual(fields["HeaderLength"]["default_value"], 4)
-        self.assertEqual(fields["ZipIntermediateBufferSize"]["default_value"], 4096)
+        self.assertEqual(set(fields), set(DEFAULT_FIELD_VALUES))
+        for name, expected in DEFAULT_FIELD_VALUES.items():
+            with self.subTest(field=name):
+                self.assertEqual(fields[name]["field_type"], "I4")
+                self.assertEqual(fields[name]["default_type"], "I4")
+                self.assertEqual(fields[name]["default_value"], expected)
         self.assertFalse(report["native_addresses_emitted"])
         self.assertFalse(report["raw_default_bytes_emitted"])
 
@@ -282,7 +329,7 @@ class DefaultValueIntegrationTests(unittest.TestCase):
             self.assertEqual(report["apk_sha256"], expected)
             self.assertEqual(
                 {item["name"]: item["default_value"] for item in report["fields"]},
-                {"HeaderLength": 4, "ZipIntermediateBufferSize": 4096},
+                DEFAULT_FIELD_VALUES,
             )
 
 

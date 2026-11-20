@@ -41,7 +41,28 @@ PRIMITIVE_TYPE_CODES = frozenset(range(0x02, 0x0F)) | {0x18, 0x19}
 KNOWN_TYPE_CODES = frozenset(TYPE_NAMES)
 TARGET_NAMESPACE = "com.geargames.common.network"
 TARGET_TYPE = "NetworkSettings"
-TARGET_FIELDS = ("HeaderLength", "ZipIntermediateBufferSize")
+TARGET_FIELDS = (
+    "SocketTimeoutDefault",
+    "NetworkReadTimeout",
+    "SocketAbortingTimeout",
+    "ImmediatelyStopTimeout",
+    "HeartbeatTimeoutDefault",
+    "SocketReceiveBufferSize",
+    "SocketSendBufferSize",
+    "HeaderLength",
+    "ZipIntermediateBufferSize",
+    "ReceiverEncryptedBufferDefaultCapacity",
+    "ReceiverEncryptedBufferMaxCapacity",
+    "ReceiverDecryptedBufferDefaultCapacity",
+    "ReceiverDecryptedBufferMaxCapacity",
+    "ReceiverUnzippedBufferDefaultCapacity",
+    "ReceiverUnzippedBufferMaxCapacityDefault",
+    "SenderEncryptedBufferDefaultCapacity",
+    "SenderEncryptedBufferMaxCapacity",
+    "SenderDecryptedBufferDefaultCapacity",
+    "SenderDecryptedBufferMaxCapacity",
+    "SenderZippedBufferDefaultCapacity",
+)
 
 
 class DefaultValueEvidenceError(ValueError):

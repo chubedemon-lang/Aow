@@ -11,7 +11,7 @@ The analyzer:
 3. Requires one unique candidate table, a matching registration count, a complete contiguous pointer run, and valid IL2CPP type records for every entry.
 4. Resolves the field type index and the default-value type index independently.
 5. Accepts only an exact built-in list or tuple of 1–4,096 unique requested type indexes; arbitrary iterators, subclasses, duplicates and oversized requests are rejected before native-table scanning.
-6. Decodes only the two allowlisted NetworkSettings I4 defaults using the observed compressed signed-integer representation (compressed unsigned integer followed by zigzag decoding).
+6. Decodes 20 allowlisted NetworkSettings I4 defaults: socket timeouts, socket buffer sizes, the header length, zip intermediate buffer size, and receiver/sender encrypted, decrypted, zipped, and unzipped buffer capacities. Values are emitted only in a private report; the public repository records the field allowlist and the two previously documented protocol settings, not the additional APK-derived capacity values.
 
 The native type-pointer table contains 124,985 entries. The report emits the table count and symbolic type names only; it does not emit native addresses or raw bytes.
 
@@ -22,7 +22,7 @@ The native type-pointer table contains 124,985 entries. The report emits the tab
 | NetworkSettings.HeaderLength | I4 | I4 | 4 |
 | NetworkSettings.ZipIntermediateBufferSize | I4 | I4 | 4096 |
 
-Both type indexes resolve independently to the native IL2CPP I4 enum. The decoded values use one-byte and two-byte compressed representations respectively. Synthetic regression tests cover one-, two- and four-byte values, zigzag negatives, truncated/non-canonical encodings, native-table ambiguity and a complete synthetic APK container.
+All requested field and default type indexes resolve independently to the native IL2CPP I4 enum. The public regression fixture now covers all 20 allowlisted field names with synthetic values, including one-, two- and four-byte compressed encodings. Other tests cover zigzag negatives, truncated/non-canonical encodings, native-table ambiguity and a complete synthetic APK container.
 
 ## Interpretation boundary
 
