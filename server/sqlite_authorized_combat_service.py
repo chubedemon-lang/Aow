@@ -405,6 +405,33 @@ class SqliteAuthorizedCombatService:
             if self.db.in_transaction:
                 self.db.rollback()
 
+    @staticmethod
+    def _verify_receipt_transition(previous_snapshot, snapshot, event):
+        """Require a receipt to be the exact next synthetic combat transition."""
+        if (
+            previous_snapshot.battle_id != snapshot.battle_id
+            or previous_snapshot.owner_character_id != snapshot.owner_character_id
+            or snapshot.revision != previous_snapshot.revision + 1
+        ):
+            raise CombatStoreError(
+                "combat receipt does not continue previous revision"
+            )
+        try:
+            expected_battle, expected_event = previous_snapshot.battle.attack(
+                event.actor_id
+            )
+        except (TypeError, ValueError) as exc:
+            raise CombatStoreError(
+                "combat receipt does not continue previous revision"
+            ) from exc
+        if (
+            snapshot.battle != expected_battle
+            or event != CombatEvent(**expected_event)
+        ):
+            raise CombatStoreError(
+                "combat receipt does not continue previous revision"
+            )
+
     def _verify_integrity_snapshot(self) -> dict:
         """Run the audit inside verify_integrity's pinned read snapshot."""
         if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
@@ -429,6 +456,7 @@ class SqliteAuthorizedCombatService:
         next_revision = {battle_id: 0 for battle_id in battles}
         latest_receipt = {}
         mutation_count = 0
+        verified_transition_count = 0
         mutation_rows = self.db.execute(
             """SELECT request_id, battle_id, expected_revision, actor_id,
                       payload_json, result_json
@@ -470,6 +498,12 @@ class SqliteAuthorizedCombatService:
                 raise CombatStoreError(
                     "combat mutation revision history has a gap or duplicate"
                 )
+            previous_receipt = latest_receipt.get(battle_id)
+            if previous_receipt is not None:
+                self._verify_receipt_transition(
+                    previous_receipt, receipt_snapshot, event
+                )
+                verified_transition_count += 1
             next_revision[battle_id] = expected_next + 1
             latest_receipt[battle_id] = receipt_snapshot
             mutation_count += 1
@@ -487,6 +521,7 @@ class SqliteAuthorizedCombatService:
         return {
             "battles": len(battles),
             "mutations": mutation_count,
+            "verified_transitions": verified_transition_count,
             "unanchored_battles": len(battles),
         }
 
