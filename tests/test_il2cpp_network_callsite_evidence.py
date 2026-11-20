@@ -203,6 +203,54 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         self.assertFalse(return_tests["native_addresses_emitted"])
         self.assertFalse(return_tests["raw_instructions_emitted"])
 
+
+    def test_network_method_memory_access_is_cross_referenced_to_fieldinfo_cell(self):
+        metadata = bytearray(make_metadata(
+            ["Cycle"],
+            fields=[("probeField", 0, 0x04000001)],
+        ))
+        metadata.extend(bytes((-len(metadata)) % 8))
+        field_ref_offset = len(metadata)
+        metadata.extend(struct.pack("<ii", 0, 0))
+        struct.pack_into("<II", metadata, 0xB8, field_ref_offset, 8)
+
+        encoded = encode_field_info_usage_index(0, 31)
+        pc = 0x5000
+        target_page = 0x3000
+        page_delta = (target_page - (pc & ~0xFFF)) >> 12
+        immediate = page_delta & ((1 << 21) - 1)
+        adrp_x8 = (
+            0x90000000
+            | ((immediate & 0x3) << 29)
+            | (((immediate >> 2) & 0x7FFFF) << 5)
+            | 8
+        )
+        add_x8_x8_0x70 = 0x91000000 | (0x70 << 10) | (8 << 5) | 8
+        ldr_w9_x8 = 0xB9400000 | (8 << 5) | 9
+        elf = make_elf(
+            1,
+            text_words=(adrp_x8, add_x8_x8_0x70, ldr_w9_x8),
+            include_native_type_table=True,
+            field_info_token=encoded,
+        )
+        report = inspect_bytes(
+            bytes(metadata), elf, resolve_fieldref_native_types=True
+        )
+        receiver = next(
+            item for item in report["callsite_summary"]
+            if item["method"] == "Cycle"
+        )
+        provenance = receiver["cfg_memory_base_provenance_observations"]
+        self.assertEqual(provenance["known_static_cell_match_count"], 1)
+        self.assertTrue(provenance["memory_accesses"][0]["matches_known_static_cell"])
+        self.assertEqual(
+            report["field_info_usage_correlation"]["references"][0]["native_type"]["type_name"],
+            "I4",
+        )
+        rendered = json.dumps(report)
+        self.assertNotIn("0x3070", rendered)
+        self.assertFalse(report["native_addresses_emitted"])
+
     def test_inspect_bytes_correlates_static_field_info_tokens_to_field_refs(self):
         metadata = bytearray(make_metadata(
             ["Cycle"],

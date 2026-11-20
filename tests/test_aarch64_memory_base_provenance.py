@@ -562,5 +562,61 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
         )
 
 
+    def test_marks_partial_access_to_known_static_cell_without_emitting_address(self):
+        start = 0x9000
+        cell = 0xA100
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(adr(8, start, cell + 4), str_w(0, 8)),
+            start,
+            known_static_cells=(cell,),
+        )
+        self.assertEqual(result["known_static_cell_match_count"], 1)
+        self.assertTrue(result["memory_accesses"][0]["matches_known_static_cell"])
+        self.assertNotIn(hex(cell), json.dumps(result))
+        self.assertFalse(result["absolute_addresses_emitted"])
+
+    def test_unrelated_and_unknown_accesses_do_not_match_known_static_cells(self):
+        start = 0x9100
+        cell = 0xA200
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(
+                adr(8, start, cell + 8),
+                str_w(0, 8),
+                str_w(0, 9),
+            ),
+            start,
+            known_static_cells=(cell,),
+        )
+        self.assertEqual(result["known_static_cell_match_count"], 0)
+        self.assertEqual(
+            [item["matches_known_static_cell"] for item in result["memory_accesses"]],
+            [False, False],
+        )
+
+    def test_rejects_invalid_known_static_cell_lists(self):
+        invalid = (
+            {},
+            (True,),
+            (-1,),
+            (0xFFFFFFFFFFFFFFF9,),
+            (0x1000, 0x1000),
+        )
+        for cells in invalid:
+            with self.subTest(cells=cells):
+                with self.assertRaises(ValueError):
+                    summarize_control_flow_memory_base_provenance(
+                        b"", 0x1000, known_static_cells=cells
+                    )
+
+    def test_default_report_shape_is_unchanged_without_known_static_cells(self):
+        result = summarize_control_flow_memory_base_provenance(
+            code_bytes(str_w(0, 31)), 0x9200
+        )
+        self.assertNotIn("known_static_cell_match_count", result)
+        self.assertNotIn(
+            "matches_known_static_cell", result["memory_accesses"][0]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
