@@ -558,8 +558,9 @@ class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
             {
                 "battles": 1,
                 "mutations": 2,
-                "verified_transitions": 1,
-                "unanchored_battles": 1,
+                "verified_transitions": 2,
+                "anchored_battles": 1,
+                "unanchored_battles": 0,
             },
         )
         self.assertEqual(
@@ -567,6 +568,77 @@ class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
             second.snapshot,
         )
         self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_replays_first_receipt_from_creation_baseline(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "baseline-first", 0, 101
+        )
+        raw = self.db.execute(
+            "SELECT initial_snapshot_json FROM combat_battles WHERE battle_id=?",
+            ("battle-1",),
+        ).fetchone()[0]
+        baseline = json.loads(raw)
+        baseline["battle"]["second"][3] += 1
+        tampered = json.dumps(baseline, sort_keys=True, separators=(",", ":"))
+        self.db.execute(
+            "UPDATE combat_battles SET initial_snapshot_json=? WHERE battle_id=?",
+            (tampered, "battle-1"),
+        )
+
+        with self.assertRaisesRegex(
+            CombatStoreError, "does not continue previous revision"
+        ):
+            self.service.verify_integrity()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT initial_snapshot_json FROM combat_battles WHERE battle_id=?",
+                ("battle-1",),
+            ).fetchone()[0],
+            tampered,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_rejects_current_revision_zero_snapshot_drift(self):
+        self.create_battle()
+        self.db.execute(
+            "UPDATE combat_battles SET first_hp=? WHERE battle_id=?",
+            (19, "battle-1"),
+        )
+        with self.assertRaisesRegex(
+            CombatStoreError, "does not match creation baseline"
+        ):
+            self.service.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
+    def test_legacy_combat_rows_migrate_without_inventing_a_baseline(self):
+        self.create_battle()
+        self.db.execute("ALTER TABLE combat_battles DROP COLUMN initial_snapshot_json")
+        self.db.commit()
+
+        self.service = SqliteAuthorizedCombatService(
+            self.db, ttl_seconds=30, clock=lambda: self.now[0]
+        )
+        columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(combat_battles)")
+        }
+        self.assertIn("initial_snapshot_json", columns)
+        self.assertIsNone(
+            self.db.execute(
+                "SELECT initial_snapshot_json FROM combat_battles WHERE battle_id=?",
+                ("battle-1",),
+            ).fetchone()[0]
+        )
+        self.assertEqual(
+            self.service.verify_integrity(),
+            {
+                "battles": 1,
+                "mutations": 0,
+                "verified_transitions": 0,
+                "anchored_battles": 0,
+                "unanchored_battles": 1,
+            },
+        )
 
     def test_verify_integrity_rejects_disconnected_but_valid_receipt_transition(self):
         self.create_battle()
@@ -689,7 +761,8 @@ class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
                 "battles": 1,
                 "mutations": 0,
                 "verified_transitions": 0,
-                "unanchored_battles": 1,
+                "anchored_battles": 1,
+                "unanchored_battles": 0,
             },
         )
 
