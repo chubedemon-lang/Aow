@@ -147,7 +147,14 @@ verify receipt continuity and the latest persisted state, but cannot
 independently prove the original creation snapshot or replay the first turn
 from a durable baseline. This limitation is explicit rather than inferred.
 
-Regression tests cover a valid multi-turn chain, a missing revision receipt,
-a current-snapshot/receipt mismatch, non-canonical mutation payload JSON, and
+Adjacent receipts are now also checked as exact deterministic transitions
+using the repository's synthetic `Battle.attack` rule. The audit reports
+`verified_transitions`; this counts only transitions between two persisted
+receipts. The first receipt for each battle remains unverified against the
+missing creation baseline and is not promoted to a verified transition.
+
+Regression tests cover a valid multi-turn chain, a disconnected but
+individually valid intermediate receipt, a missing revision receipt, a
+current-snapshot/receipt mismatch, non-canonical mutation payload JSON, and
 the idle-connection requirement. This is synthetic persistence integrity only;
 it does not define AOW combat state, wire messages, or gameplay compatibility.
