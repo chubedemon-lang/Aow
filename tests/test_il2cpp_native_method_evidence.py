@@ -2782,6 +2782,50 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
         self.assertNotIn("0x", rendered)
         self.assertNotIn(hex(lookup_target), rendered)
 
+    def test_truncated_receiver_or_cctor_window_never_produces_lookup_candidate(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows()
+        cases = (
+            ({"receiver_window_truncated": True}, True, False),
+            ({"networksettings_cctor_window_truncated": True}, False, True),
+            ({
+                "receiver_window_truncated": True,
+                "networksettings_cctor_window_truncated": True,
+            }, True, True),
+        )
+        for kwargs, receiver_truncated, cctor_truncated in cases:
+            with self.subTest(kwargs=kwargs):
+                summary, target = _summarize_receiver_integer_lookup(
+                    receiver, start, cctor, start, {deserialize_target}, set(), None,
+                    **kwargs,
+                )
+                self.assertEqual(summary["status"], "unresolved_truncated_entry_window")
+                self.assertIs(
+                    summary["receiver_entry_window_truncated"], receiver_truncated
+                )
+                self.assertIs(
+                    summary["networksettings_cctor_entry_window_truncated"],
+                    cctor_truncated,
+                )
+                self.assertIsNone(target)
+                self.assertFalse(summary["wire_message_id_verified"])
+                self.assertFalse(summary["compression_behavior_verified"])
+                self.assertFalse(summary["wire_contract_verified"])
+                self.assertFalse(summary["apk_compatible"])
+
+    def test_entry_window_truncation_flags_require_builtin_booleans(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows()
+        for kwargs in (
+            {"receiver_window_truncated": 1},
+            {"networksettings_cctor_window_truncated": None},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(
+                ValueError, "entry-window truncation flags"
+            ):
+                _summarize_receiver_integer_lookup(
+                    receiver, start, cctor, start, {deserialize_target}, set(), None,
+                    **kwargs,
+                )
+
     def test_rejects_second_integer_when_key_register_is_not_forwarded(self):
         start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows(
             key_argument=19
