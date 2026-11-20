@@ -2826,6 +2826,103 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
                     **kwargs,
                 )
 
+    def test_inspect_bytes_passes_truncation_flags_to_receiver_lookup_gate(self):
+        from unittest.mock import patch
+
+        metadata = make_metadata(["Cycle"], type_name="Receiver")
+        network_methods = [
+            {
+                "namespace": "com.geargames.common.network",
+                "type": "Receiver",
+                "method": "Cycle",
+                "parameter_count": 0,
+                "image": "ScriptsAssembly.dll",
+                "category": "network",
+                "slot_index": 0,
+            },
+            {
+                "namespace": "com.geargames.common.network",
+                "type": "NetworkSettings",
+                "method": ".cctor",
+                "parameter_count": 0,
+                "image": "ScriptsAssembly.dll",
+                "category": "network",
+                "slot_index": 1,
+            },
+        ]
+        helper_methods = [
+            {
+                "namespace": "com.geargames.serialization",
+                "type": "SimpleDeserializer",
+                "method": "deserializeInt",
+                "parameter_count": 1,
+                "image": "ScriptsAssembly.dll",
+                "category": "serializer_helper",
+                "slot_index": 2,
+            },
+        ]
+
+        def fake_network_methods(_metadata, _info, allowlist_map=None):
+            return network_methods if allowlist_map is None else helper_methods
+
+        sections = {
+            ".text": {
+                "type": 1,
+                "flags": 0x4,
+                "address": 0x5000,
+                "offset": 0,
+                "size": 64,
+            },
+        }
+        relocations = {
+            0x1000: (R_AARCH64_RELATIVE, 0x5000),
+            0x1008: (R_AARCH64_RELATIVE, 0x5004),
+            0x1010: (R_AARCH64_RELATIVE, 0x5008),
+        }
+        tables = {"ScriptsAssembly.dll": 0x1000}
+
+        for receiver_truncated, cctor_truncated in ((True, False), (False, True)):
+            windows = {
+                (".text", 0x5000): (4, receiver_truncated),
+                (".text", 0x5004): (4, cctor_truncated),
+                (".text", 0x5008): (4, False),
+            }
+            with self.subTest(
+                receiver_truncated=receiver_truncated,
+                cctor_truncated=cctor_truncated,
+            ), patch(
+                "tools.il2cpp_native_method_evidence._network_methods",
+                side_effect=fake_network_methods,
+            ), patch(
+                "tools.il2cpp_native_method_evidence._module_tables",
+                return_value=(sections, relocations, tables),
+            ), patch(
+                "tools.il2cpp_native_method_evidence._entrypoint_windows",
+                return_value=windows,
+            ), patch(
+                "tools.il2cpp_native_method_evidence._direct_branch_targets",
+                return_value=set(),
+            ), patch(
+                "tools.il2cpp_native_method_evidence._relocated_indirect_call_targets",
+                return_value=set(),
+            ), patch(
+                "tools.il2cpp_native_method_evidence._all_method_targets",
+                return_value={},
+            ):
+                report = inspect_bytes(metadata, bytes(64))
+
+            summary = report["receiver_integer_lookup_summary"]
+            self.assertEqual(summary["status"], "unresolved_truncated_entry_window")
+            self.assertIs(
+                summary["receiver_entry_window_truncated"], receiver_truncated
+            )
+            self.assertIs(
+                summary["networksettings_cctor_entry_window_truncated"],
+                cctor_truncated,
+            )
+            self.assertFalse(summary["wire_contract_verified"])
+            self.assertFalse(summary["apk_compatible"])
+
     def test_rejects_second_integer_when_key_register_is_not_forwarded(self):
         start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows(
             key_argument=19
