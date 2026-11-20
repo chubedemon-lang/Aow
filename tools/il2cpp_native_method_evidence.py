@@ -617,7 +617,7 @@ def _networksettings_first_non_default_field(metadata):
     def read_string(index):
         if type(index) is not int or not 0 <= index < len(heap):
             raise ValueError("invalid NetworkSettings metadata string index")
-        end = heap.find(b"\\0", index)
+        end = heap.find(b"\0", index)
         if end < 0:
             raise ValueError("unterminated NetworkSettings metadata string")
         try:
