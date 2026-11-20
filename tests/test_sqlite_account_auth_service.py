@@ -3,6 +3,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from server.sessions import SessionError
@@ -303,6 +304,82 @@ class SqliteAccountAuthServiceTests(unittest.TestCase):
         self.assertEqual(
             self.db.execute("SELECT count(*) FROM account_credentials").fetchone()[0],
             0,
+        )
+
+
+    def test_enrollment_rejects_caller_transaction_before_kdf_and_preserves_it(self):
+        self.db.execute("BEGIN IMMEDIATE")
+        self.db.execute(
+            "UPDATE accounts SET username=? WHERE id=1",
+            ("alice-pending",),
+        )
+        try:
+            with patch(
+                "server.sqlite_account_auth_service.hashlib.pbkdf2_hmac",
+                side_effect=AssertionError("password KDF must not run"),
+            ):
+                with self.assertRaisesRegex(ValueError, "active transaction"):
+                    self.service.enroll_password(1, PASSWORD)
+            self.assertTrue(self.db.in_transaction)
+            self.assertEqual(
+                self.db.execute(
+                    "SELECT username FROM accounts WHERE id=1"
+                ).fetchone()[0],
+                "alice-pending",
+            )
+            self.assertEqual(
+                self.db.execute(
+                    "SELECT count(*) FROM account_credentials"
+                ).fetchone()[0],
+                0,
+            )
+        finally:
+            self.db.rollback()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT username FROM accounts WHERE id=1"
+            ).fetchone()[0],
+            "alice",
+        )
+
+    def test_authentication_rejects_caller_transaction_before_lookup_or_kdf(self):
+        self.service.enroll_password(1, PASSWORD)
+        self.db.execute("BEGIN IMMEDIATE")
+        self.db.execute(
+            "UPDATE accounts SET username=? WHERE id=1",
+            ("alice-pending",),
+        )
+        try:
+            with patch.object(
+                self.service,
+                "_lookup_credential",
+                side_effect=AssertionError("credential lookup must not run"),
+            ), patch(
+                "server.sqlite_account_auth_service.hashlib.pbkdf2_hmac",
+                side_effect=AssertionError("password KDF must not run"),
+            ):
+                with self.assertRaisesRegex(ValueError, "active transaction"):
+                    self.service.authenticate_and_issue_session("alice", PASSWORD)
+            self.assertTrue(self.db.in_transaction)
+            self.assertEqual(
+                self.db.execute(
+                    "SELECT username FROM accounts WHERE id=1"
+                ).fetchone()[0],
+                "alice-pending",
+            )
+            self.assertEqual(
+                self.db.execute(
+                    "SELECT count(*) FROM durable_sessions"
+                ).fetchone()[0],
+                0,
+            )
+        finally:
+            self.db.rollback()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT username FROM accounts WHERE id=1"
+            ).fetchone()[0],
+            "alice",
         )
 
 
