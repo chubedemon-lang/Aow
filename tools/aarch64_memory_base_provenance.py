@@ -465,13 +465,7 @@ def summarize_control_flow_memory_base_provenance(
                 # operation. Preserve only a previously known symbolic origin.
                 writeback = access["base_update_bytes"]
                 if writeback and base != 31:
-                    if access["operation"] == "load" and target == base:
-                        # AArch64 load writeback with Rt == Rn is
-                        # constrained-unpredictable. Do not assume whether
-                        # the loaded value or the writeback result wins.
-                        registers.pop(base, None)
-                        static_cell_value_origins.pop(base, None)
-                    elif base_state is None:
+                    if base_state is None:
                         registers.pop(base, None)
                     else:
                         kind, value, _definition, depth = base_state
