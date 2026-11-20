@@ -1667,6 +1667,123 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "require a matching branch predicate"):
             _summarize_control_flow_helper_paths(summary)
 
+    def test_path_summary_validates_declared_cfg_edge_exit_contract(self):
+        condition = {
+            "kind": "b_cond",
+            "condition_code": 0,
+            "condition_name": "eq",
+        }
+
+        def block(index, start, *, successors=(), edges=(), terminator=None,
+                  predicate=None, branch_exit=False, fallthrough_exit=False):
+            result = {
+                "block_index": index,
+                "instruction_start": start,
+                "instruction_count": 1,
+                "successors": list(successors),
+                "successor_edges": [
+                    {"target_block": target, "kind": kind}
+                    for target, kind in edges
+                ],
+                "terminator": terminator,
+                "external_branch_exit": branch_exit,
+                "external_fallthrough_exit": fallthrough_exit,
+                "callsite_observations": [],
+            }
+            if predicate is not None:
+                result["terminator_condition"] = dict(predicate)
+            return result
+
+        def strict_summary(blocks):
+            return {
+                "control_flow_instruction_count": len(blocks),
+                "control_flow_block_count": len(blocks),
+                "control_flow_basic_blocks_truncated": False,
+                "control_flow_basic_blocks": blocks,
+            }
+
+        valid = strict_summary([
+            block(
+                0, 0, successors=(1, 2),
+                edges=((1, "conditional_taken"), (2, "conditional_fallthrough")),
+                terminator="b_cond", predicate=condition,
+            ),
+            block(1, 1, terminator="return"),
+            block(2, 2, terminator="return"),
+        ])
+        self.assertEqual(
+            _summarize_control_flow_helper_paths(valid)["control_flow_path_count"],
+            2,
+        )
+
+        invalid_summaries = (
+            (
+                strict_summary([
+                    block(
+                        0, 0, successors=(1, 2),
+                        edges=((1, "conditional_taken"), (2, "conditional_fallthrough")),
+                        terminator="b_cond", predicate=condition, branch_exit=True,
+                    ),
+                    block(1, 1, terminator="return"),
+                    block(2, 2, terminator="return"),
+                ]),
+                "external branch exit flag conflicts",
+            ),
+            (
+                strict_summary([
+                    block(
+                        0, 0, successors=(1, 2),
+                        edges=((1, "conditional_taken"), (2, "conditional_fallthrough")),
+                        terminator="b_cond", predicate=condition, fallthrough_exit=True,
+                    ),
+                    block(1, 1, terminator="return"),
+                    block(2, 2, terminator="return"),
+                ]),
+                "external fallthrough exit flag conflicts",
+            ),
+            (
+                strict_summary([
+                    block(
+                        0, 0, terminator="b_cond",
+                        branch_exit=True, fallthrough_exit=True,
+                    ),
+                ]),
+                "requires a decoded branch predicate",
+            ),
+            (
+                strict_summary([
+                    block(
+                        0, 0, successors=(1,),
+                        edges=((1, "branch_target"),), terminator="return",
+                    ),
+                    block(1, 1, terminator="return"),
+                ]),
+                "incompatible with terminator",
+            ),
+            (
+                strict_summary([
+                    block(
+                        0, 0, successors=(1,),
+                        edges=((1, "fallthrough"),), terminator="indirect_branch",
+                    ),
+                    block(1, 1, terminator="return"),
+                ]),
+                "resolved indirect branch requires exactly one internal target",
+            ),
+        )
+        for summary, message in invalid_summaries:
+            with self.subTest(message=message), self.assertRaisesRegex(
+                ValueError, message
+            ):
+                _summarize_control_flow_helper_paths(summary)
+
+        missing_exit_flag = strict_summary([
+            block(0, 0, terminator="return"),
+        ])
+        del missing_exit_flag["control_flow_basic_blocks"][0]["external_branch_exit"]
+        with self.assertRaisesRegex(ValueError, "require boolean branch and fallthrough exit flags"):
+            _summarize_control_flow_helper_paths(missing_exit_flag)
+
     def test_control_flow_paths_preserve_mutually_exclusive_helper_sequences(self):
         summary = {
             "control_flow_block_count": 4,
