@@ -1036,11 +1036,26 @@ class NativeMethodEvidenceTests(unittest.TestCase):
             {
                 "kind": "cmn_immediate",
                 "width_bits": 64,
-                "source_register_index": 2,
+                "source_register_index": 1,
                 "source_register_31_role": "general_register",
                 "destination_is_zero": True,
                 "immediate_class": "nonzero_12bit",
             },
+        )
+        self.assertEqual(
+            _decode_aarch64_flag_setting_producer(0xF10003FF),
+            {
+                "kind": "cmp_immediate",
+                "width_bits": 64,
+                "source_register_index": 31,
+                "source_register_31_role": "stack_pointer",
+                "destination_is_zero": True,
+                "immediate_class": "zero",
+            },
+        )
+        self.assertEqual(
+            _decode_aarch64_flag_setting_producer(0xF1001C60)["kind"],
+            "subs_immediate",
         )
         self.assertEqual(
             _decode_aarch64_flag_setting_producer(0xEB06089F),
@@ -1063,7 +1078,7 @@ class NativeMethodEvidenceTests(unittest.TestCase):
     def test_b_cond_path_carries_only_adjacent_nzcv_producer(self):
         start = 0x5600
         words = (
-            0xF1001C7F,  # cmp xzr, x3, #7
+            0xF1001C7F,  # cmp x3, #7
             0xD503201F,  # nop
             self._encode_b_cond(start + 8, start + 16, condition=1),
             0xD65F03C0,
