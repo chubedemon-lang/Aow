@@ -485,6 +485,31 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         )
         self.assertFalse(self.db.in_transaction)
 
+    def test_create_failure_inside_caller_transaction_preserves_prior_work(self):
+        self.db.execute("CREATE TABLE caller_work (value TEXT)")
+        self.db.execute(
+            """CREATE TRIGGER reject_nested_inventory_creation_receipt
+               BEFORE INSERT ON inventory_creations
+               BEGIN SELECT RAISE(ABORT, 'blocked'); END"""
+        )
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_work VALUES ('before')")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.create("nested-hero")
+        self.assertTrue(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM inventory_snapshots "
+                "WHERE character_id='nested-hero'"
+            ).fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            self.db.execute("SELECT value FROM caller_work").fetchall(),
+            [("before",)],
+        )
+        self.db.rollback()
+
     def test_legacy_inventory_rows_remain_unanchored_after_migration(self):
         legacy = sqlite3.connect(":memory:", isolation_level=None)
         self.addCleanup(legacy.close)
@@ -514,8 +539,7 @@ class SqliteInventoryStoreTests(unittest.TestCase):
                INSERT INTO inventory_items VALUES ('legacy','potion',2);
                INSERT INTO inventory_mutations VALUES (
                    'legacy-first','legacy',0,'[["potion",2]]',
-                   '{"character_id":"legacy","capacity":20,"max_stack":99,'
-                   '"revision":1,"items":[["potion",2]]}',1
+                   '{"character_id":"legacy","capacity":20,"max_stack":99,"revision":1,"items":[["potion",2]]}',1
                );"""
         )
         migrated = SqliteInventoryStore(legacy)
