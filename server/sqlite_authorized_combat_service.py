@@ -387,6 +387,109 @@ class SqliteAuthorizedCombatService:
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise CombatStoreError("invalid combat receipt") from exc
 
+    def verify_integrity(self) -> dict:
+        """Audit battle snapshots and their durable turn receipts read-only.
+
+        Every committed turn must have exactly one receipt for its expected
+        revision, revisions must form a contiguous chain from zero, and the
+        latest receipt must equal the current battle snapshot. The initial
+        battle state is not separately receipted by this schema, so the audit
+        cannot independently prove the creation baseline.
+        """
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+        self.db.execute("BEGIN")
+        try:
+            return self._verify_integrity_snapshot()
+        finally:
+            if self.db.in_transaction:
+                self.db.rollback()
+
+    def _verify_integrity_snapshot(self) -> dict:
+        """Run the audit inside verify_integrity's pinned read snapshot."""
+        if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+            raise CombatStoreError("SQLite quick_check failed")
+        if self.db.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise CombatStoreError("combat foreign key check failed")
+
+        battles = {}
+        battle_rows = self.db.execute(
+            """SELECT battle_id, owner_character_id,
+                      first_id, first_hp, first_attack, first_defense,
+                      second_id, second_hp, second_attack, second_defense,
+                      next_actor, turn, revision, winner_id
+               FROM combat_battles ORDER BY battle_id"""
+        )
+        for row in battle_rows:
+            snapshot = self._snapshot_from_row(row)
+            if snapshot.battle_id in battles:
+                raise CombatStoreError("duplicate persisted battle")
+            battles[snapshot.battle_id] = snapshot
+
+        next_revision = {battle_id: 0 for battle_id in battles}
+        latest_receipt = {}
+        mutation_count = 0
+        mutation_rows = self.db.execute(
+            """SELECT request_id, battle_id, expected_revision, actor_id,
+                      payload_json, result_json
+               FROM combat_mutations
+               ORDER BY battle_id, expected_revision, request_id"""
+        )
+        for (request_id, battle_id, expected_revision, actor_id,
+             payload_json, result_json) in mutation_rows:
+            request_id = self._identifier(request_id, "request identifier")
+            battle_id = self._identifier(battle_id, "battle identifier")
+            if battle_id not in battles:
+                raise CombatStoreError("combat mutation has no battle")
+            if (type(expected_revision) is not int
+                    or not 0 <= expected_revision < _MAX_REVISION):
+                raise CombatStoreError("invalid stored combat mutation revision")
+            if type(actor_id) is not int or not 1 <= actor_id <= 1_000_000:
+                raise CombatStoreError("invalid stored combat mutation actor")
+
+            owner_character_id = battles[battle_id].owner_character_id
+            expected_payload = json.dumps(
+                [battle_id, owner_character_id, expected_revision, actor_id],
+                separators=(",", ":"),
+            )
+            if (type(payload_json) is not str or len(payload_json) > 512
+                    or payload_json != expected_payload):
+                raise CombatStoreError("combat mutation payload is not canonical")
+
+            receipt_snapshot, event = self._decode_result(result_json)
+            if self._encode_result(receipt_snapshot, event) != result_json:
+                raise CombatStoreError("combat mutation result is not canonical")
+            if (receipt_snapshot.battle_id != battle_id
+                    or receipt_snapshot.owner_character_id != owner_character_id
+                    or receipt_snapshot.revision != expected_revision + 1
+                    or event.actor_id != actor_id):
+                raise CombatStoreError("combat mutation receipt does not match its row")
+
+            expected_next = next_revision[battle_id]
+            if expected_revision != expected_next:
+                raise CombatStoreError(
+                    "combat mutation revision history has a gap or duplicate"
+                )
+            next_revision[battle_id] = expected_next + 1
+            latest_receipt[battle_id] = receipt_snapshot
+            mutation_count += 1
+
+        for battle_id, current in battles.items():
+            if next_revision[battle_id] != current.revision:
+                raise CombatStoreError(
+                    "combat mutation history does not reach current revision"
+                )
+            if current.revision > 0 and latest_receipt.get(battle_id) != current:
+                raise CombatStoreError(
+                    "current combat snapshot does not match latest receipt"
+                )
+
+        return {
+            "battles": len(battles),
+            "mutations": mutation_count,
+            "unanchored_battles": len(battles),
+        }
+
     def create(self, token: str, character_id: int, battle_id: str,
                battle: Battle) -> CombatSnapshot:
         """Create a new synthetic battle for an owned participating character."""

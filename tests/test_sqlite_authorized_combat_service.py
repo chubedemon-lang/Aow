@@ -544,5 +544,111 @@ class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
             self.service.get(self.owner_token, 101, "battle-1")
         self.assertFalse(self.db.in_transaction)
 
+    def test_verify_integrity_reports_contiguous_receipts_and_current_snapshot(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-turn-1", 0, 101
+        )
+        second = self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-turn-2", 1, 9001
+        )
+
+        self.assertEqual(
+            self.service.verify_integrity(),
+            {
+                "battles": 1,
+                "mutations": 2,
+                "unanchored_battles": 1,
+            },
+        )
+        self.assertEqual(
+            self.service.get(self.owner_token, 101, "battle-1"),
+            second.snapshot,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_rejects_missing_revision_receipt_without_repairing(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-gap-0", 0, 101
+        )
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-gap-1", 1, 9001
+        )
+        self.db.execute(
+            "DELETE FROM combat_mutations WHERE request_id=?",
+            ("audit-gap-0",),
+        )
+
+        with self.assertRaisesRegex(
+            CombatStoreError, "revision history has a gap or duplicate"
+        ):
+            self.service.verify_integrity()
+
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM combat_mutations"
+            ).fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT revision FROM combat_battles WHERE battle_id=?",
+                ("battle-1",),
+            ).fetchone()[0],
+            2,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_rejects_current_snapshot_not_matching_latest_receipt(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-current", 0, 101
+        )
+        self.db.execute(
+            "UPDATE combat_battles SET first_hp=? WHERE battle_id=?",
+            (19, "battle-1"),
+        )
+
+        with self.assertRaisesRegex(
+            CombatStoreError, "current combat snapshot does not match latest receipt"
+        ):
+            self.service.verify_integrity()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT first_hp FROM combat_battles WHERE battle_id=?",
+                ("battle-1",),
+            ).fetchone()[0],
+            19,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_rejects_noncanonical_mutation_payload(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-payload", 0, 101
+        )
+        self.db.execute(
+            "UPDATE combat_mutations SET payload_json=? WHERE request_id=?",
+            ('[ "battle-1", "1", 0, 101 ]', "audit-payload"),
+        )
+
+        with self.assertRaisesRegex(
+            CombatStoreError, "payload is not canonical"
+        ):
+            self.service.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_requires_an_idle_connection(self):
+        self.create_battle()
+        self.db.execute("BEGIN")
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            self.service.verify_integrity()
+        self.db.rollback()
+        self.assertEqual(
+            self.service.verify_integrity(),
+            {"battles": 1, "mutations": 0, "unanchored_battles": 1},
+        )
+
 if __name__ == "__main__":
     unittest.main()
