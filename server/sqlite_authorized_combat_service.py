@@ -642,7 +642,9 @@ class SqliteAuthorizedCombatService:
                battle: Battle) -> CombatSnapshot:
         """Create a new synthetic battle for an owned participating character."""
         battle_id = self._identifier(battle_id, "battle identifier")
-        if not isinstance(battle, Battle):
+        # Reject subclasses before reading any attributes: a Battle subclass can
+        # override __getattribute__ and execute caller code during validation.
+        if type(battle) is not Battle:
             raise CombatStoreError("battle snapshot required")
         if battle.turn != 0 or battle.first.hp <= 0 or battle.second.hp <= 0:
             raise CombatStoreError("new battle must start with living fighters")
