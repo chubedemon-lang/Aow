@@ -82,6 +82,7 @@ class SqliteAuthorizedPlayerBootstrapServiceTests(unittest.TestCase):
             PlayerSnapshot(str(self.character_id), 6, 245, 0, 0),
         )
         self.assertEqual(result.map_position, MapPosition())
+        self.assertEqual(result.wallet_balance, 0)
         self.assertEqual(result.inventory.character_id, str(self.character_id))
         self.assertEqual(result.inventory.capacity, 8)
         self.assertEqual(result.inventory.max_stack, 20)
@@ -114,6 +115,115 @@ class SqliteAuthorizedPlayerBootstrapServiceTests(unittest.TestCase):
         self.assertEqual(after, before)
         self.assertEqual(self.db.total_changes, total_changes)
         self.assertFalse(self.db.in_transaction)
+
+    def test_wallet_balance_is_included_in_the_authorized_snapshot(self):
+        self.db.execute(
+            "UPDATE wallets SET balance=? WHERE character_id=?",
+            (321, self.character_id),
+        )
+        self.db.commit()
+
+        result = self.service.get_snapshot(self.owner_token, self.character_id)
+        self.assertEqual(result.wallet_balance, 321)
+
+    def test_missing_or_non_integer_wallet_fails_closed_without_repair(self):
+        self.db.execute(
+            "DELETE FROM wallets WHERE character_id=?", (self.character_id,)
+        )
+        self.db.commit()
+        with self.assertRaisesRegex(SessionError, "wallet unavailable"):
+            self.service.get_snapshot(self.owner_token, self.character_id)
+        self.assertIsNone(
+            self.db.execute(
+                "SELECT 1 FROM wallets WHERE character_id=?",
+                (self.character_id,),
+            ).fetchone()
+        )
+
+        self.db.execute(
+            "INSERT INTO wallets(character_id, balance) VALUES (?, ?)",
+            (self.character_id, 1.5),
+        )
+        self.db.commit()
+        with self.assertRaisesRegex(SessionError, "wallet unavailable"):
+            self.service.get_snapshot(self.owner_token, self.character_id)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT balance FROM wallets WHERE character_id=?",
+                (self.character_id,),
+            ).fetchone()[0],
+            1.5,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_wallet_update_waits_for_the_complete_snapshot_read(self):
+        entered_inventory = threading.Event()
+        release_inventory = threading.Event()
+        writer_started = threading.Event()
+        writer_done = threading.Event()
+        outcome = {}
+        original_get = self.service.inventories.get
+
+        def paused_get(character_id):
+            entered_inventory.set()
+            if not release_inventory.wait(5):
+                raise TimeoutError("test did not release bootstrap inventory read")
+            return original_get(character_id)
+
+        self.service.inventories.get = paused_get
+
+        def read_snapshot():
+            try:
+                outcome["snapshot"] = self.service.get_snapshot(
+                    self.owner_token, self.character_id
+                )
+            except BaseException as exc:
+                outcome["read_error"] = exc
+
+        def update_wallet():
+            connection = sqlite3.connect(
+                self.path, timeout=10, isolation_level=None
+            )
+            try:
+                writer_started.set()
+                connection.execute(
+                    "UPDATE wallets SET balance=? WHERE character_id=?",
+                    (50, self.character_id),
+                )
+                connection.commit()
+            except BaseException as exc:
+                outcome["write_error"] = exc
+            finally:
+                connection.close()
+                writer_done.set()
+
+        reader = threading.Thread(target=read_snapshot)
+        writer = threading.Thread(target=update_wallet)
+        reader.start()
+        self.assertTrue(entered_inventory.wait(5))
+        writer.start()
+        self.assertTrue(writer_started.wait(5))
+        try:
+            self.assertFalse(
+                writer_done.wait(0.2),
+                "wallet update must wait until the bootstrap snapshot commits",
+            )
+        finally:
+            release_inventory.set()
+
+        reader.join(5)
+        writer.join(5)
+        self.assertFalse(reader.is_alive())
+        self.assertFalse(writer.is_alive())
+        self.assertNotIn("read_error", outcome)
+        self.assertNotIn("write_error", outcome)
+        self.assertEqual(outcome["snapshot"].wallet_balance, 0)
+        self.assertEqual(
+            self.service.get_snapshot(
+                self.owner_token, self.character_id
+            ).wallet_balance,
+            50,
+        )
 
     def test_missing_inventory_fails_closed_without_creating_one(self):
         bob = self.characters.create_with_initial_state(
