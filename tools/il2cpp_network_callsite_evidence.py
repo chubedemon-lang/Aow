@@ -344,6 +344,10 @@ def inspect_bytes(
                 summarize_control_flow_memory_base_provenance(
                     code, target,
                     relocation_targets=relative_relocation_targets,
+                    known_static_cells=(
+                        tuple(sorted(static_field_info_values))
+                        if resolve_fieldref_native_types else None
+                    ),
                 )
             ),
             **direct,
