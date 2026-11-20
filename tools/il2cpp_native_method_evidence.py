@@ -1524,6 +1524,107 @@ def _summarize_control_flow_helper_paths(
                 raise ValueError(
                     "conditional successor edges require a matching branch predicate"
                 )
+
+        # Newly generated summaries declare their complete instruction window.
+        # Validate the corresponding edge/exit contract as well, so a missing
+        # edge cannot silently look like a return and an internal edge cannot
+        # simultaneously be reported as an external exit. Legacy summaries
+        # without an instruction extent retain their historical permissive shape.
+        if has_declared_instruction_count:
+            if raw_edges is None:
+                raise ValueError(
+                    "declared instruction windows require explicit successor edges"
+                )
+            if "terminator" not in block:
+                raise ValueError(
+                    "declared instruction windows require an explicit terminator"
+                )
+            for exit_name in (
+                "external_branch_exit", "external_fallthrough_exit"
+            ):
+                if exit_name not in block or type(block[exit_name]) is not bool:
+                    raise ValueError(
+                        "declared instruction windows require boolean branch and fallthrough exit flags"
+                    )
+
+            terminator = block["terminator"]
+            edge_kinds = [edge["kind"] for edge in normalized_edges]
+            if terminator in {"b_cond", "cbz_cbnz", "tbz_tbnz"}:
+                if "terminator_condition" not in block:
+                    raise ValueError(
+                        "conditional terminator requires a decoded branch predicate"
+                    )
+                if any(kind not in conditional_edge_kinds for kind in edge_kinds):
+                    raise ValueError(
+                        "conditional terminator has a non-conditional successor edge"
+                    )
+                taken_count = edge_kinds.count("conditional_taken")
+                fallthrough_count = edge_kinds.count("conditional_fallthrough")
+                if taken_count > 1 or fallthrough_count > 1:
+                    raise ValueError(
+                        "conditional terminator has duplicate branch outcomes"
+                    )
+                if taken_count == 1 == block["external_branch_exit"]:
+                    raise ValueError(
+                        "external branch exit flag conflicts with conditional-taken edge"
+                    )
+                if taken_count == 0 and not block["external_branch_exit"]:
+                    raise ValueError(
+                        "conditional-taken outcome is neither internal nor marked external"
+                    )
+                if fallthrough_count == 1 == block["external_fallthrough_exit"]:
+                    raise ValueError(
+                        "external fallthrough exit flag conflicts with conditional-fallthrough edge"
+                    )
+                if fallthrough_count == 0 and not block["external_fallthrough_exit"]:
+                    raise ValueError(
+                        "conditional-fallthrough outcome is neither internal nor marked external"
+                    )
+            else:
+                if block["external_branch_exit"] or block["external_fallthrough_exit"]:
+                    raise ValueError(
+                        "non-conditional terminator cannot declare conditional exit flags"
+                    )
+                allowed_by_terminator = {
+                    None: {"fallthrough"},
+                    "b": {"branch_target"},
+                    "indirect_branch": {"branch_target"},
+                    "indirect_branch_unresolved": set(),
+                    "indirect_tail": set(),
+                    "return": set(),
+                }
+                if terminator not in allowed_by_terminator:
+                    raise ValueError("control-flow terminator kind is invalid")
+                if any(
+                    kind not in allowed_by_terminator[terminator]
+                    for kind in edge_kinds
+                ):
+                    raise ValueError(
+                        "successor edge kind is incompatible with terminator"
+                    )
+                if terminator == "indirect_branch" and len(normalized_edges) != 1:
+                    raise ValueError(
+                        "resolved indirect branch requires exactly one internal target"
+                    )
+                if terminator in {
+                    "indirect_branch_unresolved", "indirect_tail", "return"
+                } and normalized_edges:
+                    raise ValueError(
+                        "terminal indirect branch or return cannot have successors"
+                    )
+                if terminator == "b" and len(normalized_edges) > 1:
+                    raise ValueError(
+                        "unconditional branch cannot have multiple successor edges"
+                    )
+                if terminator is None:
+                    expected_fallthrough = (
+                        instruction_start + instruction_count
+                        < declared_instruction_count
+                    )
+                    if len(normalized_edges) != int(expected_fallthrough):
+                        raise ValueError(
+                            "unterminated block has an inconsistent fallthrough edge"
+                        )
         edges_by_index[index] = normalized_edges
         by_index[index] = block
 
