@@ -36,6 +36,7 @@ def fixture_bytes(
     capture_kind="authorized_local_runtime",
     schema_version=1,
     io_events=None,
+    observer_role="client",
 ):
     document = {
         "schema_version": schema_version,
@@ -47,8 +48,10 @@ def fixture_bytes(
             "client_to_server": [chunk.hex() for chunk in client_chunks],
         },
     }
-    if schema_version in (2, 3):
+    if schema_version in (2, 3, 4):
         document["io_events"] = io_events
+    if schema_version == 4:
+        document["observer_role"] = observer_role
     return json.dumps(document, separators=(",", ":")).encode("utf-8")
 
 
@@ -1292,6 +1295,140 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertNotIn(client_stream.hex(), serialized)
         self.assertIn('"hypothesis_comparison": "independent_no_ranking"', serialized)
         self.assertIn('"apk_compatible": false', serialized)
+
+
+    def test_schema_v4_client_operations_match_stream_directions_and_are_redacted(self):
+        server_stream = frame(b"server")
+        client_stream = b"client-data"
+        events = [
+            {"direction": "client_to_server", "offset": 0, "length": 2, "elapsed_ns": 0, "operation": "send"},
+            {"direction": "server_to_client", "offset": 0, "length": 3, "elapsed_ns": 1, "operation": "receive"},
+            {"direction": "client_to_server", "offset": 2, "length": len(client_stream) - 2, "elapsed_ns": 4, "operation": "send"},
+            {"direction": "server_to_client", "offset": 3, "length": len(server_stream) - 3, "elapsed_ns": 7, "operation": "receive"},
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [client_stream],
+                schema_version=4,
+                io_events=events,
+                observer_role="client",
+            )
+        )
+        order = result["exchange_order"]
+        self.assertEqual(order["observer_role_asserted"], "client")
+        self.assertEqual(order["operation_semantics"], "operator_asserted_unverified")
+        self.assertEqual(order["send_event_count"], 2)
+        self.assertEqual(order["receive_event_count"], 2)
+        self.assertEqual(order["timing"]["event_span_ns"], 7)
+        serialized = json.dumps(result)
+        for private_field in ('"operation"', '"observer_role"', '"elapsed_ns"', '"offset"', '"length"'):
+            self.assertNotIn(private_field, serialized)
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
+        self.assertFalse(result["authorization_independently_verified"])
+
+    def test_schema_v4_server_role_reverses_send_receive_direction_mapping(self):
+        server_stream = frame(b"server")
+        client_stream = b"client"
+        events = [
+            {"direction": "server_to_client", "offset": 0, "length": 2, "elapsed_ns": 0, "operation": "send"},
+            {"direction": "client_to_server", "offset": 0, "length": 2, "elapsed_ns": 3, "operation": "receive"},
+            {"direction": "server_to_client", "offset": 2, "length": len(server_stream) - 2, "elapsed_ns": 5, "operation": "send"},
+            {"direction": "client_to_server", "offset": 2, "length": len(client_stream) - 2, "elapsed_ns": 8, "operation": "receive"},
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [client_stream],
+                schema_version=4,
+                io_events=events,
+                observer_role="server",
+            )
+        )
+        order = result["exchange_order"]
+        self.assertEqual(order["observer_role_asserted"], "server")
+        self.assertEqual(order["send_event_count"], 2)
+        self.assertEqual(order["receive_event_count"], 2)
+        self.assertEqual(order["timing"]["event_span_ns"], 8)
+
+    def test_schema_v4_rejects_operation_direction_mismatch(self):
+        server_stream = frame(b"server")
+        client_stream = b"client"
+        events = [
+            {"direction": "server_to_client", "offset": 0, "length": len(server_stream), "elapsed_ns": 0, "operation": "send"},
+            {"direction": "client_to_server", "offset": 0, "length": len(client_stream), "elapsed_ns": 1, "operation": "receive"},
+        ]
+        with self.assertRaisesRegex(FixtureAuditError, "does not match observer role"):
+            self.audit(
+                fixture_bytes(
+                    [server_stream],
+                    [client_stream],
+                    schema_version=4,
+                    io_events=events,
+                    observer_role="client",
+                )
+            )
+
+    def test_schema_v4_rejects_invalid_observer_role_and_operation(self):
+        server_stream = frame(b"server")
+        client_stream = b"client"
+        valid_events = [
+            {"direction": "client_to_server", "offset": 0, "length": len(client_stream), "elapsed_ns": 0, "operation": "send"},
+            {"direction": "server_to_client", "offset": 0, "length": len(server_stream), "elapsed_ns": 1, "operation": "receive"},
+        ]
+        for role in (None, True, "Client", "peer"):
+            with self.subTest(role=role), self.assertRaisesRegex(FixtureAuditError, "observer_role"):
+                self.audit(
+                    fixture_bytes(
+                        [server_stream],
+                        [client_stream],
+                        schema_version=4,
+                        io_events=valid_events,
+                        observer_role=role,
+                    )
+                )
+        invalid_operation = [dict(valid_events[0], operation="write"), valid_events[1]]
+        with self.assertRaisesRegex(FixtureAuditError, "operation must be exactly"):
+            self.audit(
+                fixture_bytes(
+                    [server_stream],
+                    [client_stream],
+                    schema_version=4,
+                    io_events=invalid_operation,
+                    observer_role="client",
+                )
+            )
+
+    def test_schema_v4_rejects_missing_or_unknown_event_fields(self):
+        server_stream = frame(b"server")
+        client_stream = b"client"
+        missing_operation = [
+            {"direction": "client_to_server", "offset": 0, "length": len(client_stream), "elapsed_ns": 0},
+            {"direction": "server_to_client", "offset": 0, "length": len(server_stream), "elapsed_ns": 1, "operation": "receive"},
+        ]
+        with self.assertRaisesRegex(FixtureAuditError, "invalid object"):
+            self.audit(
+                fixture_bytes(
+                    [server_stream],
+                    [client_stream],
+                    schema_version=4,
+                    io_events=missing_operation,
+                )
+            )
+        extra_field = [
+            dict(missing_operation[0], operation="send", timestamp="private"),
+            missing_operation[1],
+        ]
+        with self.assertRaisesRegex(FixtureAuditError, "invalid object"):
+            self.audit(
+                fixture_bytes(
+                    [server_stream],
+                    [client_stream],
+                    schema_version=4,
+                    io_events=extra_field,
+                )
+            )
 
 
 if __name__ == "__main__":

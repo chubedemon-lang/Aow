@@ -52,9 +52,13 @@ _FIXTURE_BASE_KEYS = frozenset({
 _FIXTURE_V1_KEYS = _FIXTURE_BASE_KEYS
 _FIXTURE_V2_KEYS = _FIXTURE_BASE_KEYS | {"io_events"}
 _FIXTURE_V3_KEYS = _FIXTURE_V2_KEYS
+_FIXTURE_V4_KEYS = _FIXTURE_V3_KEYS | {"observer_role"}
 _STREAM_KEYS = frozenset({"server_to_client", "client_to_server"})
 _IO_EVENT_KEYS = frozenset({"direction", "offset", "length"})
 _IO_EVENT_V3_KEYS = _IO_EVENT_KEYS | {"elapsed_ns"}
+_IO_EVENT_V4_KEYS = _IO_EVENT_V3_KEYS | {"operation"}
+_IO_OPERATIONS = frozenset({"send", "receive"})
+_OBSERVER_ROLES = frozenset({"client", "server"})
 _STREAM_DIRECTIONS = ("client_to_server", "server_to_client")
 
 
@@ -215,7 +219,8 @@ def _decode_chunks(
 
 
 def _validate_io_events(
-    value, stream_bytes_by_direction, *, include_timing=False
+    value, stream_bytes_by_direction, *, include_timing=False,
+    observer_role=None, include_operation=False,
 ):
     """Validate ordered I/O ranges, optionally with relative monotonic timing.
 
@@ -232,9 +237,18 @@ def _validate_io_events(
     if len(value) > MAX_IO_EVENTS:
         raise FixtureAuditError("io_events exceeds the configured event limit")
 
-    expected_event_keys = _IO_EVENT_V3_KEYS if include_timing else _IO_EVENT_KEYS
+    if include_operation and (
+        type(observer_role) is not str or observer_role not in _OBSERVER_ROLES
+    ):
+        raise FixtureAuditError("observer_role must be exactly client or server")
+    expected_event_keys = (
+        _IO_EVENT_V4_KEYS if include_operation
+        else _IO_EVENT_V3_KEYS if include_timing
+        else _IO_EVENT_KEYS
+    )
     next_offsets = {direction: 0 for direction in _STREAM_DIRECTIONS}
     event_counts = {direction: 0 for direction in _STREAM_DIRECTIONS}
+    operation_counts = {"send": 0, "receive": 0}
     previous_direction = None
     direction_switches = 0
     first_elapsed_ns = None
@@ -259,6 +273,27 @@ def _validate_io_events(
             raise FixtureAuditError(
                 "io_events contains an invalid direction at index " + str(index)
             )
+        if include_operation:
+            operation = event["operation"]
+            if type(operation) is not str or operation not in _IO_OPERATIONS:
+                raise FixtureAuditError(
+                    "io_events operation must be exactly send or receive"
+                )
+            if observer_role == "client":
+                expected_direction = (
+                    "client_to_server" if operation == "send"
+                    else "server_to_client"
+                )
+            else:
+                expected_direction = (
+                    "server_to_client" if operation == "send"
+                    else "client_to_server"
+                )
+            if direction != expected_direction:
+                raise FixtureAuditError(
+                    "io_events operation does not match observer role and direction"
+                )
+            operation_counts[operation] += 1
         offset = event["offset"]
         length = event["length"]
         if type(offset) is not int or offset < 0:
@@ -332,6 +367,13 @@ def _validate_io_events(
         "server_to_client_event_count": event_counts["server_to_client"],
         "direction_switch_count": direction_switches,
     }
+    if include_operation:
+        summary.update({
+            "observer_role_asserted": observer_role,
+            "operation_semantics": "operator_asserted_unverified",
+            "send_event_count": operation_counts["send"],
+            "receive_event_count": operation_counts["receive"],
+        })
     if include_timing:
         summary["timing"] = {
             "status": "relative_monotonic_summary_unverified",
@@ -817,13 +859,14 @@ def audit_fixture_bytes(
     if type(document) is not dict:
         raise FixtureAuditError("fixture has an unsupported object shape")
     schema_version = document.get("schema_version")
-    if type(schema_version) is not int or schema_version not in (1, 2, 3):
+    if type(schema_version) is not int or schema_version not in (1, 2, 3, 4):
         raise FixtureAuditError("unsupported fixture schema version")
-    expected_keys = (
-        _FIXTURE_V1_KEYS if schema_version == 1
-        else _FIXTURE_V3_KEYS if schema_version == 3
-        else _FIXTURE_V2_KEYS
-    )
+    expected_keys = {
+        1: _FIXTURE_V1_KEYS,
+        2: _FIXTURE_V2_KEYS,
+        3: _FIXTURE_V3_KEYS,
+        4: _FIXTURE_V4_KEYS,
+    }[schema_version]
     if set(document) != expected_keys:
         raise FixtureAuditError("fixture has an unsupported object shape")
     fixture_hash = document["apk_sha256"]
@@ -872,7 +915,9 @@ def audit_fixture_bytes(
                 "server_to_client": server_bytes,
                 "client_to_server": client_bytes,
             },
-            include_timing=schema_version == 3,
+            include_timing=schema_version in (3, 4),
+            observer_role=document.get("observer_role"),
+            include_operation=schema_version == 4,
         )
 
     candidate = _inspect_receive_candidate(
