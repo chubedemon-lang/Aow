@@ -827,9 +827,15 @@ LoginRequest field order, and unchanged-APK login. No provenance-reviewed
 authorized Client-to-Server byte fixture or local runtime trace is available;
 the real AOW adapter remains disabled. No official endpoint was contacted.
 
+A lookup candidate is suppressed when either the `Receiver.Cycle` or
+`NetworkSettings::.cctor` entry window is truncated. The exact call count and
+unique class-cell check are not complete when either bounded method window is
+incomplete; the report returns `unresolved_truncated_entry_window` instead.
+
 Synthetic tests exercise the register-flow, class-cell/first-slot linkage,
-metadata-order candidate boundary, and opcode-family presence check. The report
-emits no native addresses or instruction bytes.
+metadata-order candidate boundary, truncated-window rejection, and
+opcode-family presence check. The report emits no native addresses or
+instruction bytes.
 
 
 ## Adjacent NZCV producer evidence for B.cond — tooling only
