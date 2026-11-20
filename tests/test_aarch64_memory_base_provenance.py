@@ -562,6 +562,45 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
         )
 
 
+    def test_rejected_load_writeback_alias_clears_static_cell_value_origin(self):
+        for mode in (1, 3):
+            with self.subTest(mode=mode):
+                start = 0x90A0
+                cell = 0xA800 + (mode * 0x10)
+                alias_writeback = unscaled_access(
+                    size=3,
+                    opc=1,
+                    base=8,
+                    target=8,
+                    immediate=8,
+                    mode=mode,
+                )
+                result = summarize_control_flow_memory_base_provenance(
+                    code_bytes(
+                        adr(8, start, cell),
+                        ldr_x(10, 8),
+                        mov_x(8, 10),
+                        alias_writeback,
+                        ldr_x(9, 8),
+                    ),
+                    start,
+                    known_static_cells=(cell,),
+                )
+
+                # The memory decoder rejects the constrained-unpredictable
+                # alias-writeback form. The unknown instruction therefore
+                # clears both address and loaded-value provenance.
+                self.assertEqual(result["memory_access_count"], 2)
+                self.assertEqual(len(result["memory_accesses"]), 2)
+                later_access = result["memory_accesses"][-1]
+                self.assertEqual(later_access["base_provenance"], "unknown")
+                self.assertFalse(
+                    later_access["base_derived_from_known_static_cell"]
+                )
+                self.assertEqual(
+                    result["known_static_cell_derived_base_access_count"], 0
+                )
+
     def test_marks_partial_access_to_known_static_cell_without_emitting_address(self):
         start = 0x9000
         cell = 0xA100
