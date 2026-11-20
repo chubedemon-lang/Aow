@@ -17,6 +17,16 @@ from server.sqlite_quest_inventory_award_store import (
 from server.sqlite_session_store import SqliteSessionStore
 
 
+class HostileConnection(sqlite3.Connection):
+    """A connection subclass whose Python execute override must not run."""
+
+    execute_calls = 0
+
+    def execute(self, *args, **kwargs):
+        type(self).execute_calls += 1
+        raise AssertionError("connection subclass execute hook was executed")
+
+
 class SqliteAuthorizedQuestInventoryAwardServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -255,6 +265,17 @@ class SqliteAuthorizedQuestInventoryAwardServiceTests(unittest.TestCase):
             self.service.grant_once(
                 self.owner_token, 101, "after-revoke", 1, 10, "potion", 1
             )
+
+
+    def test_sqlite_connection_subclass_is_rejected_before_execute_hook(self):
+        HostileConnection.execute_calls = 0
+        connection = sqlite3.connect(
+            ":memory:", isolation_level=None, factory=HostileConnection
+        )
+        self.addCleanup(connection.close)
+        with self.assertRaisesRegex(TypeError, "sqlite connection required"):
+            SqliteAuthorizedQuestInventoryAwardService(connection)
+        self.assertEqual(HostileConnection.execute_calls, 0)
 
 
 if __name__ == "__main__":
