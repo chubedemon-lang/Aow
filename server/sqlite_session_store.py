@@ -70,6 +70,11 @@ class SqliteSessionStore:
                 or not 1 <= batch_size <= _MAX_PURGE_BATCH_SIZE):
             raise ValueError("invalid session purge batch size")
 
+    def _require_idle_connection(self):
+        """Reject operations that own their transaction on a caller transaction."""
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+
     def _now(self):
         try:
             value = self.clock()
@@ -147,6 +152,7 @@ class SqliteSessionStore:
 
     def issue(self, account_id: int, ttl_seconds=None) -> str:
         """Issue a random bearer token after trusted account authentication."""
+        self._require_idle_connection()
         self.db.execute("BEGIN IMMEDIATE")
         try:
             token = self.issue_in_transaction(account_id, ttl_seconds)
@@ -158,6 +164,7 @@ class SqliteSessionStore:
 
     def resolve(self, token: str) -> int:
         """Resolve an active token to its account id; expired rows are removed."""
+        self._require_idle_connection()
         digest = self._digest(token)
         self.db.execute("BEGIN IMMEDIATE")
         account_id = None
@@ -227,8 +234,7 @@ class SqliteSessionStore:
         cannot interleave between authorization and the caller's database work.
         The caller must not commit or roll back the connection inside the block.
         """
-        if self.db.in_transaction:
-            raise ValueError("connection must not have an active transaction")
+        self._require_idle_connection()
         digest = self._digest(token)
         self.db.execute("BEGIN IMMEDIATE")
         try:
@@ -241,6 +247,7 @@ class SqliteSessionStore:
 
     def revoke(self, token: str) -> bool:
         """Revoke a token. Repeating the same revocation returns False."""
+        self._require_idle_connection()
         digest = self._digest(token)
         self.db.execute("BEGIN IMMEDIATE")
         try:
@@ -260,6 +267,7 @@ class SqliteSessionStore:
         It removes active and expired rows alike. BEGIN IMMEDIATE serializes the
         revocation with authorized_transaction() on other SQLite connections.
         """
+        self._require_idle_connection()
         if (type(account_id) is not int
                 or not 1 <= account_id <= _MAX_ACCOUNT_ID):
             raise ValueError("invalid account id")
@@ -287,6 +295,7 @@ class SqliteSessionStore:
         if batch_size is not None:
             self._validate_purge_batch_size(batch_size)
 
+        self._require_idle_connection()
         self.db.execute("BEGIN IMMEDIATE")
         try:
             now = self._now()
@@ -321,8 +330,7 @@ class SqliteSessionStore:
         expired rows or repairs data. The report separates active and expired
         rows at one captured clock value; cleanup remains a separate operation.
         """
-        if self.db.in_transaction:
-            raise ValueError("connection must not have an active transaction")
+        self._require_idle_connection()
         self.db.execute("BEGIN")
         try:
             # Establish the read snapshot before quick_check and row scanning.
