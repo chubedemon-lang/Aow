@@ -41,17 +41,32 @@ index outside the FieldRef table is explicitly reported as out of range and
 is never promoted to a resolved reference. The input collection is bounded
 and must be an exact built-in list or tuple of unsigned 32-bit integers.
 
+## Native Il2CppType category correlation
+
+When an authorized offline pass has already produced FieldInfo usage tokens, the analyzer can optionally resolve each resulting FieldRef `TypeIndex` through the ARM64 relocation-backed native `Il2CppType` registration table. Use `--resolve-native-types` together with one or more `--field-info-usage-token` arguments. The reader reopens the same APK through the stable descriptor reader and requires its SHA-256 and metadata bytes to match the first metadata pass before joining the native table.
+
+The output adds only the symbolic native type code/name to each resolved FieldRef occurrence, plus the registration-table count and unique type-index count. It emits no native addresses, raw bytes, encoded usage tokens, or NetworkSettings default values. If no FieldRef occurrence resolves, native parsing is skipped. If the native table is malformed, missing, or ambiguous, the optional join fails closed.
+
+Example:
+
+```sh
+python -m tools.il2cpp_field_ref_evidence ./authorized-local.apk \\
+  --field-info-usage-token 0x80000001 \\
+  --resolve-native-types
+```
+
+This resolves only the native type category for the referenced TypeIndex. It does not identify the managed declaring type or field name, prove runtime access, or map a FieldRef to a packet field.
+
 ## Evidence boundary
 
-This correlation establishes only a static metadata-usage-token to FieldRef
-table-coordinate relationship. It does not resolve the native `Il2CppType`
-registration table, identify a managed owner, or prove that a native method
-uses a particular FieldRef. A FieldRef coordinate is not a packet field,
+This correlation establishes a static metadata-usage-token to FieldRef
+table-coordinate relationship. With `--resolve-native-types`, it additionally
+reports only the native type category for each resolved `TypeIndex`. It still
+does not identify a managed declaring type or field name, or prove that a
+native method uses a particular FieldRef. A FieldRef coordinate is not a packet field,
 message ID, serializer order, handshake step, runtime access, wire contract,
 or APK/server compatibility result.
 
-The next offline-analysis step is to resolve the referenced `TypeIndex` values
-through relocation-backed native type records and then correlate them with a
-separately verified native callsite. Do not enable the real AOW socket adapter
+The next offline-analysis step is to correlate the resolved native type categories and local field coordinates with a separately verified native callsite, while keeping unresolved usage tokens and ambiguous type-table results explicit. Do not enable the real AOW socket adapter
 from this inventory alone. Keep the APK and all extracted metadata/native
 assets outside the public repository.

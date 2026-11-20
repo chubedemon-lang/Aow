@@ -16,6 +16,7 @@ from tools.il2cpp_metadata_usage_evidence import (
     encode_field_info_usage_index,
     encode_method_def_usage_index,
 )
+from tools.il2cpp_codegen_inventory import ARM64_IL2CPP_MEMBER, R_AARCH64_RELATIVE
 from tools.il2cpp_metadata_inventory import METADATA_MEMBER
 
 
@@ -27,6 +28,62 @@ def make_metadata(field_refs=(), *, version=31, offset=0x100, size_delta=0):
         "<II", header, 0xB8, offset, len(records) + size_delta
     )
     return bytes(header) + records
+
+
+def make_native_type_elf():
+    """Build a tiny relocation-backed ARM64 IL2CPP type table."""
+    names = b"\0.shstrtab\0.rodata\0.data.rel.ro\0.data\0.rela.dyn\0"
+    name_offsets = {
+        name: names.index(name.encode() + b"\0")
+        for name in (".shstrtab", ".rodata", ".data.rel.ro", ".data", ".rela.dyn")
+    }
+    rodata_offset, relro_offset, data_offset = 0x100, 0x120, 0x220
+    rela_offset, names_offset = 0x320, 0x400
+    section_table_offset = (names_offset + len(names) + 7) & ~7
+    elf = bytearray(section_table_offset + 6 * 64)
+    elf[rodata_offset:rodata_offset + 1] = b"\0"
+    relro = bytearray(0x100)
+    struct.pack_into("<Q", relro, 8, 4)
+    elf[relro_offset:relro_offset + len(relro)] = relro
+    data = bytearray(0x100)
+    for index, code in enumerate((0x08, 0x12, 0x15, 0x02)):
+        struct.pack_into("<I", data, index * 16 + 8, code << 16)
+    elf[data_offset:data_offset + len(data)] = data
+    elf[names_offset:names_offset + len(names)] = names
+    relocations = [
+        (0x1010, (1 << 32) | R_AARCH64_RELATIVE, 0x1040),
+    ]
+    for index, target in enumerate((0x2000, 0x2010, 0x2020, 0x2030)):
+        relocations.append((
+            0x1040 + index * 8, (1 << 32) | R_AARCH64_RELATIVE, target,
+        ))
+    rela = b"".join(struct.pack("<QQq", *item) for item in relocations)
+    elf[rela_offset:rela_offset + len(rela)] = rela
+    ident = b"\x7fELF\x02\x01\x01" + bytes(9)
+    struct.pack_into(
+        "<16sHHIQQQIHHHHHH", elf, 0,
+        ident, 3, 183, 1, 0, 0, section_table_offset, 0,
+        64, 56, 0, 64, 6, 1,
+    )
+
+    def section(name, kind, flags, address, offset, size, alignment=8, entry_size=0):
+        return struct.pack(
+            "<IIQQQQIIQQ", name_offsets[name], kind, flags, address,
+            offset, size, 0, 0, alignment, entry_size,
+        )
+
+    headers = [
+        bytes(64),
+        section(".shstrtab", 3, 0, 0, names_offset, len(names), 1),
+        section(".rodata", 1, 2, 0x5000, rodata_offset, 1, 1),
+        section(".data.rel.ro", 1, 3, 0x1000, relro_offset, 0x100),
+        section(".data", 1, 3, 0x2000, data_offset, 0x100),
+        section(".rela.dyn", 4, 2, 0x3000, rela_offset, len(rela), 8, 24),
+    ]
+    for index, header in enumerate(headers):
+        start = section_table_offset + index * 64
+        elf[start:start + 64] = header
+    return bytes(elf)
 
 
 class FieldRefEvidenceTests(unittest.TestCase):
@@ -138,6 +195,9 @@ class FieldRefEvidenceTests(unittest.TestCase):
         report = correlate_field_info_usage_tokens(metadata, [token, token])
         self.assertEqual(report["resolved_reference_count"], 2)
         self.assertEqual(report["unique_resolved_field_ref_count"], 1)
+        self.assertEqual(
+            report["native_type_resolution"], {"status": "not_requested"}
+        )
         self.assertTrue(report["no_out_of_range_resolved_indexes"])
         self.assertEqual(
             [entry["position"] for entry in report["references"]],
@@ -178,6 +238,109 @@ class FieldRefEvidenceTests(unittest.TestCase):
             report["field_info_usage_correlation"]["resolved_reference_count"],
             1,
         )
+
+
+    def test_correlates_fieldref_type_indexes_to_native_registration_types(self):
+        metadata = make_metadata(((0, 0), (1, 2), (2, 5)))
+        tokens = [
+            encode_field_info_usage_index(index, 31)
+            for index in (0, 1, 2)
+        ]
+        report = correlate_field_info_usage_tokens(
+            metadata, tokens, elf=make_native_type_elf()
+        )
+        self.assertEqual(
+            report["native_type_resolution"],
+            {
+                "status": "resolved",
+                "type_table_count": 4,
+                "unique_type_index_count": 3,
+            },
+        )
+        resolved = [
+            item for item in report["references"]
+            if item["status"] == "field_ref_coordinate_resolved"
+        ]
+        self.assertEqual(
+            [item["native_type"]["type_name"] for item in resolved],
+            ["I4", "CLASS", "GENERICINST"],
+        )
+        self.assertNotIn("native_addresses", report)
+        self.assertNotIn("raw_bytes", report)
+
+    def test_skips_native_resolution_when_no_fieldref_token_resolves(self):
+        metadata = make_metadata(((17, 0),))
+        tokens = [
+            encode_method_def_usage_index(1, 31),
+            encode_field_info_usage_index(3, 31),
+        ]
+        report = correlate_field_info_usage_tokens(
+            metadata, tokens, elf=b"not an ELF"
+        )
+        self.assertEqual(
+            report["native_type_resolution"],
+            {
+                "status": "no_resolved_field_refs",
+                "type_table_count": None,
+                "unique_type_index_count": 0,
+            },
+        )
+
+    def test_rejects_mutable_or_subclassed_native_elf_before_parsing(self):
+        class HostileBytes(bytes):
+            pass
+
+        metadata = make_metadata(((0, 0),))
+        token = encode_field_info_usage_index(0, 31)
+        invalid_elf_inputs = (
+            bytearray(make_native_type_elf()),
+            HostileBytes(make_native_type_elf()),
+        )
+        for elf in invalid_elf_inputs:
+            with self.subTest(elf_type=type(elf).__name__):
+                with self.assertRaisesRegex(
+                    FieldRefEvidenceError, "exact immutable bytes"
+                ):
+                    correlate_field_info_usage_tokens(metadata, [token], elf=elf)
+
+    def test_fails_closed_when_native_type_table_cannot_be_resolved(self):
+        metadata = make_metadata(((0, 0),))
+        token = encode_field_info_usage_index(0, 31)
+        with self.assertRaisesRegex(
+            FieldRefEvidenceError, "native IL2CPP registration table"
+        ):
+            correlate_field_info_usage_tokens(metadata, [token], elf=b"not an ELF")
+
+    def test_inspect_apk_can_resolve_fieldref_types_from_same_fingerprint(self):
+        metadata = make_metadata(((0, 0), (1, 2)))
+        elf = make_native_type_elf()
+        token = encode_field_info_usage_index(1, 31)
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "synthetic.apk"
+            with zipfile.ZipFile(apk, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr(METADATA_MEMBER, metadata)
+                archive.writestr(ARM64_IL2CPP_MEMBER, elf)
+            expected_digest = hashlib.sha256(apk.read_bytes()).hexdigest()
+            expected_size = apk.stat().st_size
+            report = inspect_apk(
+                apk, [1], [token], resolve_native_types=True
+            )
+        self.assertEqual(report["apk_sha256"], expected_digest)
+        self.assertEqual(report["apk_size_bytes"], expected_size)
+        correlation = report["field_info_usage_correlation"]
+        self.assertEqual(correlation["native_type_resolution"]["status"], "resolved")
+        self.assertEqual(
+            correlation["references"][0]["native_type"]["type_name"], "CLASS"
+        )
+
+    def test_requires_fieldinfo_tokens_when_native_resolution_is_requested(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "unused.apk"
+            apk.write_bytes(b"unused")
+            with self.assertRaisesRegex(
+                FieldRefEvidenceError, "requires FieldInfo usage tokens"
+            ):
+                inspect_apk(apk, resolve_native_types=True)
 
 
 if __name__ == "__main__":

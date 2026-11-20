@@ -144,7 +144,9 @@ def inspect_metadata(metadata: bytes, requested_indexes=None) -> dict:
     }
 
 
-def correlate_field_info_usage_tokens(metadata: bytes, encoded_tokens) -> dict:
+def correlate_field_info_usage_tokens(
+    metadata: bytes, encoded_tokens, elf: bytes | None = None
+) -> dict:
     """Correlate bounded FieldInfo usage tokens with v31 FieldRef coordinates.
 
     Raw encoded tokens are deliberately omitted from the result. Unresolved
@@ -152,6 +154,8 @@ def correlate_field_info_usage_tokens(metadata: bytes, encoded_tokens) -> dict:
     observations rather than being silently promoted to field references.
     """
     _offset, _size, field_ref_count = _checked_field_ref_section(metadata)
+    if elf is not None and type(elf) is not bytes:
+        raise FieldRefEvidenceError("native ELF must be exact immutable bytes")
     tokens = _validate_field_info_tokens(encoded_tokens)
     decoded_indexes = [
         decode_field_info_usage_index(token, METADATA_VERSION)
@@ -194,9 +198,46 @@ def correlate_field_info_usage_tokens(metadata: bytes, encoded_tokens) -> dict:
                 **records_by_index[field_ref_index],
             })
 
+    native_type_resolution = {"status": "not_requested"}
+    if elf is not None:
+        type_indexes = sorted({
+            records_by_index[index]["type_index"] for index in resolved_indexes
+        })
+        if type_indexes:
+            # Import lazily: the native callsite analyzer imports this module
+            # for FieldInfo correlation, so a top-level import would cycle.
+            from tools.il2cpp_default_value_evidence import (
+                DefaultValueEvidenceError,
+                resolve_native_type_codes,
+            )
+
+            try:
+                native_report = resolve_native_type_codes(elf, type_indexes)
+            except DefaultValueEvidenceError as exc:
+                raise FieldRefEvidenceError(
+                    "unable to resolve FieldRef TypeIndex values through the "
+                    "native IL2CPP registration table"
+                ) from exc
+            native_types = native_report["types"]
+            for reference in references:
+                if reference["status"] == "field_ref_coordinate_resolved":
+                    reference["native_type"] = native_types[reference["type_index"]]
+            native_type_resolution = {
+                "status": "resolved",
+                "type_table_count": native_report["type_table_count"],
+                "unique_type_index_count": len(type_indexes),
+            }
+        else:
+            native_type_resolution = {
+                "status": "no_resolved_field_refs",
+                "type_table_count": None,
+                "unique_type_index_count": 0,
+            }
+
     return {
         "metadata_version": METADATA_VERSION,
         "field_ref_count": field_ref_count,
+        "native_type_resolution": native_type_resolution,
         "encoded_token_count": len(tokens),
         "resolved_reference_count": len(tokens) - unresolved_count - out_of_range_count,
         "unique_resolved_field_ref_count": len(resolved_indexes),
@@ -207,7 +248,8 @@ def correlate_field_info_usage_tokens(metadata: bytes, encoded_tokens) -> dict:
         "interpretation": (
             "Static FieldInfo metadata-usage token to FieldRef table-coordinate "
             "correlation only. Unresolved tokens are not classified further. "
-            "This does not resolve native Il2CppType owners, prove a native "
+            "Optional native type categories are included only when an ELF "
+            "is supplied; this does not resolve managed owners, prove a native "
             "callsite or runtime field access, identify packet fields, establish "
             "serializer order, or demonstrate a wire contract or APK/server "
             "compatibility."
@@ -219,15 +261,37 @@ def inspect_apk(
     apk_path: str | Path,
     requested_indexes=None,
     encoded_field_info_tokens=None,
+    resolve_native_types: bool = False,
 ) -> dict:
-    """Inspect APK metadata and optionally correlate supplied FieldInfo tokens."""
+    """Inspect metadata and optionally join FieldInfo tokens to native types."""
     from tools.il2cpp_metadata_inventory import _read_metadata
 
+    if type(resolve_native_types) is not bool:
+        raise FieldRefEvidenceError(
+            "resolve_native_types must be a built-in boolean"
+        )
+    if resolve_native_types and encoded_field_info_tokens is None:
+        raise FieldRefEvidenceError(
+            "native type resolution requires FieldInfo usage tokens"
+        )
+
     metadata, apk_size, apk_sha256 = _read_metadata(Path(apk_path))
+    native_elf = None
+    if resolve_native_types:
+        from tools.il2cpp_network_callsite_evidence import _read_apk_members
+
+        second_digest, second_metadata, native_elf = _read_apk_members(
+            Path(apk_path), apk_sha256
+        )
+        if second_digest != apk_sha256 or second_metadata != metadata:
+            raise FieldRefEvidenceError(
+                "APK changed between metadata and native member reads"
+            )
+
     report = inspect_metadata(metadata, requested_indexes)
     if encoded_field_info_tokens is not None:
-        report["field_info_usage_correlation"] = (
-            correlate_field_info_usage_tokens(metadata, encoded_field_info_tokens)
+        report["field_info_usage_correlation"] = correlate_field_info_usage_tokens(
+            metadata, encoded_field_info_tokens, elf=native_elf
         )
     report.update({
         "apk_size_bytes": apk_size,
@@ -255,13 +319,23 @@ def main(argv=None) -> None:
         default=None,
         help="encoded FieldInfo usage token in decimal or 0x-prefixed hex (may repeat)",
     )
+    parser.add_argument(
+        "--resolve-native-types",
+        action="store_true",
+        help="resolve referenced FieldRef TypeIndexes through the ARM64 native type table",
+    )
     parser.add_argument("--output", help="optional local JSON report path")
     args = parser.parse_args(argv)
+    if args.resolve_native_types and not args.field_info_usage_token:
+        parser.error(
+            "--resolve-native-types requires at least one --field-info-usage-token"
+        )
     report = json.dumps(
         inspect_apk(
             args.apk,
             args.field_ref_index,
             args.field_info_usage_token,
+            resolve_native_types=args.resolve_native_types,
         ),
         indent=2,
         sort_keys=True,
