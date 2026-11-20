@@ -441,9 +441,10 @@ def summarize_control_flow_memory_base_provenance(
                     known_static_cell_derived_base_access_count += 1
                 matches_known_static_cell = None
                 if known_static_cells is not None:
-                    matches_known_static_cell = _memory_access_overlaps_known_static_cell(
-                        base_state, access, known_static_cells
-                    )
+                    if access["addressing_mode"] != "register_offset":
+                        matches_known_static_cell = _memory_access_overlaps_known_static_cell(
+                            base_state, access, known_static_cells
+                        )
                     if matches_known_static_cell:
                         known_static_cell_match_count += 1
                         if access["operation"] == "load":
