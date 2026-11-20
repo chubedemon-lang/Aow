@@ -684,3 +684,40 @@ flags, missing predicates, incompatible return edges, invalid resolved
 indirect-branch edges, and missing exit metadata. This is CFG consistency
 validation only; it does not evaluate branch predicates, select runtime paths,
 or establish AOW packet, handshake, login, or APK compatibility.
+
+
+## Authorized APK native callsite recheck — 2026-11-20
+
+The unchanged authorized APK was read in a private workspace and its SHA-256
+matched the established fingerprint. Fresh bounded metadata/codegen mapping and
+AArch64 disassembly were performed locally. No APK, metadata, native library,
+raw address, instruction word, packet, capture, endpoint, or proprietary asset
+was added to this repository.
+
+The following observations are static callsite evidence only:
+
+- `Receiver.Cycle` contains two direct calls to
+  `SimpleDeserializer.deserializeInt`. The first returned value is compared
+  with the four-byte `HTTP` marker. On the non-marker branch, the value is
+  passed to `ClientNetworkStreamBuffer.SetDataAvailable`. This does not by
+  itself establish a complete frame length or header contract.
+- The second returned integer is passed as an argument to a native lookup
+  helper that is not uniquely mapped to a metadata method in this pass. Its
+  exact owner, key semantics, and runtime-selected meaning remain unresolved.
+- `Sender.Cycle` contains two direct calls to
+  `SimpleSerializer.serializeInt` and a direct
+  `ClientArrayUtils.ZipCompression` callsite. `Receiver.Cycle` contains a
+  direct `ClientArrayUtils.ZipDecompress` callsite. These paired method names
+  do not prove compression placement, algorithm, framing symmetry, or payload
+  boundaries.
+- `NetworkSettings` static initialization stores 2,097,152 in the backing
+  slot read and written by the `ReceiverUnzippedBufferMaxCapacity` accessors.
+  This is a buffer-capacity setting, not a packet-size, header-length, or
+  negotiated wire limit.
+
+Still unverified: complete framing, sender/receiver symmetry, compression
+placement and format, effective `HeaderLength` use, handshake sequence,
+LoginRequest field order, and unchanged-APK login. No authorized
+Client-to-Server runtime fixture or provenance-reviewed local runtime trace is
+available. The real AOW adapter remains disabled; no official endpoint was
+contacted.
