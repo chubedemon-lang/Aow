@@ -125,3 +125,29 @@ Regression tests use a hostile `str` subclass whose `__len__` raises. Public
 create/get/attack paths reject subclass identifiers, and receipt replay rejects
 a subclass without executing its length hook. This is a Python input-boundary
 hardening change only; it does not define AOW battle identifiers or wire fields.
+
+
+## Read-only combat persistence integrity audit — 2026-11-20
+
+`SqliteAuthorizedCombatService.verify_integrity()` audits the combat tables
+inside one pinned, read-only SQLite snapshot. It runs `quick_check` and
+`foreign_key_check`, validates each current battle snapshot, and checks every
+stored turn receipt for canonical payload/result JSON, row-to-receipt identity,
+owner, actor and revision agreement.
+
+For each battle, accepted receipt revisions must form one contiguous sequence
+from expected revision zero through the current snapshot revision. Duplicate
+or missing revisions, orphan receipts, non-canonical payloads, malformed
+results, and a latest receipt that differs from the current battle snapshot
+cause the audit to fail closed. The audit never repairs or deletes rows.
+
+The current schema does not persist a separate battle-creation baseline
+receipt. The report therefore includes `unanchored_battles`; the audit can
+verify receipt continuity and the latest persisted state, but cannot
+independently prove the original creation snapshot or replay the first turn
+from a durable baseline. This limitation is explicit rather than inferred.
+
+Regression tests cover a valid multi-turn chain, a missing revision receipt,
+a current-snapshot/receipt mismatch, non-canonical mutation payload JSON, and
+the idle-connection requirement. This is synthetic persistence integrity only;
+it does not define AOW combat state, wire messages, or gameplay compatibility.
