@@ -81,8 +81,11 @@ as a packet field. The analyzer now also carries a redacted origin bit from a
 load overlapping a known FieldInfo cell through supported 64-bit ADD/SUB and
 MOV operations, then marks later memory accesses whose base register derives
 from that loaded value. Calls, unknown instructions and ambiguous CFG joins
-drop this value-origin state. The report emits only a boolean per access and
-an aggregate count; it never emits the cell address or loaded value.
+drop this value-origin state. A load with writeback where the destination
+register aliases its base is treated conservatively as constrained-unpredictable:
+both address provenance and loaded-value origin for that register are dropped.
+The report emits only a boolean per access and an aggregate count; it never
+emits the cell address or loaded value.
 
 This remains a deliberately narrow static provenance chain: it does not
 decode the loaded contents, identify a managed declaring type or field name,
