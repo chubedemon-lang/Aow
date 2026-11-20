@@ -13,6 +13,16 @@ from server.sqlite_shop_store import ShopOffer, ShopPurchase
 from server.sqlite_session_store import SqliteSessionStore
 
 
+class HostileOffers(dict):
+    """A catalog mapping whose overridden items() hook must not run."""
+
+    items_calls = 0
+
+    def items(self):
+        type(self).items_calls += 1
+        raise AssertionError("offers subclass items hook was executed")
+
+
 class SqliteAuthorizedShopServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -241,6 +251,27 @@ class SqliteAuthorizedShopServiceTests(unittest.TestCase):
                 1, 1, "potion-pack", 1,
             )
 
+
+    def test_service_rejects_hostile_catalog_mapping_before_items_hook(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.execute(
+            "CREATE TABLE characters(id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL)"
+        )
+        HostileOffers.items_calls = 0
+        offers = HostileOffers({
+            "potion-pack": ShopOffer("potion-pack", "potion", 12)
+        })
+        with self.assertRaisesRegex(ValueError, "offer keys"):
+            SqliteAuthorizedShopService(connection, offers)
+        self.assertEqual(HostileOffers.items_calls, 0)
+        tables = {
+            row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        self.assertNotIn("durable_sessions", tables)
+        self.assertNotIn("shop_purchase_receipts", tables)
 
 if __name__ == "__main__":
     unittest.main()

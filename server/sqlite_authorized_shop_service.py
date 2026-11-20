@@ -50,8 +50,10 @@ class SqliteAuthorizedShopService:
         if (type(max_purchase_quantity) is not int
                 or not 1 <= max_purchase_quantity <= _MAX_PURCHASE_QUANTITY):
             raise ValueError("invalid maximum purchase quantity")
-        if not isinstance(offers, dict) or any(
-            not isinstance(offer, ShopOffer) or key != offer.offer_id
+        if type(offers) is not dict or any(
+            type(key) is not str
+            or type(offer) is not ShopOffer
+            or key != offer.offer_id
             for key, offer in offers.items()
         ):
             raise ValueError("offer keys must match valid shop offers")

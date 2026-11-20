@@ -19,6 +19,49 @@ from server.sqlite_shop_store import (
 )
 
 
+class HostileString(str):
+    """A string subclass whose Python-level validation hooks must not run."""
+
+    @staticmethod
+    def _blocked(*_args, **_kwargs):
+        raise AssertionError("string subclass hook was executed")
+
+    __len__ = _blocked
+    __bool__ = _blocked
+    __eq__ = _blocked
+    strip = _blocked
+    encode = _blocked
+
+
+class HostileOffers(dict):
+    """A catalog mapping whose overridden items() hook must not run."""
+
+    items_calls = 0
+
+    def items(self):
+        type(self).items_calls += 1
+        raise AssertionError("offers subclass items hook was executed")
+
+
+class HostileShopOffer(ShopOffer):
+    """An offer subclass whose fields must not be read during validation."""
+
+    def __getattribute__(self, name):
+        if name in {"offer_id", "item_id", "unit_price"}:
+            raise AssertionError("offer subclass field hook was executed")
+        return super().__getattribute__(name)
+
+
+class HostileConnection(sqlite3.Connection):
+    """A SQLite connection subclass whose execute override must not run."""
+
+    execute_calls = 0
+
+    def execute(self, *args, **kwargs):
+        type(self).execute_calls += 1
+        raise AssertionError("connection subclass execute hook was executed")
+
+
 class SqliteShopStoreTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -406,6 +449,49 @@ class SqliteShopStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ShopStoreError, "inventory receipt"):
             self.shop.purchase("hero", "tampered-inventory", 0, 0, "potion-pack", 1)
 
+
+    def test_shop_offer_rejects_string_subclasses_before_regex_validation(self):
+        with self.assertRaisesRegex(ShopStoreError, "invalid offer identifier"):
+            ShopOffer(HostileString("potion-pack"), "potion", 1)
+        with self.assertRaisesRegex(ShopStoreError, "invalid item identifier"):
+            ShopOffer("potion-pack", HostileString("potion"), 1)
+
+    def test_store_rejects_hostile_catalog_mapping_before_items_hook(self):
+        HostileOffers.items_calls = 0
+        offers = HostileOffers(self.offers)
+        with self.assertRaisesRegex(ShopStoreError, "offer keys"):
+            SqliteShopStore(self.db, offers)
+        self.assertEqual(HostileOffers.items_calls, 0)
+
+    def test_store_rejects_offer_subclass_before_reading_fields(self):
+        offer = object.__new__(HostileShopOffer)
+        object.__setattr__(offer, "offer_id", "potion-pack")
+        object.__setattr__(offer, "item_id", "potion")
+        object.__setattr__(offer, "unit_price", 12)
+        with self.assertRaisesRegex(ShopStoreError, "offer keys"):
+            SqliteShopStore(self.db, {"potion-pack": offer})
+
+    def test_store_rejects_connection_subclass_before_execute_hook(self):
+        HostileConnection.execute_calls = 0
+        connection = sqlite3.connect(
+            ":memory:", isolation_level=None, factory=HostileConnection
+        )
+        self.addCleanup(connection.close)
+        with self.assertRaisesRegex(TypeError, "sqlite connection required"):
+            SqliteShopStore(connection, {})
+        self.assertEqual(HostileConnection.execute_calls, 0)
+
+    def test_shop_identifiers_reject_string_subclasses_before_hooks(self):
+        with self.assertRaisesRegex(ShopStoreError, "invalid character identifier"):
+            SqliteShopStore._character_id(HostileString("hero"))
+        with self.assertRaisesRegex(ShopStoreError, "invalid request identifier"):
+            SqliteShopStore._request_id(HostileString("request-1"))
+        with self.assertRaisesRegex(ShopStoreError, "invalid offer identifier"):
+            self.shop.purchase(
+                "hero", "valid-request", 0, 0, HostileString("potion-pack"), 1
+            )
+        self.assertEqual(self.players.get("hero").currency, 100)
+        self.assertEqual(self.inventory.get("hero").items, ())
 
 if __name__ == "__main__":
     unittest.main()

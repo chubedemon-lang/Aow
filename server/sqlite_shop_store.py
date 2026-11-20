@@ -64,9 +64,9 @@ class ShopOffer:
     unit_price: int
 
     def __post_init__(self):
-        if not isinstance(self.offer_id, str) or not _ID_PATTERN.fullmatch(self.offer_id):
+        if type(self.offer_id) is not str or not _ID_PATTERN.fullmatch(self.offer_id):
             raise ShopStoreError("invalid offer identifier")
-        if not isinstance(self.item_id, str) or not _ID_PATTERN.fullmatch(self.item_id):
+        if type(self.item_id) is not str or not _ID_PATTERN.fullmatch(self.item_id):
             raise ShopStoreError("invalid item identifier")
         if type(self.unit_price) is not int or not 1 <= self.unit_price <= _MAX_CURRENCY:
             raise ShopStoreError("invalid unit price")
@@ -98,15 +98,17 @@ class SqliteShopStore:
     def __init__(self, connection: sqlite3.Connection,
                  offers: dict[str, ShopOffer], *,
                  max_purchase_quantity: int = 99):
-        if not isinstance(connection, sqlite3.Connection):
+        if type(connection) is not sqlite3.Connection:
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")
         if (type(max_purchase_quantity) is not int
                 or not 1 <= max_purchase_quantity <= _MAX_PURCHASE_QUANTITY):
             raise ShopStoreError("invalid maximum purchase quantity")
-        if not isinstance(offers, dict) or any(
-            not isinstance(offer, ShopOffer) or key != offer.offer_id
+        if type(offers) is not dict or any(
+            type(key) is not str
+            or type(offer) is not ShopOffer
+            or key != offer.offer_id
             for key, offer in offers.items()
         ):
             raise ShopStoreError("offer keys must match valid offer IDs")
@@ -134,14 +136,14 @@ class SqliteShopStore:
 
     @staticmethod
     def _character_id(value):
-        if (not isinstance(value, str) or not value
+        if (type(value) is not str or not value
                 or len(value) > 128 or value != value.strip()):
             raise ShopStoreError("invalid character identifier")
         return value
 
     @staticmethod
     def _request_id(value):
-        if (not isinstance(value, str) or not value
+        if (type(value) is not str or not value
                 or len(value) > 128 or value != value.strip()):
             raise ShopStoreError("invalid request identifier")
         return value
@@ -218,7 +220,7 @@ class SqliteShopStore:
         quantity = value["quantity"]
         total = value["total"]
         if (character_id != expected_character_id
-                or not isinstance(offer_id, str)
+                or type(offer_id) is not str
                 or not _ID_PATTERN.fullmatch(offer_id)
                 or offer_id != expected_offer_id
                 or type(quantity) is not int
@@ -549,7 +551,7 @@ class SqliteShopStore:
         )
         if type(quantity) is not int or not 1 <= quantity <= self.max_purchase_quantity:
             raise ShopStoreError("invalid purchase quantity")
-        if not isinstance(offer_id, str) or not _ID_PATTERN.fullmatch(offer_id):
+        if type(offer_id) is not str or not _ID_PATTERN.fullmatch(offer_id):
             raise ShopStoreError("invalid offer identifier")
         # The idempotency payload records caller intent, not mutable catalog
         # price data. A retry must replay the original receipt even if an offer
