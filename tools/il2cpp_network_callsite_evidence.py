@@ -551,6 +551,10 @@ def inspect_apk(
     apk_path, expected_sha256=None, resolve_fieldref_native_types=False
 ):
     """Read bounded APK members and optionally resolve FieldRef type categories."""
+    if type(resolve_fieldref_native_types) is not bool:
+        raise CodegenInventoryError(
+            "resolve_fieldref_native_types must be a built-in boolean"
+        )
     digest, metadata, elf = _read_apk_members(apk_path, expected_sha256)
     return inspect_bytes(
         metadata, elf, digest,
