@@ -37,6 +37,13 @@ one unambiguous username match before calling
 `SqliteSessionStore.issue_in_transaction`. Credential recheck and durable
 session insertion commit together.
 
+The public enrollment and authentication methods own their SQLite write
+transactions. They reject an already-active caller transaction before running
+password KDF work, invoking the optional rate limiter, or performing account
+lookups. Do not call these public methods inside a larger caller-owned
+transaction; use explicitly transaction-scoped primitives where composition
+is required.
+
 The returned opaque token is shown once; only its SHA-256 digest is stored in
 `durable_sessions`. Do not log, serialize, or commit the token.
 
