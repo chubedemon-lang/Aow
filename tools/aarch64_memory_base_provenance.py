@@ -145,8 +145,9 @@ def _validate_known_static_cells(known_static_cells):
 
 
 def _memory_access_overlaps_known_static_cell(base_state, access, known_static_cells):
-    if (base_state is None or base_state[1] is None
-            or type(access.get("byte_offset")) is not int):
+    if base_state is None or base_state[1] is None:
+        return False
+    if type(access.get("byte_offset")) is not int:
         return None
     effective_address = base_state[1] + access["byte_offset"]
     access_end = effective_address + access["access_bytes"]
