@@ -77,10 +77,12 @@ per-access boolean and aggregate total, load, and store counts; no cell address
 is emitted. Counts cover every reachable decoded access even when the bounded
 per-access observation list is truncated. A load/store overlap is a static
 instruction-to-cell observation, not proof that the loaded value is consumed
-as a packet field. The analyzer now also carries a redacted origin bit from a
-load overlapping a known FieldInfo cell through supported 64-bit ADD/SUB and
-MOV operations, then marks later memory accesses whose base register derives
-from that loaded value. Calls, unknown instructions and ambiguous CFG joins
+as a packet field. The analyzer now also carries a redacted origin bit only from
+an exact 64-bit load beginning at a known eight-byte FieldInfo cell. Partial-width
+loads and loads that merely overlap the cell remain visible in the broad overlap
+counts but do not seed value-origin provenance. The origin bit is carried through
+supported 64-bit ADD/SUB and MOV operations, then later memory accesses whose
+base register derives from that loaded value are marked. Calls, unknown instructions and ambiguous CFG joins
 drop this value-origin state. The memory-access decoder rejects load-writeback
 encodings whose destination aliases the base because their architectural result
 is constrained-unpredictable; the provenance pass consequently treats such an
@@ -747,3 +749,19 @@ LoginRequest field order, and unchanged-APK login. No authorized
 Client-to-Server runtime fixture or provenance-reviewed local runtime trace is
 available. The real AOW adapter remains disabled; no official endpoint was
 contacted.
+
+
+## Exact-width FieldInfo value-origin seed — tooling only
+
+The static-cell value-origin pass now seeds provenance only when a supported
+64-bit load begins exactly at the start of a known eight-byte FieldInfo cell.
+A 32-bit load from the cell, or an eight-byte load beginning inside the cell,
+still counts as an overlapping memory access but is not treated as the complete
+cell value. The redacted report exposes a separate
+`known_static_cell_full_width_load_match_count` so broad overlap counts remain
+distinct from exact value-origin seeds.
+
+Synthetic instruction-vector tests cover both rejected partial cases and the
+accepted exact-width case. This narrows a static provenance heuristic; it does
+not decode the loaded value, identify a managed field, prove use as a serializer
+argument, or establish runtime execution or packet semantics.

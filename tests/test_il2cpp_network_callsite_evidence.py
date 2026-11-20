@@ -226,13 +226,13 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
             | 8
         )
         add_x8_x8_0x70 = 0x91000000 | (0x70 << 10) | (8 << 5) | 8
-        ldr_w9_x8 = 0xB9400000 | (8 << 5) | 9
+        ldr_x9_x8 = 0xF9400000 | (8 << 5) | 9
         elf = make_elf(
             1,
             text_words=(
                 adrp_x8,
                 add_x8_x8_0x70,
-                ldr_w9_x8,
+                ldr_x9_x8,
                 0xF9400000 | (9 << 5) | 10,  # LDR X10, [X9]
             ),
             include_native_type_table=True,
@@ -249,6 +249,9 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         self.assertEqual(provenance["known_static_cell_match_count"], 1)
         self.assertEqual(provenance["known_static_cell_load_match_count"], 1)
         self.assertEqual(provenance["known_static_cell_store_match_count"], 0)
+        self.assertEqual(
+            provenance["known_static_cell_full_width_load_match_count"], 1
+        )
         self.assertEqual(
             provenance["known_static_cell_derived_base_access_count"], 1
         )

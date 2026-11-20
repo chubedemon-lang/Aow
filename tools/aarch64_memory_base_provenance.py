@@ -161,6 +161,24 @@ def _memory_access_overlaps_known_static_cell(base_state, access, known_static_c
         and known_static_cells[candidate_index] + 8 > effective_address
     )
 
+def _load_exactly_matches_known_static_cell(base_state, access, known_static_cells):
+    """Return true only for an exact 64-bit load from a known eight-byte cell."""
+    if (
+        access["operation"] != "load"
+        or access["access_bytes"] != 8
+        or base_state is None
+        or base_state[1] is None
+    ):
+        return False
+    effective_address = base_state[1] + access["byte_offset"]
+    if not 0 <= effective_address <= _U64_MAX - 7:
+        return False
+    candidate_index = bisect_right(known_static_cells, effective_address) - 1
+    return (
+        candidate_index >= 0
+        and known_static_cells[candidate_index] == effective_address
+    )
+
 
 def summarize_control_flow_memory_base_provenance(
     code, start_va, *, relocation_targets=None, max_accesses=128,
@@ -228,6 +246,7 @@ def summarize_control_flow_memory_base_provenance(
     known_static_cell_match_count = 0
     known_static_cell_load_match_count = 0
     known_static_cell_store_match_count = 0
+    known_static_cell_full_width_load_match_count = 0
     known_static_cell_derived_base_access_count = 0
 
     for block_index, (block_start, block_end) in enumerate(blocks):
@@ -443,8 +462,14 @@ def summarize_control_flow_memory_base_provenance(
 
                 if access["operation"] == "load" and target != 31:
                     registers.pop(target, None)
-                    if (known_static_cells is not None
-                            and matches_known_static_cell):
+                    exact_static_cell_load = (
+                        known_static_cells is not None
+                        and _load_exactly_matches_known_static_cell(
+                            base_state, access, known_static_cells
+                        )
+                    )
+                    if exact_static_cell_load:
+                        known_static_cell_full_width_load_match_count += 1
                         static_cell_value_origins[target] = True
                     else:
                         static_cell_value_origins.pop(target, None)
@@ -522,6 +547,9 @@ def summarize_control_flow_memory_base_provenance(
         result["known_static_cell_match_count"] = known_static_cell_match_count
         result["known_static_cell_load_match_count"] = known_static_cell_load_match_count
         result["known_static_cell_store_match_count"] = known_static_cell_store_match_count
+        result["known_static_cell_full_width_load_match_count"] = (
+            known_static_cell_full_width_load_match_count
+        )
         result["known_static_cell_derived_base_access_count"] = (
             known_static_cell_derived_base_access_count
         )
