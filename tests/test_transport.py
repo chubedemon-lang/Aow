@@ -1,7 +1,14 @@
 """Transport boundary tests use a synthetic codec only, never APK claims."""
 import unittest
 
-from server.transport import ProtocolEvidence, TransportAdapter, UnverifiedProtocolError
+from server.protocol_evidence_registry import Evidence
+from server.protocol_evidence_gates import STAGES, evidence_record_digest
+from server.transport import (
+    EvidenceGatedTransportAdapter,
+    ProtocolEvidence,
+    TransportAdapter,
+    UnverifiedProtocolError,
+)
 
 
 class HostileBytes(bytes):
@@ -169,6 +176,156 @@ class TransportTests(unittest.TestCase):
             TransportAdapter(
                 evidence, decode=lambda raw: raw, encode=lambda message: message
             )
+
+
+
+def authorized_evidence(topic, artifact_sha256="a" * 64, method="authorized_local_test"):
+    return Evidence(
+        topic,
+        artifact_sha256,
+        "authorized local client observation for " + topic,
+        method,
+        True,
+        "tests/test_transport.py",
+        "python -m unittest discover -s tests -p test_transport.py -v",
+    )
+
+
+def approved_digests(records):
+    return tuple(evidence_record_digest(record) for record in records)
+
+
+class EvidenceGatedTransportTests(unittest.TestCase):
+    def make_adapter(self, records, *, required_through="serialization"):
+        return EvidenceGatedTransportAdapter(
+            records=records,
+            artifact_sha256="a" * 64,
+            approved_evidence_digests=approved_digests(records),
+            decode=lambda raw: raw.decode("ascii"),
+            encode=lambda message: message.encode("ascii"),
+            required_through=required_through,
+        )
+
+    def test_empty_evidence_blocks_with_complete_required_prefix(self):
+        with self.assertRaises(UnverifiedProtocolError) as caught:
+            self.make_adapter([])
+        self.assertEqual(
+            caught.exception.missing_stages,
+            ("transport", "framing", "serialization"),
+        )
+
+    def test_static_apk_analysis_cannot_unlock_transport_codec(self):
+        records = [
+            authorized_evidence(stage, method="il2cpp_offline")
+            for stage in ("transport", "framing", "serialization")
+        ]
+        with self.assertRaises(UnverifiedProtocolError) as caught:
+            self.make_adapter(records)
+        self.assertEqual(
+            caught.exception.missing_stages,
+            ("transport", "framing", "serialization"),
+        )
+
+    def test_partial_approved_prefix_reports_only_missing_stages(self):
+        records = [
+            authorized_evidence("transport"),
+            authorized_evidence("framing"),
+        ]
+        with self.assertRaises(UnverifiedProtocolError) as caught:
+            self.make_adapter(records)
+        self.assertEqual(caught.exception.missing_stages, ("serialization",))
+
+    def test_default_gate_requires_transport_framing_and_serialization(self):
+        records = [
+            authorized_evidence("transport"),
+            authorized_evidence("framing"),
+            authorized_evidence("serialization"),
+            authorized_evidence("handshake"),
+        ]
+        adapter = self.make_adapter(records)
+        self.assertTrue(adapter.configured)
+        self.assertEqual(adapter.required_through, "serialization")
+        self.assertEqual(adapter.artifact_sha256, "a" * 64)
+        self.assertEqual(
+            tuple(item.stage for item in adapter.gate_results),
+            ("transport", "framing", "serialization"),
+        )
+        self.assertEqual(adapter.receive(b"ping"), "ping")
+        self.assertEqual(adapter.send("pong"), b"pong")
+
+    def test_login_gate_cannot_skip_handshake(self):
+        records = [
+            authorized_evidence(stage)
+            for stage in ("transport", "framing", "serialization", "login")
+        ]
+        with self.assertRaises(UnverifiedProtocolError) as caught:
+            self.make_adapter(records, required_through="login")
+        self.assertEqual(caught.exception.missing_stages, ("handshake",))
+
+    def test_login_gate_requires_the_complete_ordered_prefix(self):
+        records = [
+            authorized_evidence(stage)
+            for stage in ("transport", "framing", "serialization", "handshake", "login")
+        ]
+        adapter = self.make_adapter(records, required_through="login")
+        self.assertTrue(adapter.configured)
+        self.assertEqual(adapter.required_through, "login")
+        self.assertEqual(
+            tuple(item.stage for item in adapter.gate_results),
+            ("transport", "framing", "serialization", "handshake", "login"),
+        )
+        self.assertEqual(
+            tuple(record.topic for record in adapter.evidence_records),
+            ("transport", "framing", "serialization", "handshake", "login"),
+        )
+
+    def test_mixed_artifact_evidence_cannot_fill_a_missing_stage(self):
+        records = [
+            authorized_evidence("transport", artifact_sha256="a" * 64),
+            authorized_evidence("framing", artifact_sha256="a" * 64),
+            authorized_evidence("serialization", artifact_sha256="b" * 64),
+        ]
+        with self.assertRaises(UnverifiedProtocolError) as caught:
+            self.make_adapter(records)
+        self.assertEqual(caught.exception.missing_stages, ("serialization",))
+
+    def test_unapproved_record_does_not_unlock_a_stage(self):
+        records = [
+            authorized_evidence("transport"),
+            authorized_evidence("framing"),
+            authorized_evidence("serialization"),
+        ]
+        approved = approved_digests(records[:2])
+        with self.assertRaises(UnverifiedProtocolError) as caught:
+            EvidenceGatedTransportAdapter(
+                records=records,
+                artifact_sha256="a" * 64,
+                approved_evidence_digests=approved,
+                decode=lambda raw: raw,
+                encode=lambda message: message,
+            )
+        self.assertEqual(caught.exception.missing_stages, ("serialization",))
+
+    def test_invalid_required_stage_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "known protocol stage"):
+            self.make_adapter([], required_through="wire_magic")
+
+    def test_invalid_evidence_collection_is_rejected_before_iteration(self):
+        class HostileList(list):
+            def __iter__(self):
+                raise AssertionError("custom collection iterator executed")
+
+        with self.assertRaisesRegex(ValueError, "built-in list or tuple"):
+            self.make_adapter(HostileList())
+
+    def test_gated_adapter_still_rejects_non_bytes_payload(self):
+        records = [
+            authorized_evidence(stage)
+            for stage in ("transport", "framing", "serialization")
+        ]
+        adapter = self.make_adapter(records)
+        with self.assertRaises(TypeError):
+            adapter.receive(bytearray(b"ping"))
 
 
 if __name__ == "__main__":
