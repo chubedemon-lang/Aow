@@ -9,6 +9,7 @@ from tools.aarch64_memory_access_evidence import (
     decode_integer_immediate_memory_access,
     decode_integer_memory_access,
     decode_register_offset_memory_access,
+    decode_integer_pair_memory_access,
     summarize_unsigned_immediate_memory_accesses,
     summarize_control_flow_memory_accesses,
 )
@@ -51,6 +52,21 @@ def encode_register_offset(*, size, opc, base, target, index, option=3, scaled=F
         | (index << 16)
         | (option << 13)
         | (int(scaled) << 12)
+        | (base << 5)
+        | target
+    )
+
+
+def encode_pair_access(*, element_bytes, load, base, target, target2, immediate, mode=2):
+    """Encode a 32-bit or 64-bit integer LDP/STP addressing form."""
+    opc = 0 if element_bytes == 4 else 2
+    return (
+        (opc << 30)
+        | 0x28000000
+        | (mode << 23)
+        | (int(load) << 22)
+        | ((immediate & 0x7F) << 15)
+        | (target2 << 10)
         | (base << 5)
         | target
     )
@@ -243,6 +259,69 @@ class AArch64MemoryAccessEvidenceTests(unittest.TestCase):
             [item["base_update_bytes"] for item in summary["memory_accesses"]],
             [0, 0, -8],
         )
+
+    def test_decodes_integer_pair_load_store_and_writeback_modes(self):
+        cases = (
+            (0xA9BF7BFD, "store", 16, 8, "x29", "x30", -16, "pre_index", -16),
+            (0xA8C17BFD, "load", 16, 8, "x29", "x30", 0, "post_index", 16),
+            (0xA90153F3, "store", 16, 8, "x19", "x20", 16, "signed_offset", 0),
+            (
+                encode_pair_access(
+                    element_bytes=4, load=True, base=1, target=2,
+                    target2=3, immediate=-1, mode=2,
+                ),
+                "load", 8, 4, "w2", "w3", -8, "signed_offset", 0,
+            ),
+        )
+        for word, operation, total_bytes, element_bytes, target, target2, offset, mode, update in cases:
+            with self.subTest(word=hex(word)):
+                result = decode_integer_pair_memory_access(word)
+                self.assertEqual(result, {
+                    "operation": operation,
+                    "access_bytes": total_bytes,
+                    "element_bytes": element_bytes,
+                    "access_count": 2,
+                    "base_register": "sp" if ((word >> 5) & 31) == 31 else f"x{(word >> 5) & 31}",
+                    "target_register": target,
+                    "target_register2": target2,
+                    "byte_offset": offset,
+                    "addressing_mode": mode,
+                    "base_update_bytes": update,
+                })
+                self.assertEqual(decode_integer_memory_access(word), result)
+                self.assertIsNone(decode_integer_immediate_memory_access(word))
+
+    def test_pair_decoder_rejects_non_temporal_simd_ldpsw_reserved_and_alias_forms(self):
+        rejected = (
+            encode_pair_access(
+                element_bytes=8, load=True, base=1, target=2,
+                target2=3, immediate=0, mode=0,
+            ),
+            encode_pair_access(
+                element_bytes=8, load=True, base=1, target=2,
+                target2=3, immediate=0,
+            ) | (1 << 26),
+            0x69400000,  # LDPSW signed-extending pair form
+            0xE9400000,  # reserved pair opc
+            encode_pair_access(
+                element_bytes=8, load=True, base=2, target=2,
+                target2=3, immediate=1, mode=3,
+            ),
+            encode_pair_access(
+                element_bytes=8, load=True, base=3, target=2,
+                target2=3, immediate=1, mode=1,
+            ),
+            encode_pair_access(
+                element_bytes=8, load=True, base=1, target=2,
+                target2=2, immediate=0, mode=2,
+            ),
+            True,
+            -1,
+            1 << 32,
+        )
+        for word in rejected:
+            with self.subTest(word=word):
+                self.assertIsNone(decode_integer_pair_memory_access(word))
 
     def test_summary_preserves_instruction_order_and_caps_report(self):
         words = (
