@@ -5,6 +5,7 @@ Tracks ADR/ADRP/ADD/SUB/MOV, stack-pointer-derived addresses and relocation-back
 addresses are used internally and never emitted. This is static evidence,
 not a runtime trace or field resolver.
 """
+from bisect import bisect_right
 import struct
 
 from tools.aarch64_call_argument_evidence import (
@@ -126,8 +127,44 @@ def _validate_relocation_targets(relocation_targets):
     return relocation_targets
 
 
+def _validate_known_static_cells(known_static_cells):
+    if known_static_cells is None:
+        return None
+    if type(known_static_cells) not in (tuple, list):
+        raise ValueError("known_static_cells must be a built-in tuple or list")
+    if len(known_static_cells) > _MAX_RELOCATION_TARGETS:
+        raise ValueError("known static cell list exceeds the analysis limit")
+    if any(
+        type(address) is not int or not 0 <= address <= _U64_MAX - 7
+        for address in known_static_cells
+    ):
+        raise ValueError("known static cells must be valid unsigned 64-bit 8-byte ranges")
+    if len(set(known_static_cells)) != len(known_static_cells):
+        raise ValueError("known_static_cells must not contain duplicates")
+    return tuple(sorted(known_static_cells))
+
+
+def _memory_access_overlaps_known_static_cell(base_state, access, known_static_cells):
+    if base_state is None or base_state[1] is None:
+        return False
+    effective_address = base_state[1] + access["byte_offset"]
+    access_end = effective_address + access["access_bytes"]
+    if (
+        not 0 <= effective_address <= _U64_MAX
+        or access_end > _U64_MAX + 1
+        or access_end <= effective_address
+    ):
+        return False
+    candidate_index = bisect_right(known_static_cells, access_end - 1) - 1
+    return (
+        candidate_index >= 0
+        and known_static_cells[candidate_index] + 8 > effective_address
+    )
+
+
 def summarize_control_flow_memory_base_provenance(
     code, start_va, *, relocation_targets=None, max_accesses=128,
+    known_static_cells=None,
 ):
     """Summarize memory-access base origins without emitting absolute addresses.
 
@@ -149,6 +186,7 @@ def summarize_control_flow_memory_base_provenance(
             or not 1 <= max_accesses <= _MAX_REPORTED_ACCESSES):
         raise ValueError("max_accesses must be an integer in range 1..512")
     relocations = _validate_relocation_targets(relocation_targets)
+    known_static_cells = _validate_known_static_cells(known_static_cells)
 
     instruction_count = len(code) // 4
     words = list(struct.unpack("<" + "I" * instruction_count, code)) if code else []
@@ -184,6 +222,7 @@ def summarize_control_flow_memory_base_provenance(
     )
     reachable_accesses = 0
     known_provenance_accesses = 0
+    known_static_cell_match_count = 0
 
     for block_index, (block_start, block_end) in enumerate(blocks):
         if block_index not in reachable:
@@ -330,8 +369,15 @@ def summarize_control_flow_memory_base_provenance(
                 reachable_accesses += 1
                 if provenance != "unknown":
                     known_provenance_accesses += 1
+                matches_known_static_cell = None
+                if known_static_cells is not None:
+                    matches_known_static_cell = _memory_access_overlaps_known_static_cell(
+                        base_state, access, known_static_cells
+                    )
+                    if matches_known_static_cell:
+                        known_static_cell_match_count += 1
                 if len(observations) < max_accesses:
-                    observations.append({
+                    observation = {
                         "instruction_index": instruction_index,
                         "operation": access["operation"],
                         "access_bytes": access["access_bytes"],
@@ -342,7 +388,10 @@ def summarize_control_flow_memory_base_provenance(
                         "base_provenance": provenance,
                         "base_definition_instruction_index": definition,
                         "base_derivation_depth": depth,
-                    })
+                    }
+                    if known_static_cells is not None:
+                        observation["matches_known_static_cell"] = matches_known_static_cell
+                    observations.append(observation)
 
                 if access["operation"] == "load" and target != 31:
                     registers.pop(target, None)
@@ -393,7 +442,7 @@ def summarize_control_flow_memory_base_provenance(
 
         outgoing_states[block_index] = registers
 
-    return {
+    result = {
         "analysis_kind": "bounded_cfg_memory_base_provenance",
         "instruction_count": instruction_count,
         "literal_load_count": total_literal_loads,
@@ -411,3 +460,6 @@ def summarize_control_flow_memory_base_provenance(
         "absolute_addresses_emitted": False,
         "raw_instructions_emitted": False,
     }
+    if known_static_cells is not None:
+        result["known_static_cell_match_count"] = known_static_cell_match_count
+    return result
