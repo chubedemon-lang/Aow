@@ -1221,6 +1221,163 @@ def _decode_aarch64_conditional_branch_condition(word):
     return None
 
 
+def _decode_aarch64_flag_setting_producer(word):
+    """Decode a narrow, adjacent AArch64 NZCV producer without evaluating flags.
+
+    Only ADDS/SUBS immediate and shifted-register forms are recognized. The
+    caller must separately establish that no non-NOP instruction intervenes
+    before B.cond. Numeric immediates are reduced to coarse classes.
+    """
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+
+    width_bits = 64 if word & (1 << 31) else 32
+    subtract = bool(word & (1 << 30))
+    sets_flags = bool(word & (1 << 29))
+    if not sets_flags:
+        return None
+
+    destination = word & 0x1F
+    source = (word >> 5) & 0x1F
+
+    # ADD/SUB (immediate): fixed opcode bits 28..23, with bit 23 reserved 0.
+    if (word & 0x1F800000) == 0x11000000:
+        immediate = (word >> 10) & 0xFFF
+        shifted = bool(word & (1 << 22))
+        effective_is_zero = immediate == 0
+        operation = (
+            ("cmp" if subtract else "cmn") if destination == 31
+            else ("subs" if subtract else "adds")
+        )
+        return {
+            "kind": operation + "_immediate",
+            "width_bits": width_bits,
+            "source_register_index": source,
+            "source_register_31_role": (
+                "stack_pointer" if source == 31 else "general_register"
+            ),
+            "destination_is_zero": destination == 31,
+            "immediate_class": (
+                "zero" if effective_is_zero else
+                "nonzero_shifted_12bit" if shifted else
+                "nonzero_12bit"
+            ),
+        }
+
+    # ADD/SUB (shifted register). ROR is reserved for this instruction family.
+    if (word & 0x1F200000) == 0x0B000000:
+        shift_code = (word >> 22) & 0x3
+        shift_amount = (word >> 10) & 0x3F
+        if shift_code == 3 or shift_amount >= width_bits:
+            return None
+        right = (word >> 16) & 0x1F
+        shift_name = ("lsl", "lsr", "asr")[shift_code]
+        operation = (
+            ("cmp" if subtract else "cmn") if destination == 31
+            else ("subs" if subtract else "adds")
+        )
+        return {
+            "kind": operation + "_shifted_register",
+            "width_bits": width_bits,
+            "left_register_index": source,
+            "right_register_index": right,
+            "destination_is_zero": destination == 31,
+            "shift_kind": shift_name,
+            "shift_amount": shift_amount,
+        }
+
+    return None
+
+
+def _find_adjacent_aarch64_flag_producer(code, block_start, branch_index):
+    """Find a supported NZCV producer immediately before B.cond, skipping NOPs."""
+    index = branch_index - 1
+    nop_count = 0
+    while index >= block_start:
+        word = struct.unpack_from("<I", code, index * 4)[0]
+        if word == 0xD503201F:
+            nop_count += 1
+            index -= 1
+            continue
+        producer = _decode_aarch64_flag_setting_producer(word)
+        if producer is None:
+            return None
+        return {
+            **producer,
+            "instruction_index": index,
+            "intervening_nop_count": nop_count,
+        }
+    return None
+
+
+def _validate_control_flow_flag_producer(producer):
+    """Validate a redacted, bounded NZCV-producer record."""
+    if type(producer) is not dict or any(type(key) is not str for key in producer):
+        raise ValueError("conditional branch flag producer must be a built-in dict")
+    kind = producer.get("kind")
+    common = {
+        "kind", "width_bits", "destination_is_zero",
+        "instruction_index", "intervening_nop_count",
+    }
+    if kind in {"cmp_immediate", "cmn_immediate", "adds_immediate", "subs_immediate"}:
+        expected = common | {
+            "source_register_index", "source_register_31_role", "immediate_class",
+        }
+        if set(producer) != expected:
+            raise ValueError("immediate flag producer fields are invalid")
+        source = producer.get("source_register_index")
+        role = producer.get("source_register_31_role")
+        immediate_class = producer.get("immediate_class")
+        if (
+            type(source) is not int or not 0 <= source <= 31
+            or type(role) is not str
+            or role != ("stack_pointer" if source == 31 else "general_register")
+            or type(immediate_class) is not str
+            or immediate_class not in {
+                "zero", "nonzero_12bit", "nonzero_shifted_12bit",
+            }
+        ):
+            raise ValueError("immediate flag producer operands are invalid")
+    elif kind in {
+        "cmp_shifted_register", "cmn_shifted_register",
+        "adds_shifted_register", "subs_shifted_register",
+    }:
+        expected = common | {
+            "left_register_index", "right_register_index",
+            "shift_kind", "shift_amount",
+        }
+        if set(producer) != expected:
+            raise ValueError("shifted-register flag producer fields are invalid")
+        if (
+            type(producer.get("left_register_index")) is not int
+            or not 0 <= producer["left_register_index"] <= 31
+            or type(producer.get("right_register_index")) is not int
+            or not 0 <= producer["right_register_index"] <= 31
+            or type(producer.get("shift_kind")) is not str
+            or producer["shift_kind"] not in {"lsl", "lsr", "asr"}
+            or type(producer.get("shift_amount")) is not int
+            or not 0 <= producer["shift_amount"] < producer.get("width_bits", 0)
+        ):
+            raise ValueError("shifted-register flag producer operands are invalid")
+    else:
+        raise ValueError("conditional branch flag producer kind is invalid")
+
+    width = producer.get("width_bits")
+    destination_is_zero = producer.get("destination_is_zero")
+    instruction_index = producer.get("instruction_index")
+    nop_count = producer.get("intervening_nop_count")
+    compare_alias = kind.startswith(("cmp_", "cmn_"))
+    if (
+        type(width) is not int or width not in (32, 64)
+        or type(destination_is_zero) is not bool
+        or destination_is_zero != compare_alias
+        or type(instruction_index) is not int or instruction_index < 0
+        or type(nop_count) is not int or nop_count < 0
+    ):
+        raise ValueError("conditional branch flag producer metadata is invalid")
+    return dict(producer)
+
+
 def _validate_control_flow_branch_condition(condition):
     """Validate a redacted conditional-branch predicate object."""
     if type(condition) is not dict or any(type(key) is not str for key in condition):
@@ -1536,6 +1693,12 @@ def _summarize_control_flow_serializer_helper_blocks(
             condition = terminator.get("condition")
             if condition is not None:
                 block["terminator_condition"] = dict(condition)
+                if condition.get("kind") == "b_cond":
+                    flag_producer = _find_adjacent_aarch64_flag_producer(
+                        code, block["instruction_start"], block_end - 1
+                    )
+                    if flag_producer is not None:
+                        block["terminator_flag_producer"] = flag_producer
         block["external_branch_exit"] = bool(
             terminator is not None
             and terminator["conditional"]
@@ -1916,6 +2079,26 @@ def _summarize_control_flow_helper_paths(
             )
             if block.get("terminator") != condition["kind"]:
                 raise ValueError("conditional branch predicate does not match terminator")
+        if "terminator_flag_producer" in block:
+            producer = _validate_control_flow_flag_producer(
+                block["terminator_flag_producer"]
+            )
+            if (
+                condition.get("kind") != "b_cond"
+                or not has_instruction_range
+            ):
+                raise ValueError(
+                    "NZCV producers require a ranged B.cond terminator"
+                )
+            branch_index = instruction_start + instruction_count - 1
+            if (
+                producer["instruction_index"]
+                + producer["intervening_nop_count"] + 1 != branch_index
+                or producer["instruction_index"] < instruction_start
+            ):
+                raise ValueError(
+                    "NZCV producer is not adjacent to its B.cond terminator"
+                )
         raw_edges = block.get("successor_edges")
         if raw_edges is None:
             # Accept older synthetic summaries, but mark their edge semantics
@@ -2129,6 +2312,9 @@ def _summarize_control_flow_helper_paths(
                 "condition": dict(condition),
             }
             source_block = by_index[source]
+            flag_producer = source_block.get("terminator_flag_producer")
+            if flag_producer is not None:
+                record["flag_producer"] = dict(flag_producer)
             instruction_start = source_block.get("instruction_start")
             instruction_count = source_block.get("instruction_count")
             if (
