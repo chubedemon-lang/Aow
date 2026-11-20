@@ -101,3 +101,15 @@ The audit also rejects duplicate token digests in legacy tables that lack the
 current primary-key constraint. Duplicate digests could make one bearer token
 resolve ambiguously to more than one account; the audit reports corruption and
 leaves all rows untouched.
+
+## Caller-owned transaction rejection
+
+Public operations that open and commit their own transaction (issue,
+resolve, revoke, revoke_all_for_account, and purge_expired) reject a
+connection that is already inside a caller-owned transaction. They raise
+ValueError before issuing SQL, leaving the caller's transaction and pending
+writes untouched. Use issue_in_transaction or resolve_in_transaction
+when composing work inside a caller-owned transaction; use
+authorized_transaction when the authorization check and protected mutation
+must share one BEGIN IMMEDIATE boundary. Integrity audits also require an
+idle connection and remain read-only.

@@ -797,5 +797,56 @@ class SqliteSessionStoreTests(unittest.TestCase):
             2,
         )
 
+
+    def _assert_self_managed_operation_rejects_caller_transaction(self, operation):
+        self.db.execute("CREATE TABLE caller_state (value INTEGER NOT NULL)")
+        self.db.execute("BEGIN")
+        self.db.execute("INSERT INTO caller_state VALUES (1)")
+
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            operation()
+
+        self.assertTrue(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT value FROM caller_state").fetchone(),
+            (1,),
+        )
+        self.db.rollback()
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM caller_state").fetchone()[0],
+            0,
+        )
+
+    def test_issue_rejects_caller_owned_transaction_without_taking_it_over(self):
+        self._assert_self_managed_operation_rejects_caller_transaction(
+            lambda: self.store.issue(301)
+        )
+
+    def test_resolve_rejects_caller_owned_transaction_without_taking_it_over(self):
+        token = self.store.issue(302)
+        self._assert_self_managed_operation_rejects_caller_transaction(
+            lambda: self.store.resolve(token)
+        )
+
+    def test_revoke_rejects_caller_owned_transaction_without_taking_it_over(self):
+        token = self.store.issue(303)
+        self._assert_self_managed_operation_rejects_caller_transaction(
+            lambda: self.store.revoke(token)
+        )
+
+    def test_revoke_all_rejects_caller_owned_transaction_without_taking_it_over(self):
+        self.store.issue(304)
+        self._assert_self_managed_operation_rejects_caller_transaction(
+            lambda: self.store.revoke_all_for_account(304)
+        )
+
+    def test_purge_rejects_caller_owned_transaction_without_taking_it_over(self):
+        self.store.issue(305)
+        self._assert_self_managed_operation_rejects_caller_transaction(
+            lambda: self.store.purge_expired(batch_size=1)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
