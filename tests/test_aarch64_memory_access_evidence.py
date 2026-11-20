@@ -7,6 +7,8 @@ from tools.aarch64_memory_access_evidence import (
     decode_unsigned_immediate_memory_access,
     decode_unscaled_immediate_memory_access,
     decode_integer_immediate_memory_access,
+    decode_integer_memory_access,
+    decode_register_offset_memory_access,
     summarize_unsigned_immediate_memory_accesses,
     summarize_control_flow_memory_accesses,
 )
@@ -33,6 +35,22 @@ def encode_unscaled_access(*, size, opc, base, target, immediate, mode=0):
         | (opc << 22)
         | ((immediate & 0x1FF) << 12)
         | (mode << 10)
+        | (base << 5)
+        | target
+    )
+
+
+
+
+def encode_register_offset(*, size, opc, base, target, index, option=3, scaled=False):
+    """Encode one integer register-offset LDR/STR instruction."""
+    return (
+        (size << 30)
+        | 0x38200800
+        | (opc << 22)
+        | (index << 16)
+        | (option << 13)
+        | (int(scaled) << 12)
         | (base << 5)
         | target
     )
@@ -93,6 +111,61 @@ class AArch64MemoryAccessEvidenceTests(unittest.TestCase):
         for word in rejected:
             with self.subTest(word=word):
                 self.assertIsNone(decode_unsigned_immediate_memory_access(word))
+
+    def test_decodes_register_offset_loads_and_stores(self):
+        cases = (
+            (0xF8626820, "load", 8, "x0", "x2", "lsl", 0),
+            (0xF8657883, "load", 8, "x3", "x5", "lsl", 3),
+            (0xB86858E6, "load", 4, "w6", "w8", "uxtw", 2),
+            (0x386BC949, "load", 1, "w9", "w11", "sxtw", 0),
+            (0xF82E79AC, "store", 8, "x12", "x14", "lsl", 3),
+            (0xF871FA0F, "load", 8, "x15", "x17", "sxtx", 3),
+        )
+        for word, operation, width, target, index, extend, shift in cases:
+            with self.subTest(word=hex(word)):
+                result = decode_register_offset_memory_access(word)
+                self.assertEqual(result["operation"], operation)
+                self.assertEqual(result["access_bytes"], width)
+                self.assertEqual(result["target_register"], target)
+                self.assertEqual(result["index_register"], index)
+                self.assertEqual(result["index_extend"], extend)
+                self.assertEqual(result["scale_shift"], shift)
+                self.assertIsNone(result["byte_offset"])
+                self.assertEqual(result["addressing_mode"], "register_offset")
+                self.assertEqual(result["base_update_bytes"], 0)
+                self.assertEqual(decode_integer_memory_access(word), result)
+                self.assertIsNone(decode_integer_immediate_memory_access(word))
+
+    def test_register_offset_decoder_rejects_reserved_and_non_integer_forms(self):
+        rejected = (
+            encode_register_offset(
+                size=3, opc=1, base=1, target=0, index=2, option=0
+            ),
+            encode_register_offset(
+                size=3, opc=1, base=1, target=0, index=2, option=1
+            ),
+            encode_register_offset(
+                size=3, opc=1, base=1, target=0, index=2, option=4
+            ),
+            encode_register_offset(
+                size=3, opc=1, base=1, target=0, index=2, option=5
+            ),
+            encode_register_offset(
+                size=3, opc=2, base=1, target=0, index=2
+            ),
+            encode_register_offset(
+                size=3, opc=3, base=1, target=0, index=2
+            ),
+            encode_register_offset(
+                size=3, opc=1, base=1, target=0, index=2
+            ) | (1 << 26),
+            True,
+            -1,
+            1 << 32,
+        )
+        for word in rejected:
+            with self.subTest(word=word):
+                self.assertIsNone(decode_register_offset_memory_access(word))
 
     def test_decodes_signed_unscaled_and_pre_post_indexed_forms(self):
         cases = (
