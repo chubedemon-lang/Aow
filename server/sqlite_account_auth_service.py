@@ -108,6 +108,11 @@ class SqliteAccountAuthService:
             self.iterations, dklen=32,
         )
 
+    def _require_idle_connection(self):
+        """Reject public operations on a caller-owned SQLite transaction."""
+        if self.db.in_transaction:
+            raise ValueError("connection must not have an active transaction")
+
     @staticmethod
     def _username_is_valid(username):
         # Reject subclasses before len(), strip(), or encode() can dispatch
@@ -165,6 +170,7 @@ class SqliteAccountAuthService:
         registration endpoint. Password reset requires a separate verified
         administrative flow and is deliberately not provided here.
         """
+        self._require_idle_connection()
         if type(account_id) is not int or account_id < 1:
             raise ValueError("invalid account id")
         password_bytes, valid = self._password_material(password)
@@ -211,6 +217,7 @@ class SqliteAccountAuthService:
         The session token is returned once and only its SHA-256 digest is
         persisted by SqliteSessionStore.
         """
+        self._require_idle_connection()
         if self.rate_limiter is not None:
             self.rate_limiter.check_allowed(username)
 
