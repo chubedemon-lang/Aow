@@ -270,7 +270,7 @@ class AArch64MemoryAccessEvidenceTests(unittest.TestCase):
                     element_bytes=4, load=True, base=1, target=2,
                     target2=3, immediate=-1, mode=2,
                 ),
-                "load", 8, 4, "w2", "w3", -8, "signed_offset", 0,
+                "load", 8, 4, "w2", "w3", -4, "signed_offset", 0,
             ),
         )
         for word, operation, total_bytes, element_bytes, target, target2, offset, mode, update in cases:
