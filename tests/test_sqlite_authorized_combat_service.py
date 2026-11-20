@@ -642,7 +642,7 @@ class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
     def test_verify_integrity_requires_an_idle_connection(self):
         self.create_battle()
         self.db.execute("BEGIN")
-        with self.assertRaisesRegex(ValueError, "idle"):
+        with self.assertRaisesRegex(ValueError, "active transaction"):
             self.service.verify_integrity()
         self.db.rollback()
         self.assertEqual(
