@@ -29,3 +29,27 @@ Primitive serializer findings from the authorized offline APK pass are not by th
 The offline evidence metadata validator also rejects absolute POSIX paths (including POSIX double-slash roots), shell-home paths (`~/...` and `~\\...`), drive-letter paths, single-rooted Windows paths, UNC network-share paths, and parent-directory traversal using either slash style in public `source` and `observation` text. These can reveal usernames, private workspace layout, or locations of APKs and packet captures even when they contain no URL, host or credential. Sanitized repository-relative references such as `docs/PROTOCOL.md#framing` remain accepted. This is an additional conservative check, not a complete DLP scanner; keep private artifact paths and bytes out of public evidence records. Percent-encoded text is also screened after up to three URL-decoding rounds, including encoded separators, traversal segments, network locators, and credential hints. This bounded normalization is a metadata safeguard, not a general-purpose decoder or complete DLP scanner.
 
 **Registry summary fingerprint isolation:** the evidence registry refuses to aggregate observations when it contains multiple APK SHA-256 values unless the caller selects one explicitly. The returned topic counts then include only records for that selected artifact. This mirrors the ordered readiness gate and prevents evidence from different builds being combined in a summary. It is a bookkeeping safeguard, not a compatibility test.
+
+
+## Ordered codec activation wrapper
+
+`EvidenceGatedTransportAdapter` is the stricter wrapper for any future codec
+that is intended to consume client bytes. It requires an explicit APK SHA-256,
+exact `Evidence` records, and an operator-reviewed allowlist of the records'
+stable digests. By default it requires the ordered prefix through
+`serialization`: transport, framing, and primitive/message serialization.
+A caller may request a later boundary such as `handshake`, `login`, or
+`map`; every preceding stage must also be ready for the same APK fingerprint.
+
+The wrapper does not infer or implement any wire format. It does not open a
+socket, enable a listener, or prove that injected callbacks match the APK.
+`TransportAdapter` remains a low-level dependency-injection boundary used by
+synthetic tests; metadata plus callbacks alone must not be treated as AOW
+readiness. The new wrapper makes the ordered evidence gate an explicit
+constructor precondition and reports the missing stage names when it fails.
+
+A passing constructor means only that the supplied evidence records passed
+the repository's operator-reviewed readiness gate through the requested
+stage. It is not an end-to-end compatibility claim, and a synthetic test
+cannot unlock a stage because the gate accepts only approved
+`authorized_local_test` records.
