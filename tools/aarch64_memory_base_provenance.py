@@ -547,6 +547,9 @@ def summarize_control_flow_memory_base_provenance(
         result["known_static_cell_match_count"] = known_static_cell_match_count
         result["known_static_cell_load_match_count"] = known_static_cell_load_match_count
         result["known_static_cell_store_match_count"] = known_static_cell_store_match_count
+        result["known_static_cell_full_width_load_match_count"] = (
+            known_static_cell_full_width_load_match_count
+        )
         result["known_static_cell_derived_base_access_count"] = (
             known_static_cell_derived_base_access_count
         )
