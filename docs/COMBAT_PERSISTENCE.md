@@ -141,17 +141,18 @@ or missing revisions, orphan receipts, non-canonical payloads, malformed
 results, and a latest receipt that differs from the current battle snapshot
 cause the audit to fail closed. The audit never repairs or deletes rows.
 
-The current schema does not persist a separate battle-creation baseline
-receipt. The report therefore includes `unanchored_battles`; the audit can
-verify receipt continuity and the latest persisted state, but cannot
-independently prove the original creation snapshot or replay the first turn
-from a durable baseline. This limitation is explicit rather than inferred.
+Newly created battles persist a canonical revision-zero creation snapshot in
+`initial_snapshot_json`. The audit replays the first receipt from this baseline
+and then verifies each adjacent receipt as an exact deterministic transition
+using the repository's synthetic `Battle.attack` rule. The report exposes
+`anchored_battles`, `unanchored_battles`, and `verified_transitions`.
 
-Adjacent receipts are now also checked as exact deterministic transitions
-using the repository's synthetic `Battle.attack` rule. The audit reports
-`verified_transitions`; this counts only transitions between two persisted
-receipts. The first receipt for each battle remains unverified against the
-missing creation baseline and is not promoted to a verified transition.
+Existing databases are migrated by adding a nullable baseline column. Legacy
+rows are deliberately left NULL and remain counted as unanchored; the audit
+does not reconstruct a creation snapshot from current state or from the first
+receipt. A baseline is an integrity anchor for deterministic replay, not a
+cryptographic signature: an actor able to rewrite the entire database can
+rewrite the baseline and receipts together.
 
 Regression tests cover a valid multi-turn chain, a disconnected but
 individually valid intermediate receipt, a missing revision receipt, a

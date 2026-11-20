@@ -21,6 +21,7 @@ from server.sqlite_session_store import SqliteSessionStore
 
 _MAX_REVISION = 2**63 - 1
 _MAX_RECEIPT_JSON_CHARS = 4096
+_MAX_BASELINE_JSON_CHARS = 2048
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
@@ -132,6 +133,16 @@ class SqliteAuthorizedCombatService:
                 CHECK(next_actor = first_id OR next_actor = second_id)
             )"""
         )
+        # Older local databases predate the creation baseline. Keep those rows
+        # explicitly unanchored instead of inventing a baseline from current state.
+        battle_columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(combat_battles)")
+        }
+        if "initial_snapshot_json" not in battle_columns:
+            self.db.execute(
+                "ALTER TABLE combat_battles ADD COLUMN initial_snapshot_json TEXT"
+            )
+
         self.db.execute(
             """CREATE TABLE IF NOT EXISTS combat_mutations (
                 request_id TEXT PRIMARY KEY
@@ -254,6 +265,82 @@ class SqliteAuthorizedCombatService:
             "next_actor": battle.next_actor,
             "turn": battle.turn,
         }
+
+    @classmethod
+    def _encode_initial_snapshot(cls, snapshot):
+        """Encode the trusted revision-zero state captured at battle creation."""
+        if (
+            type(snapshot) is not CombatSnapshot
+            or type(snapshot.battle) is not Battle
+            or snapshot.revision != 0
+            or snapshot.battle.turn != 0
+        ):
+            raise CombatStoreError("invalid combat creation baseline")
+        return json.dumps(
+            {
+                "battle_id": snapshot.battle_id,
+                "owner_character_id": snapshot.owner_character_id,
+                "battle": cls._battle_json(snapshot.battle),
+                "revision": 0,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    @classmethod
+    def _decode_initial_snapshot(cls, raw):
+        """Decode a bounded canonical revision-zero creation snapshot."""
+        if type(raw) is not str or len(raw) > _MAX_BASELINE_JSON_CHARS:
+            raise CombatStoreError("invalid combat creation baseline")
+        try:
+            value = json.loads(
+                raw,
+                object_pairs_hook=_unique_json_object,
+                parse_constant=_reject_json_constant,
+            )
+        except (TypeError, ValueError, json.JSONDecodeError, RecursionError) as exc:
+            raise CombatStoreError("invalid combat creation baseline") from exc
+        try:
+            if type(value) is not dict or set(value) != {
+                "battle_id", "owner_character_id", "battle", "revision"
+            }:
+                raise CombatStoreError("invalid combat creation baseline fields")
+            battle_id = cls._identifier(value["battle_id"], "battle identifier")
+            owner_id = cls._identifier(
+                value["owner_character_id"], "owner character identifier"
+            )
+            if type(value["revision"]) is not int or value["revision"] != 0:
+                raise CombatStoreError("invalid combat creation baseline revision")
+            battle_data = value["battle"]
+            if type(battle_data) is not dict or set(battle_data) != {
+                "first", "second", "next_actor", "turn"
+            }:
+                raise CombatStoreError("invalid combat creation baseline battle")
+            first_data = battle_data["first"]
+            second_data = battle_data["second"]
+            if (
+                type(first_data) is not list or len(first_data) != 4
+                or type(second_data) is not list or len(second_data) != 4
+                or type(battle_data["next_actor"]) is not int
+                or type(battle_data["turn"]) is not int
+            ):
+                raise CombatStoreError("invalid combat creation baseline fighters")
+            battle = Battle(
+                Fighter(*first_data),
+                Fighter(*second_data),
+                battle_data["next_actor"],
+                battle_data["turn"],
+            )
+            if battle.turn != 0 or battle.first.hp <= 0 or battle.second.hp <= 0:
+                raise CombatStoreError("invalid combat creation baseline state")
+            snapshot = CombatSnapshot(battle_id, owner_id, battle, 0)
+            if cls._encode_initial_snapshot(snapshot) != raw:
+                raise CombatStoreError("combat creation baseline is not canonical")
+            return snapshot
+        except CombatStoreError:
+            raise
+        except (KeyError, IndexError, TypeError, ValueError, OverflowError) as exc:
+            raise CombatStoreError("invalid combat creation baseline") from exc
 
     @classmethod
     def _encode_result(cls, snapshot, event):
@@ -392,9 +479,9 @@ class SqliteAuthorizedCombatService:
 
         Every committed turn must have exactly one receipt for its expected
         revision, revisions must form a contiguous chain from zero, and the
-        latest receipt must equal the current battle snapshot. The initial
-        battle state is not separately receipted by this schema, so the audit
-        cannot independently prove the creation baseline.
+        latest receipt must equal the current battle snapshot. New rows persist
+        a canonical revision-zero creation baseline; legacy rows without one
+        remain explicitly unanchored.
         """
         if self.db.in_transaction:
             raise ValueError("connection must not have an active transaction")
@@ -440,21 +527,38 @@ class SqliteAuthorizedCombatService:
             raise CombatStoreError("combat foreign key check failed")
 
         battles = {}
+        baselines = {}
         battle_rows = self.db.execute(
             """SELECT battle_id, owner_character_id,
                       first_id, first_hp, first_attack, first_defense,
                       second_id, second_hp, second_attack, second_defense,
-                      next_actor, turn, revision, winner_id
+                      next_actor, turn, revision, winner_id,
+                      initial_snapshot_json
                FROM combat_battles ORDER BY battle_id"""
         )
         for row in battle_rows:
-            snapshot = self._snapshot_from_row(row)
+            snapshot = self._snapshot_from_row(row[:14])
             if snapshot.battle_id in battles:
                 raise CombatStoreError("duplicate persisted battle")
+            baseline_raw = row[14]
+            baseline = (
+                None if baseline_raw is None
+                else self._decode_initial_snapshot(baseline_raw)
+            )
+            if baseline is not None and (
+                baseline.battle_id != snapshot.battle_id
+                or baseline.owner_character_id != snapshot.owner_character_id
+            ):
+                raise CombatStoreError("combat creation baseline identity mismatch")
             battles[snapshot.battle_id] = snapshot
+            baselines[snapshot.battle_id] = baseline
 
         next_revision = {battle_id: 0 for battle_id in battles}
-        latest_receipt = {}
+        latest_receipt = {
+            battle_id: baseline
+            for battle_id, baseline in baselines.items()
+            if baseline is not None
+        }
         mutation_count = 0
         verified_transition_count = 0
         mutation_rows = self.db.execute(
@@ -509,20 +613,29 @@ class SqliteAuthorizedCombatService:
             mutation_count += 1
 
         for battle_id, current in battles.items():
+            baseline = baselines[battle_id]
             if next_revision[battle_id] != current.revision:
                 raise CombatStoreError(
                     "combat mutation history does not reach current revision"
+                )
+            if baseline is not None and current.revision == 0 and current != baseline:
+                raise CombatStoreError(
+                    "current combat snapshot does not match creation baseline"
                 )
             if current.revision > 0 and latest_receipt.get(battle_id) != current:
                 raise CombatStoreError(
                     "current combat snapshot does not match latest receipt"
                 )
 
+        unanchored_battles = sum(
+            baseline is None for baseline in baselines.values()
+        )
         return {
             "battles": len(battles),
             "mutations": mutation_count,
             "verified_transitions": verified_transition_count,
-            "unanchored_battles": len(battles),
+            "anchored_battles": len(battles) - unanchored_battles,
+            "unanchored_battles": unanchored_battles,
         }
 
     def create(self, token: str, character_id: int, battle_id: str,
@@ -540,26 +653,29 @@ class SqliteAuthorizedCombatService:
             participant_ids = (battle.first.fighter_id, battle.second.fighter_id)
             if participant_ids.count(character_id) != 1:
                 raise SessionError("character does not own this battle")
+            snapshot = CombatSnapshot(battle_id, owned_id, battle, 0)
+            initial_snapshot_json = self._encode_initial_snapshot(snapshot)
             try:
                 self.db.execute(
                     """INSERT INTO combat_battles
                        (battle_id, owner_character_id,
                         first_id, first_hp, first_attack, first_defense,
                         second_id, second_hp, second_attack, second_defense,
-                        next_actor, turn, revision, winner_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)""",
+                        next_actor, turn, revision, winner_id,
+                        initial_snapshot_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)""",
                     (
                         battle_id, owned_id,
                         battle.first.fighter_id, battle.first.hp,
                         battle.first.attack, battle.first.defense,
                         battle.second.fighter_id, battle.second.hp,
                         battle.second.attack, battle.second.defense,
-                        battle.next_actor, battle.turn,
+                        battle.next_actor, battle.turn, initial_snapshot_json,
                     ),
                 )
             except sqlite3.IntegrityError as exc:
                 raise CombatAlreadyExists("battle already exists") from exc
-            return CombatSnapshot(battle_id, owned_id, battle, 0)
+            return snapshot
 
     def get(self, token: str, character_id: int,
             battle_id: str) -> CombatSnapshot:
