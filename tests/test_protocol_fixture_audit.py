@@ -1431,5 +1431,60 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
             )
 
 
+    def test_schema_v4_correlates_both_direction_candidates_without_verifying_packets(self):
+        server_stream = frame(b"server")
+        client_stream = frame(b"client")
+        events = [
+            {"direction": "client_to_server", "offset": 0, "length": 2, "elapsed_ns": 0, "operation": "send"},
+            {"direction": "server_to_client", "offset": 0, "length": 3, "elapsed_ns": 1, "operation": "receive"},
+            {"direction": "client_to_server", "offset": 2, "length": len(client_stream) - 2, "elapsed_ns": 4, "operation": "send"},
+            {"direction": "server_to_client", "offset": 3, "length": len(server_stream) - 3, "elapsed_ns": 7, "operation": "receive"},
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [client_stream],
+                schema_version=4,
+                io_events=events,
+                observer_role="client",
+            ),
+            client_to_server_length_offset=0,
+        )
+
+        receive = result["receive_candidate_io_alignment"]
+        self.assertEqual(receive["status"], "unverified_candidate_io_boundary_correlation")
+        self.assertEqual(receive["candidate_frame_boundary_count"], 1)
+        self.assertEqual(receive["server_to_client_io_event_boundary_count"], 2)
+        self.assertEqual(receive["candidate_frame_boundaries_aligned_with_io_event_ends"], 1)
+        self.assertEqual(
+            receive["interval_overlap"]["candidate_frames_spanning_multiple_io_events"],
+            1,
+        )
+        self.assertEqual(
+            receive["interval_overlap"]["frame_event_overlap_pair_count"],
+            2,
+        )
+
+        client = result["client_to_server_candidate_io_alignment"]
+        self.assertEqual(client["status"], "unverified_candidate_io_boundary_correlation")
+        self.assertEqual(client["candidate_frame_boundary_count"], 1)
+        self.assertEqual(client["client_to_server_io_event_boundary_count"], 2)
+        self.assertEqual(client["candidate_frame_boundaries_aligned_with_io_event_ends"], 1)
+        self.assertEqual(
+            client["interval_overlap"]["candidate_frames_spanning_multiple_io_events"],
+            1,
+        )
+        self.assertEqual(
+            client["interval_overlap"]["frame_event_overlap_pair_count"],
+            2,
+        )
+
+        self.assertFalse(result["sender_symmetry_verified"])
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
+        self.assertFalse(receive["packet_boundaries_verified"])
+        self.assertFalse(client["packet_boundaries_verified"])
+
+
 if __name__ == "__main__":
     unittest.main()

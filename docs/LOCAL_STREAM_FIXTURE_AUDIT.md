@@ -207,7 +207,7 @@ of the exact unchanged APK, and keep all raw bytes outside the repository.
 
 ## Candidate frame / observed I/O boundary correlation
 
-For schemas `2` and `3`, the redacted report compares cumulative end
+For schemas `2`, `3`, and `4`, the redacted report compares cumulative end
 positions of complete frames accepted by the isolated receive-length
 candidate with the ends of server-to-client I/O observations. It reports only
 counts: candidate frame ends aligned with I/O event ends, candidate frame ends
@@ -227,7 +227,7 @@ not recorded.
 ## Client-to-server candidate frame / observed I/O boundary correlation
 
 When the generic client-to-server length hypothesis is explicitly enabled,
-schemas `2` and `3` also compare its candidate frame-end positions with the
+schemas `2`, `3`, and `4` also compare its candidate frame-end positions with the
 ends of client-to-server I/O observations. The redacted report contains counts
 only and uses only events marked `client_to_server`; server-to-client events
 are not included in this comparison. This makes the two directional
@@ -246,7 +246,7 @@ APK compatibility.
 
 ## Frame / I/O interval-overlap summary
 
-For schemas `2` and `3`, each directional correlation also includes a
+For schemas `2`, `3`, and `4`, each directional correlation also includes a
 linear-sweep interval-overlap summary. It counts candidate frames that overlap
 more than one observed I/O event, I/O events that overlap more than one
 complete candidate frame, events that overlap no complete candidate frame,
@@ -276,3 +276,10 @@ A successful candidate parse is only a receive-side candidate observation. It
 must not be used to open the AOW adapter gate or claim APK compatibility by
 itself. Preserve the private source fixture locally for review; publish only a
 separately reviewed, redacted summary if it contains no sensitive metadata.
+
+
+Schema `4` retains the schema-3 receive-side and optional client-to-server
+candidate/I/O boundary and interval-overlap summaries. Its additional
+`observer_role` and `operation` fields are used only to validate the asserted
+send/receive-to-direction mapping; they do not authenticate the observer or
+upgrade any candidate boundary to a packet boundary.
