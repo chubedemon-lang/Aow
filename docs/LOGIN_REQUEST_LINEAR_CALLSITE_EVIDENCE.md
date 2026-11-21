@@ -51,6 +51,12 @@ integers; each target value must be a built-in list or tuple containing only
 non-empty built-in strings. This prevents custom Python container hooks from
 participating in instruction decoding or label lookup.
 
+The ordered helper-call summary also requires every target address to be
+four-byte aligned and every label to be a non-empty built-in string. This
+matches the stricter control-flow summary contract and prevents an
+unaligned relocation target or empty label from being counted as a resolved
+serializer helper.
+
 This is input-boundary hardening only. It does not change the recorded APK
 observations, make the linear sequence path-aware, resolve indirect calls, or
 establish serializer field order, framing, handshake, login, or compatibility.
