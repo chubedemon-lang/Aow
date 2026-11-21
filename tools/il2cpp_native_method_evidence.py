@@ -1111,13 +1111,18 @@ def _summarize_ordered_serializer_helper_calls(code, start_va, relocations, help
     if any(type(slot) is not int or slot < 0 for slot in relocations):
         raise ValueError("relocation slots must be non-negative built-in integers")
     for target, labels in helper_targets.items():
-        if type(target) is not int or target < 0:
-            raise ValueError("helper targets must be non-negative built-in integers")
+        if type(target) is not int or target < 0 or target % 4:
+            raise ValueError(
+                "helper targets must be non-negative aligned built-in integers"
+            )
         if (
             type(labels) not in (list, tuple)
-            or any(type(label) is not str for label in labels)
+            or not labels
+            or any(type(label) is not str or not label for label in labels)
         ):
-            raise ValueError("helper target labels must be built-in string lists or tuples")
+            raise ValueError(
+                "helper target labels must be non-empty built-in string lists or tuples"
+            )
 
     indirect_by_offset = {
         offset: (kind, target)
