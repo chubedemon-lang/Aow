@@ -21,7 +21,6 @@
 - Rejects an already-active caller transaction instead of committing work owned by the caller.
 - The constructor accepts only an exact built-in `sqlite3.Connection`; connection subclasses are rejected before any overridden properties or methods can run.
 - The constructor validates the existing `durable_sessions` table's exact column names, declared types, nullability, primary-key layout and defaults before accepting it. It also validates the named non-unique expiry index and its target column; an incompatible pre-existing table or index is rejected instead of being silently reused.
-- The constructor validates the existing `durable_sessions` table's exact column names, declared types, nullability, primary-key layout and defaults before accepting it. It also validates the named non-unique expiry index and its target column; an incompatible pre-existing table or index is rejected instead of being silently reused.
 
 ## Persisted-row validation
 
