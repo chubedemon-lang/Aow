@@ -1,10 +1,12 @@
 """Synthetic ELF/metadata fixtures for the offline codegen inventory."""
+import hashlib
 import json
 import os
 import struct
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 
 from tools.il2cpp_codegen_inventory import (
     ARM64_IL2CPP_MEMBER,
@@ -100,6 +102,17 @@ def make_elf(method_count=2, machine=183, pointer_target=0x5000):
     return bytes(elf)
 
 
+def write_apk(path, *, pointer_target=0x5000, duplicate_metadata=False):
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(METADATA_MEMBER, make_metadata())
+        if duplicate_metadata:
+            archive.writestr(METADATA_MEMBER, make_metadata())
+        archive.writestr(
+            ARM64_IL2CPP_MEMBER,
+            make_elf(pointer_target=pointer_target),
+        )
+
+
 class CodegenInventoryTests(unittest.TestCase):
     def test_matches_image_and_native_pointer_table(self):
         report = inspect_bytes(make_metadata(), make_elf(), "a" * 64)
@@ -159,6 +172,66 @@ class CodegenInventoryTests(unittest.TestCase):
             report = inspect_apk(path)
             self.assertEqual(len(report["apk_sha256"]), 64)
             self.assertEqual(report["matched_codegen_modules"], 1)
+
+    def test_apk_reader_rejects_symlink(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = os.path.join(temp, "authorized.apk")
+            link = os.path.join(temp, "linked.apk")
+            write_apk(target)
+            try:
+                os.symlink(target, link)
+            except (NotImplementedError, OSError):
+                self.skipTest("symlinks are unavailable on this platform")
+            with self.assertRaisesRegex(
+                CodegenInventoryError, "regular local APK file"
+            ):
+                inspect_apk(link)
+
+    def test_apk_reader_rejects_fifo_without_blocking(self):
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("FIFO creation is unavailable on this platform")
+        with tempfile.TemporaryDirectory() as temp:
+            path = os.path.join(temp, "not-an-apk")
+            os.mkfifo(path)
+            with self.assertRaisesRegex(
+                CodegenInventoryError, "regular local APK file"
+            ):
+                inspect_apk(path)
+
+    def test_apk_reader_hashes_the_same_open_file_if_path_is_replaced(self):
+        with tempfile.TemporaryDirectory() as temp:
+            original = os.path.join(temp, "original.apk")
+            replacement = os.path.join(temp, "replacement.apk")
+            path = os.path.join(temp, "authorized.apk")
+            write_apk(original, pointer_target=0x5000)
+            write_apk(replacement, pointer_target=0x7000)
+            os.replace(original, path)
+            with open(path, "rb") as stream:
+                original_digest = hashlib.sha256(stream.read()).hexdigest()
+
+            real_zipfile = zipfile.ZipFile
+
+            def replace_path_after_open(file, *args, **kwargs):
+                os.replace(replacement, path)
+                return real_zipfile(file, *args, **kwargs)
+
+            with patch(
+                "tools.il2cpp_codegen_inventory.zipfile.ZipFile",
+                side_effect=replace_path_after_open,
+            ):
+                report = inspect_apk(path)
+
+            self.assertEqual(report["apk_sha256"], original_digest)
+            self.assertEqual(report["relocated_targets_in_executable_sections"], 2)
+
+    def test_apk_reader_rejects_duplicate_required_members(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = os.path.join(temp, "duplicate.apk")
+            write_apk(path, duplicate_metadata=True)
+            with self.assertRaisesRegex(
+                CodegenInventoryError, "exactly one metadata and ARM64 native member"
+            ):
+                inspect_apk(path)
 
     def test_rejects_archive_missing_required_member(self):
         with tempfile.TemporaryDirectory() as temp:
