@@ -1,6 +1,8 @@
 """Transport boundary tests use a synthetic codec only, never APK claims."""
 import unittest
+from unittest.mock import patch
 
+import server.transport as transport_module
 from server.protocol_evidence_registry import Evidence
 from server.protocol_evidence_gates import STAGES, evidence_record_digest
 from server.transport import (
@@ -320,6 +322,60 @@ class EvidenceGatedTransportTests(unittest.TestCase):
                 records=HostileList(),
                 artifact_sha256="a" * 64,
                 approved_evidence_digests=(),
+                decode=lambda raw: raw,
+                encode=lambda message: message,
+            )
+
+    def test_adapter_uses_one_snapshot_when_caller_collections_change_after_gate(self):
+        records = [
+            authorized_evidence(stage)
+            for stage in ("transport", "framing", "serialization")
+        ]
+        approvals = list(approved_digests(records))
+        original_evaluate = transport_module.evaluate_evidence
+
+        def evaluate_then_mutate(record_snapshot, **kwargs):
+            result = original_evaluate(record_snapshot, **kwargs)
+            # Simulate another owner changing the caller's lists after the
+            # gate has evaluated them but before adapter configuration ends.
+            records.clear()
+            approvals.clear()
+            return result
+
+        with patch(
+            "server.transport.evaluate_evidence",
+            side_effect=evaluate_then_mutate,
+        ):
+            adapter = EvidenceGatedTransportAdapter(
+                records=records,
+                artifact_sha256="a" * 64,
+                approved_evidence_digests=approvals,
+                decode=lambda raw: raw,
+                encode=lambda message: message,
+            )
+
+        self.assertTrue(adapter.configured)
+        self.assertEqual(
+            tuple(record.topic for record in adapter.evidence_records),
+            ("transport", "framing", "serialization"),
+        )
+        self.assertEqual(records, [])
+        self.assertEqual(approvals, [])
+
+    def test_rejects_hostile_approval_collection_before_iteration(self):
+        class HostileList(list):
+            def __iter__(self):
+                raise AssertionError("custom approval iterator executed")
+
+        records = [
+            authorized_evidence(stage)
+            for stage in ("transport", "framing", "serialization")
+        ]
+        with self.assertRaisesRegex(ValueError, "approved_evidence_digests"):
+            EvidenceGatedTransportAdapter(
+                records=records,
+                artifact_sha256="a" * 64,
+                approved_evidence_digests=HostileList(approved_digests(records)),
                 decode=lambda raw: raw,
                 encode=lambda message: message,
             )
