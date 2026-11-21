@@ -47,3 +47,23 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 
 No APK, native binary, endpoint, credentials, proprietary assets, packet
 captures or live player data belong in this public repository.
+
+## Schema bootstrap and migration boundary
+
+Construction validates the durable receipt schema inside one `BEGIN IMMEDIATE`
+transaction. An existing `quest_inventory_awards` object must be a table with
+the exact declared column names, SQLite affinities, nullability and primary-key
+shape expected by this version. The `(character_id, quest_id, item_id)`
+uniqueness constraint and the named `(character_id, quest_id)` lookup index
+are also verified; unexpected foreign keys, views, conflicting index names,
+or missing uniqueness constraints are rejected.
+
+A valid legacy table may be missing only the non-unique lookup index; the
+constructor creates that index and verifies it before commit. Any failed
+validation rolls back DDL created by the constructor. It does not rewrite,
+repair, or guess a migration for an incompatible existing table. Back up the
+database and perform an explicit reviewed migration before upgrading such a
+schema.
+
+These checks protect the local synthetic persistence contract only. They do
+not establish AOW quest IDs, item IDs, reward semantics, or packet behavior.
