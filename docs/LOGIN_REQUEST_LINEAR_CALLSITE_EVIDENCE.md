@@ -41,3 +41,16 @@ In particular, the differing LoginRequest integer call counts (19 serializer ver
 Resolve the remaining indirect calls and their receiver/argument provenance, then associate any proven getter or collection traversal with the LoginRequest metadata fields. Only after that should a candidate field order be compared with an authorized, redacted client-side byte fixture. Keep the real APK transport adapter disabled until framing, handshake, login and unchanged-APK end-to-end behavior are independently verified.
 
 No APK, native library, asset, raw address, instruction word, packet byte, endpoint, credential, or player data is included here.
+
+## Direct linear callsite analyzer input boundary
+
+The redacted direct-call summary now accepts only exact built-in `bytes` for
+the bounded instruction window and an exact built-in `dict` for helper
+targets. Target keys must be non-negative, four-byte-aligned built-in
+integers; each target value must be a built-in list or tuple containing only
+non-empty built-in strings. This prevents custom Python container hooks from
+participating in instruction decoding or label lookup.
+
+This is input-boundary hardening only. It does not change the recorded APK
+observations, make the linear sequence path-aware, resolve indirect calls, or
+establish serializer field order, framing, handshake, login, or compatibility.
