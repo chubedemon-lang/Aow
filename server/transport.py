@@ -124,7 +124,7 @@ class EvidenceGatedTransportAdapter(TransportAdapter):
                 "approved_evidence_digests must be a built-in list, tuple, or frozenset"
             )
 
-        # Snapshot both mutable caller collections once. The exact same
+        # Snapshot both caller-supplied collections once. The exact same
         # immutable inputs must be used for readiness evaluation, terminal
         # record selection, and the adapter's retained evidence metadata.
         # Otherwise a concurrent caller mutation could change the allowlist
