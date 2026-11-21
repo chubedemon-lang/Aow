@@ -158,14 +158,24 @@ def inspect_synthetic_database(database):
             if not REQUIRED_UNIQUE_KEYS.get(table, set()).issubset(unique_keys):
                 raise PreflightError("required synthetic unique constraints are missing")
 
-            foreign_keys = {
-                (
+            # PRAGMA foreign_key_list emits one row per column in a foreign-key
+            # constraint. A composite FK that happens to mention a required
+            # column must not masquerade as the independent ownership FK that
+            # this synthetic schema contract expects.
+            foreign_key_groups = {}
+            for row in connection.execute(
+                "PRAGMA foreign_key_list(" + quoted_table + ")"
+            ).fetchall():
+                group_id, sequence = int(row[0]), int(row[1])
+                foreign_key_groups.setdefault(group_id, []).append((
+                    sequence,
                     row[3], row[2], row[4],
                     str(row[5]).upper(), str(row[6]).upper(),
-                )
-                for row in connection.execute(
-                    "PRAGMA foreign_key_list(" + quoted_table + ")"
-                ).fetchall()
+                ))
+            foreign_keys = {
+                entries[0][1:]
+                for entries in foreign_key_groups.values()
+                if len(entries) == 1 and entries[0][0] == 0
             }
             if not REQUIRED_FOREIGN_KEYS.get(table, set()).issubset(foreign_keys):
                 raise PreflightError("required synthetic foreign-key constraints are missing")
