@@ -91,6 +91,67 @@ class SqliteAuthRateLimiterTests(unittest.TestCase):
         self.assertEqual(events[0], "BEGIN IMMEDIATE")
         self.assertEqual(events[1], "clock")
 
+    def test_record_failure_in_deferred_transaction_waits_before_sampling_clock(self):
+        blocker = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        self.addCleanup(blocker.close)
+        ready = threading.Event()
+        proceed = threading.Event()
+        update_started = threading.Event()
+        clock_called = threading.Event()
+        results = []
+        errors = []
+
+        def worker():
+            connection = sqlite3.connect(
+                self.path, timeout=10, isolation_level=None
+            )
+            try:
+                def clock():
+                    clock_called.set()
+                    return self.now[0]
+
+                limiter = SqliteAuthRateLimiter(
+                    connection, self.secret, max_attempts=3,
+                    window_seconds=60, lockout_seconds=30, clock=clock,
+                )
+                connection.set_trace_callback(
+                    lambda statement: update_started.set()
+                    if statement.strip().upper().startswith(
+                        "UPDATE AUTH_ATTEMPT_LIMITS SET ATTEMPT_COUNT = ATTEMPT_COUNT WHERE 0"
+                    ) else None
+                )
+                ready.set()
+                if not proceed.wait(timeout=5):
+                    raise TimeoutError("test writer was not released")
+                connection.execute("BEGIN")
+                results.append(limiter.record_failure_in_transaction("alice"))
+                connection.commit()
+            except BaseException as exc:
+                errors.append(exc)
+                if connection.in_transaction:
+                    connection.rollback()
+            finally:
+                connection.close()
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        self.assertTrue(ready.wait(timeout=5))
+        blocker.execute("BEGIN IMMEDIATE")
+        proceed.set()
+        try:
+            self.assertTrue(update_started.wait(timeout=5))
+            # The worker is blocked while upgrading its deferred transaction.
+            # Its injected clock must not run until the writer lock is released.
+            self.assertFalse(clock_called.wait(timeout=0.1))
+        finally:
+            blocker.commit()
+            thread.join(timeout=10)
+
+        self.assertFalse(thread.is_alive(), "deferred writer did not finish")
+        self.assertEqual(errors, [])
+        self.assertEqual(results, [1])
+        self.assertTrue(clock_called.is_set())
+
     def test_clock_exceptions_are_redacted_and_transactions_are_preserved(self):
         def broken_clock():
             raise RuntimeError("private operator clock implementation detail")
