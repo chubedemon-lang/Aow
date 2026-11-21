@@ -1,5 +1,4 @@
 """Synthetic ELF/metadata fixtures for the offline codegen inventory."""
-import hashlib
 import json
 import os
 import struct
@@ -198,7 +197,7 @@ class CodegenInventoryTests(unittest.TestCase):
             ):
                 inspect_apk(path)
 
-    def test_apk_reader_hashes_the_same_open_file_if_path_is_replaced(self):
+    def test_apk_reader_rejects_path_replacement_during_member_read(self):
         with tempfile.TemporaryDirectory() as temp:
             original = os.path.join(temp, "original.apk")
             replacement = os.path.join(temp, "replacement.apk")
@@ -206,8 +205,6 @@ class CodegenInventoryTests(unittest.TestCase):
             write_apk(original, pointer_target=0x5000)
             write_apk(replacement, pointer_target=0x7000)
             os.replace(original, path)
-            with open(path, "rb") as stream:
-                original_digest = hashlib.sha256(stream.read()).hexdigest()
 
             real_zipfile = zipfile.ZipFile
 
@@ -219,10 +216,10 @@ class CodegenInventoryTests(unittest.TestCase):
                 "tools.il2cpp_codegen_inventory.zipfile.ZipFile",
                 side_effect=replace_path_after_open,
             ):
-                report = inspect_apk(path)
-
-            self.assertEqual(report["apk_sha256"], original_digest)
-            self.assertEqual(report["relocated_targets_in_executable_sections"], 2)
+                with self.assertRaisesRegex(
+                    CodegenInventoryError, "APK path changed while reading"
+                ):
+                    inspect_apk(path)
 
     def test_apk_reader_rejects_duplicate_required_members(self):
         with tempfile.TemporaryDirectory() as temp:
