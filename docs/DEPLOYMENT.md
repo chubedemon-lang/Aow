@@ -60,8 +60,9 @@ The preflight opens SQLite in read-only mode and checks:
 - required unique, foreign-key and CHECK constraints for the synthetic schema;
 - each required ownership foreign key must be an independent single-column
   constraint, not merely one member of a composite foreign key;
-- required CHECK expressions are tokenized from the table definition, so
-  matching text inside SQL comments or string literals cannot satisfy them.
+- required CHECK expressions are tokenized from the table definition (with
+  a 64 Ki-character SQL-text limit), so matching text inside comments or
+  string literals cannot satisfy them.
 
 It does not create, migrate, repair, or modify the database. A successful result
 means only that the local synthetic prototype passes these checks. It validates the `synthetic-v1` schema contract. It explicitly reports
