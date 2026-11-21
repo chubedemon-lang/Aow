@@ -11,6 +11,7 @@ from tools.il2cpp_native_method_evidence import (
     _decode_aarch64_bl_target,
     _networksettings_first_non_default_field, _summarize_receiver_integer_lookup,
     _contains_hash_bucket_opcode_families,
+    _summarize_bucketed_lookup_shape,
     _decode_aarch64_b_target, _decode_aarch64_conditional_branch,
     _decode_aarch64_conditional_branch_condition,
     _decode_aarch64_flag_setting_producer,
@@ -3102,6 +3103,88 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
         self.assertEqual(candidate["name"], "m_zippetMessageTypes")
         self.assertEqual(candidate["leading_default_backed_field_count"], 1)
         self.assertEqual(candidate["field_count"], 3)
+
+    def test_bucketed_lookup_shape_requires_register_linked_modulo_and_entry_chain(self):
+        # Synthetic AArch64 instruction vector; not copied from the APK.
+        words = [
+            0x1AC70CC5,  # sdiv w5, w6, w7
+            0x1B0798A5,  # msub w5, w5, w7, w6
+            0x6B0700BF,  # cmp w5, w7
+            0x54000222,  # b.hs
+            0x8B254928,  # add x8, x9, w5, uxtw #2
+            0xB940210A,  # ldr w10, [x8, #0x20]
+            0x7100054B,  # subs w11, w10, #1
+            0x540001A4,  # b.mi
+            0xF9400E8F,  # ldr x15, [x20, #0x18]
+            0x910081EF,  # add x15, x15, #0x20
+            0x5280018C,  # mov w12, #12
+            0x9BAC7D6D,  # umull x13, w11, w12
+            0xB86D69EE,  # ldr w14, [x15, x13]
+            0x6B0601DF,  # cmp w14, w6
+            0x54000081,  # b.ne
+            0x9BAC3D70,  # umaddl x16, w11, w12, x15
+            0xB9400A11,  # ldr w17, [x16, #8]
+            0xD63F0240,  # blr x18
+            0xB9400613,  # ldr w19, [x16, #4]
+            0x36F80013,  # tbz w19, #31
+            0xD65F03C0,  # ret
+        ]
+        summary = _summarize_bucketed_lookup_shape(self._code(words))
+        self.assertEqual(
+            summary,
+            {
+                "status": "bucketed_membership_lookup_shape_candidate",
+                "hash_modulo_bucket_index": True,
+                "bucket_head_sentinel_check": True,
+                "entry_stride_bytes": 12,
+                "entry_hash_comparison": True,
+                "indirect_comparer_dispatch": True,
+                "entry_next_index_traversal": True,
+                "entry_value_offset_bytes": 8,
+                "entry_next_index_offset_bytes": 4,
+                "managed_method_identity_verified": False,
+                "managed_collection_owner_verified": False,
+            },
+        )
+        rendered = json.dumps(summary)
+        self.assertNotIn("0x", rendered)
+        self.assertNotIn("instruction_word", rendered)
+
+    def test_bucketed_lookup_shape_fails_closed_on_register_or_layout_mismatch(self):
+        base_words = [
+            0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x54000222,
+            0x8B254928, 0xB940210A, 0x7100054B, 0x540001A4,
+            0xF9400E8F, 0x910081EF, 0x5280018C, 0x9BAC7D6D,
+            0xB86D69EE, 0x6B0601DF, 0x54000081, 0x9BAC3D70,
+            0xB9400A11, 0xD63F0240, 0xB9400613, 0x36F80013,
+            0xD65F03C0,
+        ]
+        wrong_divisor = list(base_words)
+        wrong_divisor[1] = (
+            (wrong_divisor[1] & ~(0x1F << 16)) | (8 << 16)
+        )
+        wrong_stride = list(base_words)
+        wrong_stride[10] = 0x5280020C  # mov w12, #16
+        missing_comparer = list(base_words)
+        missing_comparer[17] = 0xD503201F
+        missing_chain = list(base_words)
+        missing_chain[18] = 0xD503201F
+
+        for label, words in (
+            ("wrong divisor register", wrong_divisor),
+            ("wrong entry stride", wrong_stride),
+            ("missing comparer call", missing_comparer),
+            ("missing next-entry load", missing_chain),
+        ):
+            with self.subTest(label=label):
+                summary = _summarize_bucketed_lookup_shape(self._code(words))
+                self.assertEqual(summary["status"], "unresolved")
+                self.assertFalse(summary["managed_method_identity_verified"])
+                self.assertFalse(summary["managed_collection_owner_verified"])
+
+    def test_bucketed_lookup_shape_rejects_unaligned_instruction_bytes(self):
+        with self.assertRaisesRegex(ValueError, "aligned AArch64 bytes"):
+            _summarize_bucketed_lookup_shape(b"\x00\x00\x00")
 
     def test_hash_bucket_opcode_families_are_not_reported_as_a_shape(self):
         words = [0x1ACA0C09, 0x1B0A8129, 0xB9401908, 0x6B0A013F, 0x54000561]
