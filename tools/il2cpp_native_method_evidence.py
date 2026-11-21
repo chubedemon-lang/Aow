@@ -1064,11 +1064,18 @@ def _summarize_bucketed_lookup_shape(code):
             chain_branch = None
             for index in range(next_index + 1, min(len(words), next_index + 8)):
                 condition = _decode_aarch64_conditional_branch_condition(words[index])
+                if condition is None:
+                    continue
+                immediate = (words[index] >> 5) & 0x3FFF
+                if immediate & 0x2000:
+                    immediate -= 0x4000
+                target_index = index + immediate
                 if (
-                    condition is not None
-                    and condition.get("kind") == "tbz_tbnz"
+                    condition.get("kind") == "tbz_tbnz"
                     and condition.get("register_index") == next_register
                     and condition.get("bit_index") == 31
+                    and condition.get("predicate") == "zero"
+                    and stride_index < target_index < multiply_index
                 ):
                     chain_branch = condition
                     break
