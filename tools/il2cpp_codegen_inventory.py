@@ -7,6 +7,8 @@ import argparse
 import bisect
 import hashlib
 import json
+import os
+import stat
 import struct
 import zipfile
 from collections import defaultdict
@@ -329,31 +331,121 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
     }
 
 
-def inspect_apk(apk_path):
-    """Read only metadata and arm64 libil2cpp from an authorized local APK."""
-    path = Path(apk_path)
-    if not path.is_file() or not 0 < path.stat().st_size <= MAX_APK:
-        raise CodegenInventoryError("APK path or size is invalid")
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    try:
-        with zipfile.ZipFile(path) as archive:
-            metadata_info = archive.getinfo(METADATA_MEMBER)
-            elf_info = archive.getinfo(ARM64_IL2CPP_MEMBER)
-            if metadata_info.file_size > MAX_METADATA or elf_info.file_size > MAX_ELF:
-                raise CodegenInventoryError("analysis member exceeds size limit")
-            with archive.open(metadata_info) as member:
-                metadata = member.read(MAX_METADATA + 1)
-            with archive.open(elf_info) as member:
-                elf = member.read(MAX_ELF + 1)
-    except (KeyError, zipfile.BadZipFile, OSError) as exc:
-        raise CodegenInventoryError("APK missing valid IL2CPP members") from exc
-    if len(metadata) > MAX_METADATA or len(elf) > MAX_ELF:
-        raise CodegenInventoryError("analysis member exceeds size limit")
-    return inspect_bytes(metadata, elf, digest.hexdigest())
+def _file_identity(info):
+    """Return stable descriptor identity fields for one APK read."""
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_size,
+        info.st_mtime_ns,
+    )
 
+
+def _read_apk_members(path):
+    """Read required members and hash one stable, no-follow APK descriptor."""
+    if path.is_symlink():
+        raise CodegenInventoryError("expected a regular local APK file")
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise CodegenInventoryError(
+            "unable to open a regular local APK file without following links"
+        ) from exc
+
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise CodegenInventoryError("expected a regular local APK file")
+        apk_size = before.st_size
+        if not 0 < apk_size <= MAX_APK:
+            raise CodegenInventoryError("APK path or size is invalid")
+
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            try:
+                with zipfile.ZipFile(stream) as archive:
+                    entries = archive.infolist()
+                    metadata_matches = [
+                        item for item in entries if item.filename == METADATA_MEMBER
+                    ]
+                    elf_matches = [
+                        item for item in entries if item.filename == ARM64_IL2CPP_MEMBER
+                    ]
+                    if len(metadata_matches) != 1 or len(elf_matches) != 1:
+                        raise CodegenInventoryError(
+                            "expected exactly one metadata and ARM64 native member"
+                        )
+
+                    metadata_info = metadata_matches[0]
+                    elf_info = elf_matches[0]
+                    if metadata_info.flag_bits & 0x1 or elf_info.flag_bits & 0x1:
+                        raise CodegenInventoryError("encrypted IL2CPP member")
+                    if (
+                        metadata_info.file_size > MAX_METADATA
+                        or elf_info.file_size > MAX_ELF
+                    ):
+                        raise CodegenInventoryError("analysis member exceeds size limit")
+
+                    with archive.open(metadata_info) as member:
+                        metadata = member.read(MAX_METADATA + 1)
+                    with archive.open(elf_info) as member:
+                        elf = member.read(MAX_ELF + 1)
+                    if len(metadata) != metadata_info.file_size:
+                        raise CodegenInventoryError("metadata member size mismatch")
+                    if len(elf) != elf_info.file_size:
+                        raise CodegenInventoryError("native member size mismatch")
+
+                after_archive = os.fstat(stream.fileno())
+                if _file_identity(before) != _file_identity(after_archive):
+                    raise CodegenInventoryError(
+                        "APK changed while reading its IL2CPP members"
+                    )
+
+                # Hash the same descriptor that supplied the ZIP members.
+                # Reopening the pathname here could pair a digest from one APK
+                # with metadata/native bytes from a replacement file.
+                stream.seek(0)
+                digest = hashlib.sha256()
+                hashed_bytes = 0
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    hashed_bytes += len(chunk)
+                    if hashed_bytes > apk_size:
+                        raise CodegenInventoryError(
+                            "APK grew while computing its fingerprint"
+                        )
+                    digest.update(chunk)
+
+                after_hash = os.fstat(stream.fileno())
+                if (
+                    hashed_bytes != apk_size
+                    or _file_identity(before) != _file_identity(after_hash)
+                ):
+                    raise CodegenInventoryError(
+                        "APK changed while computing its fingerprint"
+                    )
+                return metadata, elf, digest.hexdigest()
+            except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+                raise CodegenInventoryError("not a readable APK ZIP") from exc
+            except OSError as exc:
+                raise CodegenInventoryError(
+                    "unable to read a stable regular local APK file"
+                ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def inspect_apk(apk_path):
+    """Read only metadata and arm64 libil2cpp from one stable local APK."""
+    metadata, elf, apk_sha256 = _read_apk_members(Path(apk_path))
+    return inspect_bytes(metadata, elf, apk_sha256)
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
