@@ -3193,17 +3193,47 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
                 self.assertFalse(summary["managed_collection_owner_verified"])
 
     def test_bucketed_lookup_shape_rejects_caller_saved_live_inputs(self):
-        words = [
+        base = [
             0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x540002A2,
             0x8B254928, 0xB940210A, 0x71000553, 0x54000224,
-            0xF9400EAF, 0x910081EF, 0x52800195, 0x6B08027F,
-            0x54000182, 0x9BB57E6D, 0xB86D69EE, 0x6B0601DF,
-            0x540000E1, 0x9BB53E6F, 0xB9400A11, 0xD63F0240,
-            0x9BB53E75, 0xB94006D7, 0x36FFFEB7, 0xD65F03C0,
+            0xF9400EB4, 0x91008294, 0x52800195, 0x6B08027F,
+            0x54000182, 0x9BB57E6D, 0xB86D6A8E, 0x6B0601DF,
+            0x540000E1, 0x9BB55270, 0xB9400A11, 0xD63F0240,
+            0x9BB55276, 0xB94006D7, 0x36FFFEB7, 0xD65F03C0,
             0xD65F03C0,
         ]
-        summary = _summarize_bucketed_lookup_shape(self._code(words))
-        self.assertEqual(summary["status"], "unresolved")
+
+        def set_register(word, shift, register):
+            return (word & ~(0x1F << shift)) | (register << shift)
+
+        cases = {}
+        volatile_index = list(base)
+        volatile_index[6] = set_register(volatile_index[6], 0, 11)
+        volatile_index[11] = set_register(volatile_index[11], 5, 11)
+        volatile_index[13] = set_register(volatile_index[13], 5, 11)
+        volatile_index[17] = set_register(volatile_index[17], 5, 11)
+        volatile_index[20] = set_register(volatile_index[20], 5, 11)
+        cases["entry index in x11"] = volatile_index
+
+        volatile_stride = list(base)
+        volatile_stride[10] = set_register(volatile_stride[10], 0, 12)
+        volatile_stride[13] = set_register(volatile_stride[13], 16, 12)
+        volatile_stride[17] = set_register(volatile_stride[17], 16, 12)
+        volatile_stride[20] = set_register(volatile_stride[20], 16, 12)
+        cases["stride in x12"] = volatile_stride
+
+        volatile_base = list(base)
+        volatile_base[8] = set_register(volatile_base[8], 0, 15)
+        volatile_base[9] = set_register(set_register(volatile_base[9], 0, 15), 5, 15)
+        volatile_base[14] = set_register(volatile_base[14], 5, 15)
+        volatile_base[17] = set_register(volatile_base[17], 10, 15)
+        volatile_base[20] = set_register(volatile_base[20], 10, 15)
+        cases["entries base in x15"] = volatile_base
+
+        for label, words in cases.items():
+            with self.subTest(label=label):
+                summary = _summarize_bucketed_lookup_shape(self._code(words))
+                self.assertEqual(summary["status"], "unresolved")
 
     def test_bucketed_lookup_shape_rejects_post_comparer_clobber(self):
         words = [
