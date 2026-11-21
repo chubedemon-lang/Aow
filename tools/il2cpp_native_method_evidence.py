@@ -1117,6 +1117,7 @@ def _summarize_ordered_serializer_helper_calls(code, start_va, relocations, help
             )
         if (
             type(labels) not in (list, tuple)
+            or not labels
             or any(type(label) is not str or not label for label in labels)
         ):
             raise ValueError(
