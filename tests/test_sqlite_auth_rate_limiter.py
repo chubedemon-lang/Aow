@@ -67,6 +67,58 @@ class SqliteAuthRateLimiterTests(unittest.TestCase):
                     0,
                 )
 
+    def test_check_allowed_samples_clock_after_write_reservation(self):
+        events = []
+
+        def clock():
+            events.append("clock")
+            return self.now[0]
+
+        limiter = SqliteAuthRateLimiter(
+            self.db, self.secret, max_attempts=3, window_seconds=60,
+            lockout_seconds=30, clock=clock,
+        )
+        self.db.set_trace_callback(
+            lambda statement: events.append(statement.strip().upper())
+        )
+        try:
+            events.clear()
+            limiter.check_allowed("alice")
+        finally:
+            self.db.set_trace_callback(None)
+
+        self.assertGreaterEqual(len(events), 2)
+        self.assertEqual(events[0], "BEGIN IMMEDIATE")
+        self.assertEqual(events[1], "clock")
+
+    def test_clock_exceptions_are_redacted_and_transactions_are_preserved(self):
+        def broken_clock():
+            raise RuntimeError("private operator clock implementation detail")
+
+        limiter = SqliteAuthRateLimiter(
+            self.db, self.secret, clock=broken_clock
+        )
+        for operation in (limiter.check_allowed, limiter.record_failure):
+            with self.subTest(operation=operation.__name__):
+                with self.assertRaisesRegex(
+                    ValueError, "authentication rate-limit clock failed"
+                ) as caught:
+                    operation("alice")
+                self.assertNotIn("private operator clock", str(caught.exception))
+                self.assertFalse(self.db.in_transaction)
+
+        self.db.execute("BEGIN IMMEDIATE")
+        with self.assertRaisesRegex(
+            ValueError, "authentication rate-limit clock failed"
+        ):
+            limiter.record_failure_in_transaction("alice")
+        self.assertTrue(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM auth_attempt_limits").fetchone()[0],
+            0,
+        )
+        self.db.rollback()
+
     def test_lockout_starts_at_threshold_and_expires_at_exact_boundary(self):
         self.assertEqual(self.limiter.record_failure("alice"), 1)
         self.assertEqual(self.limiter.record_failure("alice"), 2)
