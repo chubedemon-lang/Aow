@@ -649,14 +649,21 @@ class SqliteSessionStoreTests(unittest.TestCase):
             (created_at, expires_at),
         )
 
-    def test_verify_integrity_rejects_non_blob_or_wrong_length_token_hash(self):
-        legacy = sqlite3.connect(":memory:", isolation_level=None)
-        self.addCleanup(legacy.close)
-        legacy.execute(
+    def _make_legacy_session_store(self, connection):
+        """Create a store, then replace its schema with a deliberately legacy table."""
+        store = SqliteSessionStore(connection, clock=lambda: self.now)
+        connection.execute("DROP INDEX durable_sessions_expiry")
+        connection.execute("DROP TABLE durable_sessions")
+        connection.execute(
             "CREATE TABLE durable_sessions "
             "(token_hash, account_id, created_at, expires_at)"
         )
-        store = SqliteSessionStore(legacy, clock=lambda: self.now)
+        return store
+
+    def test_verify_integrity_rejects_non_blob_or_wrong_length_token_hash(self):
+        legacy = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(legacy.close)
+        store = self._make_legacy_session_store(legacy)
         legacy.execute(
             "INSERT INTO durable_sessions VALUES (?, ?, ?, ?)",
             ("x" * 32, 1, 1_000.0, 1_060.0),
@@ -677,11 +684,7 @@ class SqliteSessionStoreTests(unittest.TestCase):
             with self.subTest(row=row):
                 legacy = sqlite3.connect(":memory:", isolation_level=None)
                 self.addCleanup(legacy.close)
-                legacy.execute(
-                    "CREATE TABLE durable_sessions "
-                    "(token_hash, account_id, created_at, expires_at)"
-                )
-                store = SqliteSessionStore(legacy, clock=lambda: self.now)
+                store = self._make_legacy_session_store(legacy)
                 legacy.execute(
                     "INSERT INTO durable_sessions VALUES (?, ?, ?, ?)", row
                 )
@@ -775,11 +778,7 @@ class SqliteSessionStoreTests(unittest.TestCase):
     def test_verify_integrity_rejects_duplicate_legacy_token_digests(self):
         legacy = sqlite3.connect(":memory:", isolation_level=None)
         self.addCleanup(legacy.close)
-        legacy.execute(
-            "CREATE TABLE durable_sessions "
-            "(token_hash, account_id, created_at, expires_at)"
-        )
-        store = SqliteSessionStore(legacy, clock=lambda: self.now)
+        store = self._make_legacy_session_store(legacy)
         digest = b"d" * 32
         legacy.executemany(
             "INSERT INTO durable_sessions VALUES (?, ?, ?, ?)",
