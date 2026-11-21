@@ -12,6 +12,9 @@ from server.sqlite_authorized_character_service import SqliteAuthorizedCharacter
 from server.sqlite_authorized_inventory_service import SqliteAuthorizedInventoryService
 from server.sqlite_authorized_player_state_service import SqliteAuthorizedPlayerStateService
 from server.sqlite_authorized_map_service import SqliteAuthorizedMapService
+from server.sqlite_authorized_player_bootstrap_service import (
+    SqliteAuthorizedPlayerBootstrapService,
+)
 from server.sqlite_authorized_shop_service import SqliteAuthorizedShopService
 from server.sqlite_shop_store import ShopOffer
 from server.sqlite_authorized_quest_inventory_award_service import (
@@ -136,6 +139,20 @@ class AuthorizedSyntheticVerticalSliceTests(unittest.TestCase):
         self.assertEqual(
             self.inventory.get(self.alice.token, character_id), award.snapshot
         )
+
+        # Compose the newer atomic bootstrap read model with the already
+        # mutated character/map/inventory/quest services in this shared DB.
+        player_bootstrap = SqliteAuthorizedPlayerBootstrapService(
+            self.db, ttl_seconds=300, clock=lambda: self.now[0]
+        )
+        snapshot = player_bootstrap.get_snapshot(
+            self.alice.token, character_id
+        )
+        self.assertEqual(snapshot.character, bootstrap.character)
+        self.assertEqual(snapshot.player_state, bootstrap.player_state)
+        self.assertEqual(snapshot.map_position, moved.snapshot)
+        self.assertEqual(snapshot.inventory, award.snapshot)
+        self.assertEqual(snapshot.wallet_balance, 0)
 
     def test_shared_session_enforces_ownership_and_revocation_across_services(self):
         bootstrap = self.characters.create_with_initial_state(
