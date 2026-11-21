@@ -205,6 +205,14 @@ class SqliteAuthRateLimiter:
         """Record one failed attempt without committing the caller's transaction."""
         self._require_transaction()
         digest = self._principal_digest(principal)
+        # A caller-owned transaction may be DEFERRED. Force SQLite to acquire
+        # its writer reservation before sampling time; otherwise a later write
+        # could wait behind another writer while this failure window uses a
+        # stale timestamp captured before the wait. The zero-row UPDATE changes
+        # no data but upgrades the transaction to a reserved writer when safe.
+        self.db.execute(
+            "UPDATE auth_attempt_limits SET attempt_count = attempt_count WHERE 0"
+        )
         now = self._now()
         # Bound database growth from arbitrary unknown usernames. Expired
         # failure windows and completed lockouts no longer need a stored bucket.

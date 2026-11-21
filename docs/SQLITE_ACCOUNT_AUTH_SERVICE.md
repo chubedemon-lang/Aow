@@ -76,12 +76,17 @@ pruned before a new bucket is inserted. At capacity, new principal buckets fail
 closed while existing buckets remain usable; this prevents unbounded database
 growth from arbitrary unknown usernames.
 
-The limiter samples its clock inside the `BEGIN IMMEDIATE` transaction
-for `check_allowed`, after SQLite grants the write reservation. A request that
-waits behind another writer therefore evaluates lockout expiry against the
-current clock rather than a stale timestamp captured before the wait. Clock
-provider exceptions are normalized to a generic `ValueError` so private
-operator exception text is not propagated through the authentication boundary.
+The limiter samples its clock only after SQLite grants the write
+reservation. `check_allowed` owns a `BEGIN IMMEDIATE` transaction; the
+caller-owned `record_failure_in_transaction` primitive first performs a
+zero-row update to upgrade a deferred transaction to a writer reservation.
+A request waiting behind another writer therefore evaluates lockout expiry
+against the current clock rather than a stale timestamp captured before the
+wait. If SQLite cannot safely upgrade an existing deferred read transaction,
+the database error is propagated and the caller remains responsible for
+rolling back its transaction. Clock provider exceptions are normalized to a
+generic `ValueError` so private operator exception text is not propagated
+through the authentication boundary.
 
 The limiter is per-username only. It does not replace per-source/network rate
 limits, trusted reverse-proxy handling, monitoring, TLS where applicable, or
