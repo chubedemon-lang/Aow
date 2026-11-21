@@ -43,13 +43,28 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
         Domain(self.database)
 
     def _create_schema_variant(
-        self, path, *, unique=True, foreign_keys=True, checks=True, quantity_type="INTEGER"
+        self, path, *, unique=True, foreign_keys=True, checks=True,
+        quantity_type="INTEGER", composite_character_fk=False
     ):
         unique_clause = " UNIQUE" if unique else ""
-        character_fk = (
-            ", FOREIGN KEY(account_id) REFERENCES accounts(id)"
-            if foreign_keys else ""
+        account_tenant_columns = (
+            ", tenant_id INTEGER NOT NULL DEFAULT 0, UNIQUE(id, tenant_id)"
+            if composite_character_fk else ""
         )
+        character_tenant_column = (
+            ", tenant_id INTEGER NOT NULL DEFAULT 0"
+            if composite_character_fk else ""
+        )
+        if foreign_keys and composite_character_fk:
+            character_fk = (
+                ", FOREIGN KEY(account_id, tenant_id) "
+                "REFERENCES accounts(id, tenant_id)"
+            )
+        else:
+            character_fk = (
+                ", FOREIGN KEY(account_id) REFERENCES accounts(id)"
+                if foreign_keys else ""
+            )
         wallet_fk = (
             ", FOREIGN KEY(character_id) REFERENCES characters(id)"
             if foreign_keys else ""
@@ -67,11 +82,11 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
                 """
                 CREATE TABLE accounts (
                     id INTEGER PRIMARY KEY,
-                    username TEXT NOT NULL%s
+                    username TEXT NOT NULL%s%s
                 );
                 CREATE TABLE characters (
                     id INTEGER PRIMARY KEY,
-                    account_id INTEGER NOT NULL%s,
+                    account_id INTEGER NOT NULL%s%s,
                     name TEXT NOT NULL,
                     map_id TEXT NOT NULL DEFAULT 'test_map',
                     x INTEGER NOT NULL DEFAULT 0,
@@ -93,9 +108,10 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
                     PRIMARY KEY(character_id, item_id)%s
                 );
                 """ % (
-                    unique_clause, unique_clause, character_fk, balance_check,
-                    wallet_fk, price_check, enabled_check, quantity_type,
-                    quantity_check, inventory_fk,
+                    unique_clause, account_tenant_columns,
+                    unique_clause, character_tenant_column, character_fk,
+                    balance_check, wallet_fk, price_check, enabled_check,
+                    quantity_type, quantity_check, inventory_fk,
                 )
             )
 
@@ -108,6 +124,12 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
     def test_rejects_missing_foreign_key_constraints(self):
         database = Path(self.temp.name) / "missing_foreign_keys.sqlite3"
         self._create_schema_variant(database, foreign_keys=False)
+        with self.assertRaisesRegex(PreflightError, "foreign-key constraints"):
+            inspect_synthetic_database(database)
+
+    def test_rejects_composite_foreign_key_as_a_single_column_ownership_key(self):
+        database = Path(self.temp.name) / "composite_character_fk.sqlite3"
+        self._create_schema_variant(database, composite_character_fk=True)
         with self.assertRaisesRegex(PreflightError, "foreign-key constraints"):
             inspect_synthetic_database(database)
 
