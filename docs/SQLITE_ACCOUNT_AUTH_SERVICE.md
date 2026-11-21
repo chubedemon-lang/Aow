@@ -76,6 +76,13 @@ pruned before a new bucket is inserted. At capacity, new principal buckets fail
 closed while existing buckets remain usable; this prevents unbounded database
 growth from arbitrary unknown usernames.
 
+The limiter samples its clock inside the `BEGIN IMMEDIATE` transaction
+for `check_allowed`, after SQLite grants the write reservation. A request that
+waits behind another writer therefore evaluates lockout expiry against the
+current clock rather than a stale timestamp captured before the wait. Clock
+provider exceptions are normalized to a generic `ValueError` so private
+operator exception text is not propagated through the authentication boundary.
+
 The limiter is per-username only. It does not replace per-source/network rate
 limits, trusted reverse-proxy handling, monitoring, TLS where applicable, or
 other abuse controls. The service still has no HTTP route and remains a local
