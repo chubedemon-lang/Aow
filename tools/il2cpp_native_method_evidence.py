@@ -943,12 +943,16 @@ def _relocated_indirect_call_events(code, start_va, relocations, *, include_offs
     This deliberately misses ordinary virtual calls and runtime-computed
     pointers rather than guessing their targets.
     """
-    if not isinstance(code, bytes) or len(code) % 4:
+    if type(code) is not bytes:
+        raise ValueError("AArch64 code window must be exact built-in bytes")
+    if len(code) % 4:
         raise ValueError("AArch64 code window must be a multiple of four bytes")
     if type(start_va) is not int or start_va < 0 or start_va % 4:
         raise ValueError("AArch64 code window start must be an aligned address")
-    if not isinstance(relocations, dict):
-        raise ValueError("relocations must be a mapping")
+    if type(relocations) is not dict:
+        raise ValueError("relocations must be an exact built-in dict")
+    if any(type(slot) is not int or slot < 0 for slot in relocations):
+        raise ValueError("relocation slots must be non-negative built-in integers")
 
     registers = {}
     events = []
@@ -982,9 +986,20 @@ def _relocated_indirect_call_events(code, start_va, relocations, *, include_offs
             target_register, base_register, offset_bytes = load
             base = registers.get(base_register)
             relocation = relocations.get(base + offset_bytes) if base is not None else None
-            if (isinstance(relocation, tuple) and len(relocation) == 2
-                    and relocation[0] == R_AARCH64_RELATIVE
-                    and type(relocation[1]) is int and relocation[1] >= 0):
+            if relocation is not None and (
+                type(relocation) is not tuple
+                or len(relocation) != 2
+                or type(relocation[0]) is not int
+                or type(relocation[1]) is not int
+            ):
+                raise ValueError(
+                    "relocation entry must be an exact two-integer tuple"
+                )
+            if (
+                relocation is not None
+                and relocation[0] == R_AARCH64_RELATIVE
+                and relocation[1] >= 0
+            ):
                 registers[target_register] = relocation[1]
             else:
                 registers.pop(target_register, None)
@@ -1085,12 +1100,24 @@ def _summarize_ordered_serializer_helper_calls(code, start_va, relocations, help
     window, not an execution trace: branches, loops and mutually exclusive
     paths are not evaluated.
     """
-    if not isinstance(code, bytes) or len(code) % 4:
+    if type(code) is not bytes:
+        raise ValueError("AArch64 code window must be exact built-in bytes")
+    if len(code) % 4:
         raise ValueError("AArch64 code window must be a multiple of four bytes")
     if type(start_va) is not int or start_va < 0 or start_va % 4:
         raise ValueError("AArch64 code window start must be an aligned address")
-    if not isinstance(relocations, dict) or not isinstance(helper_targets, dict):
-        raise ValueError("relocations and helper targets must be mappings")
+    if type(relocations) is not dict or type(helper_targets) is not dict:
+        raise ValueError("relocations and helper targets must be exact built-in dicts")
+    if any(type(slot) is not int or slot < 0 for slot in relocations):
+        raise ValueError("relocation slots must be non-negative built-in integers")
+    for target, labels in helper_targets.items():
+        if type(target) is not int or target < 0:
+            raise ValueError("helper targets must be non-negative built-in integers")
+        if (
+            type(labels) not in (list, tuple)
+            or any(type(label) is not str for label in labels)
+        ):
+            raise ValueError("helper target labels must be built-in string lists or tuples")
 
     indirect_by_offset = {
         offset: (kind, target)
@@ -2995,6 +3022,8 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             helper_targets[target].append(
                 f'{method["namespace"]}.{method["type"]}::{method["method"]}'
             )
+    # The ordered-callsite helper accepts only exact built-in containers.
+    helper_targets = dict(helper_targets)
 
     windows = _entrypoint_windows(
         sections, relocations, tables, info["images"], executable
