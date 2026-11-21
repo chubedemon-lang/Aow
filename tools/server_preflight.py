@@ -99,7 +99,7 @@ def _tokenize_sql(sql):
             index += 1
             continue
         if sql.startswith("--", index):
-            newline = sql.find("\\n", index + 2)
+            newline = sql.find("\n", index + 2)
             index = len(sql) if newline < 0 else newline + 1
             continue
         if sql.startswith("/*", index):
