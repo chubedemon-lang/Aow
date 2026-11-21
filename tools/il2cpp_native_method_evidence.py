@@ -827,9 +827,23 @@ def _summarize_bucketed_lookup_shape(code):
             index += 1
         return index
 
+    def is_scan_barrier(word):
+        # A linear candidate must not borrow instructions from another block or
+        # carry unmodeled state across a call. Conditional branches are retained
+        # as possible fallthrough edges; their runtime predicate is not evaluated.
+        return (
+            _decode_aarch64_bl_target(word, 0) is not None
+            or _decode_aarch64_b_target(word, 0) is not None
+            or _decode_aarch64_blr_register(word) is not None
+            or _decode_aarch64_br_register(word) is not None
+            or _is_aarch64_return(word)
+        )
+
     def find_after(start, decoder, predicate, limit=128):
         end = min(len(words), start + limit)
         for index in range(start, end):
+            if is_scan_barrier(words[index]):
+                return None, None
             decoded = decoder(words[index])
             if decoded is not None and predicate(decoded):
                 return index, decoded
@@ -921,6 +935,8 @@ def _summarize_bucketed_lookup_shape(code):
             continue
 
         for base_index in range(empty_branch_index + 1, min(len(words), empty_branch_index + 65)):
+            if is_scan_barrier(words[base_index]):
+                break
             base_add = _decode_aarch64_add_imm64(words[base_index])
             if base_add is None or base_add[2] != 0x20:
                 continue
@@ -987,7 +1003,11 @@ def _summarize_bucketed_lookup_shape(code):
                 else key_compare[0]
             )
             hash_registers = {dividend}
-            for index in range(max(0, divide_index - 32), divide_index):
+            for index in range(
+                divide_index - 1, max(-1, divide_index - 33), -1
+            ):
+                if is_scan_barrier(words[index]):
+                    break
                 move = _decode_aarch64_mov_w_register(words[index])
                 if move is not None and move[1] in hash_registers:
                     hash_registers.add(move[0])
@@ -1040,6 +1060,8 @@ def _summarize_bucketed_lookup_shape(code):
             for index in range(value_index + 1, min(len(words), value_index + 64)):
                 if _decode_aarch64_blr_register(words[index]) is not None:
                     comparer_index = index
+                    break
+                if is_scan_barrier(words[index]):
                     break
             if comparer_index is None:
                 continue

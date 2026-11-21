@@ -977,3 +977,21 @@ This is input-provenance hardening only. It does not add APK observations,
 native disassembly, packet bytes, framing, handshake, LoginRequest field order
 or compatibility evidence. Synthetic integration tests cover the native
 analyzer's use of the shared reader and rejection of duplicate required members.
+
+
+## Receiver lookup matcher control-flow scan barriers — tooling only
+
+The bounded bucket-chain recognizer now stops its local linear scans at
+unconditional direct branches, direct calls, indirect calls/branches, and
+returns. Its backward hash-register alias scan also stops at those boundaries,
+so a register move from a preceding block is not imported into the candidate.
+Conditional branches remain possible fallthrough boundaries in this narrow
+syntactic matcher; their predicates and runtime-selected edges are not
+evaluated.
+
+Synthetic regressions insert branch/call/return instructions inside both the
+bucket-base and multiply-search windows. The recognizer must fail closed rather
+than joining the instructions that follow. This tightens static candidate
+provenance only: it does not add APK observations, identify a managed method or
+collection owner, establish a wire message ID, or verify framing, compression,
+handshake, login, or unchanged-APK compatibility.
