@@ -4,7 +4,7 @@ import struct
 import unittest
 
 from tools.il2cpp_native_method_evidence import (
-    R_AARCH64_RELATIVE,
+    MAX_ENTRYPOINT_WINDOW_BYTES, R_AARCH64_RELATIVE, _entrypoint_windows,
     _decode_aarch64_adr, _decode_aarch64_adrp, _decode_aarch64_add_imm64,
     _decode_aarch64_ldr_x_unsigned, _decode_aarch64_mov_x_register,
     _decode_aarch64_str_x_unsigned, _decode_aarch64_mov_w_register,
@@ -3061,6 +3061,38 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
         )
         self.assertTrue(fields["HeaderLength"]["has_default_value"])
         self.assertFalse(fields["m_zippetMessageTypes"]["has_default_value"])
+
+
+class EntryPointWindowBoundsTests(unittest.TestCase):
+    def _single_window(self, section_size):
+        section = {
+            "type": 1,
+            "flags": 0x4,
+            "address": 0x1000,
+            "size": section_size,
+        }
+        return _entrypoint_windows(
+            {"text": section},
+            {0x2000: (R_AARCH64_RELATIVE, 0x1000)},
+            {"ScriptsAssembly.dll": 0x2000},
+            [{"name": "ScriptsAssembly.dll", "method_count": 1}],
+            [("text", section)],
+        )[("text", 0x1000)]
+
+    def test_non_word_aligned_section_tail_marks_window_truncated(self):
+        # The analyzer retains only complete AArch64 instructions (4-byte
+        # units); the two omitted bytes must not be reported as a complete
+        # method window.
+        self.assertEqual(self._single_window(10), (8, True))
+
+    def test_word_aligned_section_end_keeps_window_complete(self):
+        self.assertEqual(self._single_window(12), (12, False))
+
+    def test_entry_window_cap_marks_window_truncated(self):
+        self.assertEqual(
+            self._single_window(MAX_ENTRYPOINT_WINDOW_BYTES + 4),
+            (MAX_ENTRYPOINT_WINDOW_BYTES, True),
+        )
 
 
 if __name__ == "__main__":
