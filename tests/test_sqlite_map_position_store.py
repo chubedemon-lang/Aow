@@ -379,6 +379,85 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
         ).fetchone()[0], 0)
 
 
+    def test_constructor_rejects_malformed_snapshot_schema_atomically(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        try:
+            connection.execute(
+                """CREATE TABLE map_position_snapshots (
+                    character_id TEXT PRIMARY KEY,
+                    map_id TEXT,
+                    x INTEGER,
+                    y INTEGER,
+                    revision INTEGER NOT NULL
+                )"""
+            )
+            with self.assertRaises(MapPositionStoreError):
+                SqliteMapPositionStore(connection)
+            objects = connection.execute(
+                "SELECT type, name FROM sqlite_master "
+                "WHERE name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()
+            self.assertEqual(objects, [("table", "map_position_snapshots")])
+            self.assertFalse(connection.in_transaction)
+        finally:
+            connection.close()
+
+    def test_constructor_rejects_wrong_mutation_ownership_foreign_key(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        try:
+            connection.executescript(
+                """CREATE TABLE map_position_snapshots (
+                       character_id TEXT PRIMARY KEY,
+                       map_id INTEGER, x INTEGER, y INTEGER,
+                       revision INTEGER NOT NULL
+                   );
+                   CREATE TABLE other_characters (character_id TEXT PRIMARY KEY);
+                   CREATE TABLE map_position_mutations (
+                       request_id TEXT PRIMARY KEY,
+                       character_id TEXT NOT NULL,
+                       expected_revision INTEGER NOT NULL,
+                       payload_json TEXT NOT NULL,
+                       result_json TEXT NOT NULL,
+                       result_revision INTEGER NOT NULL,
+                       FOREIGN KEY(character_id)
+                           REFERENCES other_characters(character_id)
+                           ON DELETE CASCADE
+                   );
+                   CREATE INDEX map_position_mutations_character
+                       ON map_position_mutations(character_id, result_revision);"""
+            )
+            with self.assertRaises(MapPositionStoreError):
+                SqliteMapPositionStore(connection)
+            self.assertFalse(connection.in_transaction)
+            self.assertEqual(
+                connection.execute(
+                    "PRAGMA foreign_key_list(map_position_mutations)"
+                ).fetchone()[2],
+                "other_characters",
+            )
+        finally:
+            connection.close()
+
+    def test_constructor_rejects_wrong_mutation_index(self):
+        self.db.execute("DROP INDEX map_position_mutations_character")
+        self.db.execute(
+            "CREATE INDEX map_position_mutations_character "
+            "ON map_position_mutations(result_revision, character_id)"
+        )
+        connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        try:
+            with self.assertRaises(MapPositionStoreError):
+                SqliteMapPositionStore(connection)
+            self.assertFalse(connection.in_transaction)
+            self.assertEqual(
+                tuple(row[2] for row in connection.execute(
+                    "PRAGMA index_info(map_position_mutations_character)"
+                ).fetchall()),
+                ("result_revision", "character_id"),
+            )
+        finally:
+            connection.close()
+
     def test_integrity_audit_streams_snapshot_and_mutation_rows(self):
         self.store.create("hero")
         self.store.enter("hero", "enter-stream", 0, 2, 10, -4)
