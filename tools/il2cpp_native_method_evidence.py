@@ -2551,10 +2551,27 @@ def _summarize_control_flow_helper_paths(
 
 def _summarize_aarch64_calls(code, start_va, helper_targets):
     """Summarize direct calls to allowlisted serializer helpers without addresses."""
-    if not isinstance(code, bytes) or len(code) % 4:
+    if type(code) is not bytes:
+        raise ValueError("AArch64 code window must be exact built-in bytes")
+    if len(code) % 4:
         raise ValueError("AArch64 code window must be a multiple of four bytes")
     if type(start_va) is not int or start_va < 0 or start_va % 4:
         raise ValueError("AArch64 code window start must be an aligned address")
+    if type(helper_targets) is not dict:
+        raise ValueError("helper targets must be an exact built-in dict")
+    for target, labels in helper_targets.items():
+        if type(target) is not int or target < 0 or target % 4:
+            raise ValueError(
+                "helper targets must be non-negative aligned built-in integers"
+            )
+        if (
+            type(labels) not in (list, tuple)
+            or any(type(label) is not str or not label for label in labels)
+        ):
+            raise ValueError(
+                "helper target labels must be built-in string lists or tuples "
+                "containing non-empty strings"
+            )
     sequence = []
     counts = Counter()
     tail_sequence = []
