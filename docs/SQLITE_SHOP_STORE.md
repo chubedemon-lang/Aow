@@ -40,6 +40,19 @@ standalone stores. REAL values are not truncated to integers and BLOB item IDs
 are not converted to Python string representations. Corrupt persisted state
 fails closed without a debit, item grant, revision change, or receipt.
 
+## Receipt schema bootstrap
+
+Before initializing the dependent player-state and inventory stores, the
+constructor checks any pre-existing `shop_purchase_receipts` object. A view,
+wrong column signature, missing/wrong request primary key, or unexpected
+foreign key is rejected before those dependent stores can create tables as a
+side effect. A new receipt table is created and revalidated under one
+`BEGIN IMMEDIATE` transaction; failed creation/validation rolls back.
+
+This is a strict column/key schema contract, not a migration mechanism. An
+incompatible pre-existing receipt table must be backed up and repaired
+explicitly; the store never guesses how to migrate it.
+
 ## Read-only integrity audit
 
 `SqliteShopStore.verify_integrity()` verifies every purchase receipt against the exact reserved `shop-` player-state and inventory mutations. It checks canonical request/result payloads, matching character and revision identities, currency debit, item grant payload, and matching result snapshots. It also rejects orphaned reserved mutations. The domain audit runs this check only when a shop receipt or reserved shop mutation is present and requires the complete dependent schemas. The audit never repairs records.
@@ -60,7 +73,7 @@ fails closed without a debit, item grant, revision change, or receipt.
 
 ## Tests
 
-Focused regression tests cover atomic debit/grant, stale revisions,
+Focused regression tests cover receipt schema rejection before dependency-table creation, atomic debit/grant, stale revisions,
 insufficient funds, stack and slot limits, idempotent retries, catalog changes,
 reopen persistence, rollback on receipt-write failure, request conflicts,
 player isolation, concurrent identical requests, and rejection of corrupted
