@@ -87,7 +87,7 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
         enabled_check = (
             " /* CHECK(enabled IN (0,1)) */"
             if check_lookalikes_in_comments
-            else " CHECK(enabled IN (0,1)" if False else " CHECK(enabled IN (0,1))" if checks else ""
+            else " CHECK(enabled IN (0,1))" if checks else ""
         )
         quantity_check = (
             " /* CHECK(quantity >= 0) */"
