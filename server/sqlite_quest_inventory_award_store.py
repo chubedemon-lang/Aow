@@ -22,6 +22,18 @@ _MAX_SQLITE_INTEGER = 2**63 - 1
 _MAX_ITEM_QUANTITY = 2**31 - 1
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
+_QUEST_INVENTORY_AWARD_COLUMNS = {
+    "request_id": ("TEXT", 0, 1, None),
+    "character_id": ("TEXT", 1, 0, None),
+    "quest_id": ("INTEGER", 1, 0, None),
+    "item_id": ("TEXT", 1, 0, None),
+    "quantity": ("INTEGER", 1, 0, None),
+    "expected_inventory_revision": ("INTEGER", 1, 0, None),
+    "payload_json": ("TEXT", 1, 0, None),
+    "result_json": ("TEXT", 1, 0, None),
+    "result_revision": ("INTEGER", 1, 0, None),
+}
+
 
 class QuestInventoryAwardError(ValueError):
     """Invalid or inconsistent synthetic quest inventory award."""
@@ -52,28 +64,138 @@ class SqliteQuestInventoryAwardStore:
 
         self.db = connection
         self.inventory = inventory
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS quest_inventory_awards (
-                request_id TEXT PRIMARY KEY
-                    CHECK(length(request_id) BETWEEN 1 AND 128),
-                character_id TEXT NOT NULL
-                    CHECK(length(character_id) BETWEEN 1 AND 128),
-                quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 0 AND 9223372036854775807),
-                item_id TEXT NOT NULL CHECK(length(item_id) BETWEEN 1 AND 64),
-                quantity INTEGER NOT NULL CHECK(quantity BETWEEN 1 AND 2147483647),
-                expected_inventory_revision INTEGER NOT NULL
-                    CHECK(expected_inventory_revision BETWEEN 0 AND 9223372036854775806),
-                payload_json TEXT NOT NULL,
-                result_json TEXT NOT NULL,
-                result_revision INTEGER NOT NULL CHECK(result_revision > 0),
-                UNIQUE(character_id, quest_id, item_id)
-            )"""
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS quest_inventory_awards_character "
-            "ON quest_inventory_awards(character_id, quest_id)"
-        )
-        self.db.commit()
+        try:
+            # Validate a pre-existing table before attempting dependent DDL.
+            # A missing lookup index is allowed here because it is created
+            # below and checked again before the transaction commits.
+            self.db.execute("BEGIN IMMEDIATE")
+            self._validate_schema(
+                allow_missing=True, allow_missing_character_index=True
+            )
+            self.db.execute(
+                """CREATE TABLE IF NOT EXISTS quest_inventory_awards (
+                    request_id TEXT PRIMARY KEY
+                        CHECK(length(request_id) BETWEEN 1 AND 128),
+                    character_id TEXT NOT NULL
+                        CHECK(length(character_id) BETWEEN 1 AND 128),
+                    quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 0 AND 9223372036854775807),
+                    item_id TEXT NOT NULL CHECK(length(item_id) BETWEEN 1 AND 64),
+                    quantity INTEGER NOT NULL CHECK(quantity BETWEEN 1 AND 2147483647),
+                    expected_inventory_revision INTEGER NOT NULL
+                        CHECK(expected_inventory_revision BETWEEN 0 AND 9223372036854775806),
+                    payload_json TEXT NOT NULL,
+                    result_json TEXT NOT NULL,
+                    result_revision INTEGER NOT NULL CHECK(result_revision > 0),
+                    UNIQUE(character_id, quest_id, item_id)
+                )"""
+            )
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS quest_inventory_awards_character "
+                "ON quest_inventory_awards(character_id, quest_id)"
+            )
+            self._validate_schema()
+            self.db.commit()
+        except BaseException:
+            if self.db.in_transaction:
+                self.db.rollback()
+            raise
+
+    def _validate_schema(self, *, allow_missing=False,
+                         allow_missing_character_index=False):
+        """Require the exact award table, uniqueness constraint and lookup index."""
+        objects = self.db.execute(
+            "SELECT type FROM sqlite_master WHERE name=?",
+            ("quest_inventory_awards",),
+        ).fetchall()
+        if not objects:
+            if allow_missing:
+                return False
+            raise QuestInventoryAwardError("quest inventory award table is missing")
+        if objects != [("table",)]:
+            raise QuestInventoryAwardError("incompatible quest inventory award object")
+
+        rows = self.db.execute(
+            "PRAGMA table_info(quest_inventory_awards)"
+        ).fetchall()
+        actual_columns = {
+            row[1]: (
+                str(row[2]).strip().upper(), int(row[3]), int(row[5]), row[4]
+            )
+            for row in rows
+        }
+        if (len(rows) != len(_QUEST_INVENTORY_AWARD_COLUMNS)
+                or actual_columns != _QUEST_INVENTORY_AWARD_COLUMNS):
+            raise QuestInventoryAwardError("incompatible quest inventory award schema")
+
+        if self.db.execute(
+            "PRAGMA foreign_key_list(quest_inventory_awards)"
+        ).fetchall():
+            raise QuestInventoryAwardError(
+                "unexpected quest inventory award foreign key"
+            )
+
+        indexes = self.db.execute(
+            "PRAGMA index_list(quest_inventory_awards)"
+        ).fetchall()
+
+        def index_columns(index_name):
+            quoted_name = index_name.replace('"', '""')
+            return tuple(
+                row[2] for row in self.db.execute(
+                    'PRAGMA index_info("' + quoted_name + '")'
+                ).fetchall()
+            )
+
+        primary_indexes = [
+            row for row in indexes
+            if len(row) >= 5 and int(row[2]) == 1
+            and row[3] == "pk" and int(row[4]) == 0
+        ]
+        if (len(primary_indexes) != 1
+                or index_columns(primary_indexes[0][1]) != ("request_id",)):
+            raise QuestInventoryAwardError(
+                "incompatible quest inventory award primary key"
+            )
+
+        unique_indexes = [
+            row for row in indexes
+            if len(row) >= 5 and int(row[2]) == 1
+            and row[3] == "u" and int(row[4]) == 0
+        ]
+        if (len(unique_indexes) != 1
+                or index_columns(unique_indexes[0][1])
+                != ("character_id", "quest_id", "item_id")):
+            raise QuestInventoryAwardError(
+                "incompatible quest inventory award uniqueness constraint"
+            )
+
+        index_object = self.db.execute(
+            "SELECT type, tbl_name FROM sqlite_master "
+            "WHERE name='quest_inventory_awards_character'"
+        ).fetchone()
+        if index_object is None and allow_missing_character_index:
+            return True
+        if index_object != ("index", "quest_inventory_awards"):
+            raise QuestInventoryAwardError(
+                "incompatible quest inventory award character index"
+            )
+        character_indexes = [
+            row for row in indexes
+            if row[1] == "quest_inventory_awards_character"
+        ]
+        if (
+            len(character_indexes) != 1
+            or int(character_indexes[0][2]) != 0
+            or character_indexes[0][3] != "c"
+            or (len(character_indexes[0]) > 4
+                and int(character_indexes[0][4]) != 0)
+            or index_columns(character_indexes[0][1])
+            != ("character_id", "quest_id")
+        ):
+            raise QuestInventoryAwardError(
+                "incompatible quest inventory award character index"
+            )
+        return True
 
     @staticmethod
     def _request_id(value):

@@ -148,5 +148,119 @@ class SqliteQuestInventoryAwardStoreTests(unittest.TestCase):
             self.grant()
 
 
+
+    def _drop_award_table(self):
+        self.db.execute("DROP TABLE quest_inventory_awards")
+
+    def _create_award_table(self, *, request_id_type="TEXT",
+                            unique_award=True):
+        unique_clause = (
+            ", UNIQUE(character_id, quest_id, item_id)"
+            if unique_award else ""
+        )
+        self.db.execute(
+            """CREATE TABLE quest_inventory_awards (
+                request_id """ + request_id_type + """ PRIMARY KEY,
+                character_id TEXT NOT NULL,
+                quest_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
+                quantity INTEGER NOT NULL,
+                expected_inventory_revision INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                result_revision INTEGER NOT NULL
+            """ + unique_clause + ")"
+        )
+
+    def test_constructor_rejects_wrong_column_affinity_before_index_creation(self):
+        self._drop_award_table()
+        self._create_award_table(request_id_type="INTEGER")
+        with self.assertRaisesRegex(QuestInventoryAwardError, "schema"):
+            SqliteQuestInventoryAwardStore(self.db, self.inventory)
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT type FROM sqlite_master "
+                "WHERE name='quest_inventory_awards_character'"
+            ).fetchall(),
+            [],
+        )
+        self.assertEqual(
+            self.db.execute(
+                "PRAGMA table_info(quest_inventory_awards)"
+            ).fetchone()[2],
+            "INTEGER",
+        )
+
+    def test_constructor_rejects_missing_award_uniqueness_constraint(self):
+        self._drop_award_table()
+        self._create_award_table(unique_award=False)
+        with self.assertRaisesRegex(QuestInventoryAwardError, "uniqueness"):
+            SqliteQuestInventoryAwardStore(self.db, self.inventory)
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT type FROM sqlite_master "
+                "WHERE name='quest_inventory_awards_character'"
+            ).fetchall(),
+            [],
+        )
+
+    def test_constructor_rolls_back_table_when_named_index_belongs_elsewhere(self):
+        self._drop_award_table()
+        self.db.execute(
+            "CREATE TABLE quest_award_index_host (other_id TEXT)"
+        )
+        self.db.execute(
+            "CREATE INDEX quest_inventory_awards_character "
+            "ON quest_award_index_host(other_id)"
+        )
+        with self.assertRaisesRegex(QuestInventoryAwardError, "character index"):
+            SqliteQuestInventoryAwardStore(self.db, self.inventory)
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT type FROM sqlite_master "
+                "WHERE name='quest_inventory_awards'"
+            ).fetchall(),
+            [],
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT type, tbl_name FROM sqlite_master "
+                "WHERE name='quest_inventory_awards_character'"
+            ).fetchone(),
+            ("index", "quest_award_index_host"),
+        )
+
+    def test_constructor_creates_missing_lookup_index_on_valid_legacy_table(self):
+        self.db.execute("DROP INDEX quest_inventory_awards_character")
+        reopened = SqliteQuestInventoryAwardStore(self.db, self.inventory)
+        self.assertIsInstance(reopened, SqliteQuestInventoryAwardStore)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT type, tbl_name FROM sqlite_master "
+                "WHERE name='quest_inventory_awards_character'"
+            ).fetchone(),
+            ("index", "quest_inventory_awards"),
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_constructor_rejects_view_with_award_table_name(self):
+        self._drop_award_table()
+        self.db.execute(
+            "CREATE VIEW quest_inventory_awards AS SELECT 1 AS request_id"
+        )
+        with self.assertRaisesRegex(QuestInventoryAwardError, "object"):
+            SqliteQuestInventoryAwardStore(self.db, self.inventory)
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT type FROM sqlite_master "
+                "WHERE name='quest_inventory_awards'"
+            ).fetchone(),
+            ("view",),
+        )
+
 if __name__ == "__main__":
     unittest.main()
