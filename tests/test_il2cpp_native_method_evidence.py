@@ -3125,8 +3125,9 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
             0x9BAC3D70,  # umaddl x16, w11, w12, x15
             0xB9400A11,  # ldr w17, [x16, #8]
             0xD63F0240,  # blr x18
-            0xB9400613,  # ldr w19, [x16, #4]
-            0x36F80013,  # tbz w19, #31
+            0x9BAC3D74,  # umaddl x20, w11, w12, x15
+            0xB9400693,  # ldr w19, [x20, #4]
+            0x36F80033,  # tbz w19, #31
             0xD65F03C0,  # ret
         ]
         summary = _summarize_bucketed_lookup_shape(self._code(words))
@@ -3156,8 +3157,8 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
             0x8B254928, 0xB940210A, 0x7100054B, 0x540001A4,
             0xF9400E8F, 0x910081EF, 0x5280018C, 0x9BAC7D6D,
             0xB86D69EE, 0x6B0601DF, 0x54000081, 0x9BAC3D70,
-            0xB9400A11, 0xD63F0240, 0xB9400613, 0x36F80013,
-            0xD65F03C0,
+            0xB9400A11, 0xD63F0240, 0x9BAC3D74, 0xB9400693,
+            0x36F80033, 0xD65F03C0,
         ]
         wrong_divisor = list(base_words)
         wrong_divisor[1] = (
@@ -3168,7 +3169,7 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
         missing_comparer = list(base_words)
         missing_comparer[17] = 0xD503201F
         missing_chain = list(base_words)
-        missing_chain[18] = 0xD503201F
+        missing_chain[19] = 0xD503201F
 
         for label, words in (
             ("wrong divisor register", wrong_divisor),
