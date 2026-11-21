@@ -649,14 +649,21 @@ class SqliteSessionStoreTests(unittest.TestCase):
             (created_at, expires_at),
         )
 
-    def test_verify_integrity_rejects_non_blob_or_wrong_length_token_hash(self):
-        legacy = sqlite3.connect(":memory:", isolation_level=None)
-        self.addCleanup(legacy.close)
-        legacy.execute(
+    def _make_legacy_session_store(self, connection):
+        """Create a store, then replace its schema with a deliberately legacy table."""
+        store = SqliteSessionStore(connection, clock=lambda: self.now)
+        connection.execute("DROP INDEX durable_sessions_expiry")
+        connection.execute("DROP TABLE durable_sessions")
+        connection.execute(
             "CREATE TABLE durable_sessions "
             "(token_hash, account_id, created_at, expires_at)"
         )
-        store = SqliteSessionStore(legacy, clock=lambda: self.now)
+        return store
+
+    def test_verify_integrity_rejects_non_blob_or_wrong_length_token_hash(self):
+        legacy = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(legacy.close)
+        store = self._make_legacy_session_store(legacy)
         legacy.execute(
             "INSERT INTO durable_sessions VALUES (?, ?, ?, ?)",
             ("x" * 32, 1, 1_000.0, 1_060.0),
@@ -677,11 +684,7 @@ class SqliteSessionStoreTests(unittest.TestCase):
             with self.subTest(row=row):
                 legacy = sqlite3.connect(":memory:", isolation_level=None)
                 self.addCleanup(legacy.close)
-                legacy.execute(
-                    "CREATE TABLE durable_sessions "
-                    "(token_hash, account_id, created_at, expires_at)"
-                )
-                store = SqliteSessionStore(legacy, clock=lambda: self.now)
+                store = self._make_legacy_session_store(legacy)
                 legacy.execute(
                     "INSERT INTO durable_sessions VALUES (?, ?, ?, ?)", row
                 )
@@ -775,11 +778,7 @@ class SqliteSessionStoreTests(unittest.TestCase):
     def test_verify_integrity_rejects_duplicate_legacy_token_digests(self):
         legacy = sqlite3.connect(":memory:", isolation_level=None)
         self.addCleanup(legacy.close)
-        legacy.execute(
-            "CREATE TABLE durable_sessions "
-            "(token_hash, account_id, created_at, expires_at)"
-        )
-        store = SqliteSessionStore(legacy, clock=lambda: self.now)
+        store = self._make_legacy_session_store(legacy)
         digest = b"d" * 32
         legacy.executemany(
             "INSERT INTO durable_sessions VALUES (?, ?, ?, ?)",
@@ -846,6 +845,56 @@ class SqliteSessionStoreTests(unittest.TestCase):
         self._assert_self_managed_operation_rejects_caller_transaction(
             lambda: self.store.purge_expired(batch_size=1)
         )
+
+
+    def test_constructor_rejects_incompatible_existing_table_before_creating_index(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.execute(
+            """CREATE TABLE durable_sessions (
+                token_hash TEXT PRIMARY KEY,
+                account_id INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL
+            )"""
+        )
+
+        with self.assertRaisesRegex(ValueError, "incompatible durable session schema"):
+            SqliteSessionStore(connection, clock=lambda: self.now)
+
+        self.assertFalse(connection.in_transaction)
+        self.assertIsNone(connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='index' AND name='durable_sessions_expiry'"
+        ).fetchone())
+
+    def test_constructor_rejects_existing_expiry_index_on_wrong_column(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.execute(
+            """CREATE TABLE durable_sessions (
+                token_hash BLOB PRIMARY KEY
+                    CHECK(typeof(token_hash) = 'blob' AND length(token_hash) = 32),
+                account_id INTEGER NOT NULL CHECK(account_id > 0),
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL CHECK(expires_at > created_at)
+            )"""
+        )
+        connection.execute(
+            "CREATE INDEX durable_sessions_expiry ON durable_sessions(account_id)"
+        )
+
+        with self.assertRaisesRegex(ValueError, "incompatible durable session expiry index"):
+            SqliteSessionStore(connection, clock=lambda: self.now)
+
+        self.assertFalse(connection.in_transaction)
+        self.assertEqual(
+            tuple(row[2] for row in connection.execute(
+                "PRAGMA index_info(durable_sessions_expiry)"
+            ).fetchall()),
+            ("account_id",),
+        )
+
 
 
 if __name__ == "__main__":
