@@ -1235,6 +1235,11 @@ def _summarize_receiver_integer_lookup(
         "callee_fde_entry_resolved": False,
         "callee_entry_window_bytes": None,
         "callee_hash_bucket_opcode_families_present": False,
+        "callee_bucketed_lookup_shape": {
+            "status": "unresolved",
+            "managed_method_identity_verified": False,
+            "managed_collection_owner_verified": False,
+        },
         "wire_message_id_verified": False,
         "compression_behavior_verified": False,
         "wire_contract_verified": False,
@@ -3606,6 +3611,9 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
                 receiver_integer_lookup_summary["callee_entry_window_bytes"] = fde_size
                 receiver_integer_lookup_summary["callee_hash_bucket_opcode_families_present"] = (
                     _contains_hash_bucket_opcode_families(fde_code)
+                )
+                receiver_integer_lookup_summary["callee_bucketed_lookup_shape"] = (
+                    _summarize_bucketed_lookup_shape(fde_code)
                 )
 
     primitive_helper_summary = []
