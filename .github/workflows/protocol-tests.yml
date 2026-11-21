@@ -123,6 +123,9 @@ on:
       - 'tools/sqlite_domain_audit.py'
       - 'tests/test_sqlite_domain_audit.py'
       - 'docs/SQLITE_DOMAIN_AUDIT.md'
+      - 'tools/server_preflight.py'
+      - 'tests/test_server_preflight.py'
+      - 'docs/DEPLOYMENT.md'
       - 'server/sqlite_map_position_store.py'
       - 'tests/test_sqlite_map_position_store.py'
       - 'docs/SQLITE_MAP_POSITION_STORE.md'
@@ -657,3 +660,18 @@ jobs:
         run: python -m py_compile tools/il2cpp_field_ref_evidence.py
       - name: IL2CPP v31 FieldRef tests (synthetic fixtures only)
         run: python -m unittest discover -s tests -p 'test_il2cpp_field_ref_evidence.py' -v
+
+  server-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile read-only synthetic server preflight
+        run: python -m py_compile tools/server_preflight.py
+      - name: Server preflight schema and loopback regression tests
+        run: python -m unittest discover -s tests -p 'test_server_preflight.py' -v
