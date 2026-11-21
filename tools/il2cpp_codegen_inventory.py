@@ -348,7 +348,7 @@ def _read_apk_members(path):
     except OSError as exc:
         raise CodegenInventoryError("invalid or unsafe APK path") from exc
     if not stat.S_ISREG(path_info.st_mode):
-        raise CodegenInventoryError("APK path must be a regular non-symlink file")
+        raise CodegenInventoryError("APK path must be a regular local APK file")
 
     flags = (
         os.O_RDONLY
