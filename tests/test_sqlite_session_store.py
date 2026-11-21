@@ -897,5 +897,119 @@ class SqliteSessionStoreTests(unittest.TestCase):
 
 
 
+    def test_rotate_replaces_old_token_and_preserves_account(self):
+        original = self.store.issue(501)
+        replacement = self.store.rotate(original, ttl_seconds=30)
+
+        self.assertEqual(len(replacement), 43)
+        self.assertEqual(self.store.resolve(replacement), 501)
+        with self.assertRaisesRegex(SessionError, "invalid session"):
+            self.store.resolve(original)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            1,
+        )
+
+    def test_rotate_in_transaction_respects_caller_rollback_boundary(self):
+        original = self.store.issue(502)
+        self.db.execute("BEGIN IMMEDIATE")
+
+        replacement = self.store.rotate_in_transaction(original)
+        self.assertTrue(self.db.in_transaction)
+        self.assertEqual(self.store.resolve_in_transaction(replacement), 502)
+        with self.assertRaisesRegex(SessionError, "invalid session"):
+            self.store.resolve_in_transaction(original)
+
+        self.db.rollback()
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(self.store.resolve(original), 502)
+        with self.assertRaisesRegex(SessionError, "invalid session"):
+            self.store.resolve(replacement)
+
+    def test_rotate_in_transaction_failure_rolls_back_only_its_savepoint(self):
+        expired = self.store.issue(503, ttl_seconds=1)
+        self.now += 1
+        self.db.execute("BEGIN IMMEDIATE")
+        self.db.execute("CREATE TABLE caller_state (value INTEGER NOT NULL)")
+        self.db.execute("INSERT INTO caller_state VALUES (7)")
+
+        with self.assertRaisesRegex(SessionError, "expired session"):
+            self.store.rotate_in_transaction(expired)
+
+        self.assertTrue(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT value FROM caller_state").fetchone(),
+            (7,),
+        )
+        self.db.commit()
+        self.assertEqual(
+            self.db.execute("SELECT value FROM caller_state").fetchone(),
+            (7,),
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            1,
+        )
+
+    def test_rotate_rejects_expired_and_revoked_tokens_without_replacement(self):
+        expired = self.store.issue(504, ttl_seconds=1)
+        revoked = self.store.issue(505)
+        self.assertTrue(self.store.revoke(revoked))
+        self.now += 1
+
+        with self.assertRaisesRegex(SessionError, "expired session"):
+            self.store.rotate(expired)
+        with self.assertRaisesRegex(SessionError, "invalid session"):
+            self.store.rotate(revoked)
+
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            1,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_rotate_rejects_invalid_ttl_without_consuming_old_token(self):
+        original = self.store.issue(506)
+        for ttl in (True, 0, -1, 1.5, "30", 31_536_001):
+            with self.subTest(ttl=ttl), self.assertRaisesRegex(
+                ValueError, "session ttl"
+            ):
+                self.store.rotate(original, ttl_seconds=ttl)
+        self.assertEqual(self.store.resolve(original), 506)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM durable_sessions").fetchone()[0],
+            1,
+        )
+
+    def test_concurrent_rotation_of_one_token_has_exactly_one_winner(self):
+        original = self.store.issue(507)
+        barrier = threading.Barrier(2)
+
+        def rotate_once(_):
+            connection = sqlite3.connect(
+                self.path, timeout=10, isolation_level=None
+            )
+            try:
+                store = SqliteSessionStore(
+                    connection, ttl_seconds=60, clock=lambda: self.now
+                )
+                barrier.wait(timeout=5)
+                try:
+                    return store.rotate(original)
+                except SessionError:
+                    return None
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            replacements = list(pool.map(rotate_once, range(2)))
+
+        winners = [token for token in replacements if token is not None]
+        self.assertEqual(len(winners), 1)
+        self.assertEqual(self.store.resolve(winners[0]), 507)
+        with self.assertRaisesRegex(SessionError, "invalid session"):
+            self.store.resolve(original)
+
+
 if __name__ == "__main__":
     unittest.main()

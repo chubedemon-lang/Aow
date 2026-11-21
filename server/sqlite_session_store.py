@@ -432,3 +432,75 @@ class SqliteSessionStore:
         finally:
             if self.db.in_transaction:
                 self.db.rollback()
+
+
+    def rotate_in_transaction(self, token: str, ttl_seconds=None) -> str:
+        """Atomically replace an active token inside the caller's transaction.
+
+        A SAVEPOINT makes the two-row transition locally atomic even when the
+        caller catches an error and later commits its surrounding transaction.
+        The caller still owns the outer commit/rollback boundary.
+        """
+        if not self.db.in_transaction:
+            raise ValueError("active SQLite transaction required")
+        digest = self._digest(token)
+        ttl = self.ttl_seconds if ttl_seconds is None else ttl_seconds
+        self._validate_ttl(ttl)
+
+        self.db.execute("SAVEPOINT durable_session_rotation")
+        try:
+            now = self._now()
+            row = self.db.execute(
+                "SELECT account_id, created_at, expires_at "
+                "FROM durable_sessions WHERE token_hash=?",
+                (digest,),
+            ).fetchone()
+            if row is None:
+                raise SessionError("invalid session")
+            account_id, expires_at = self._validated_stored_session_row(row, now)
+            if now >= expires_at:
+                raise SessionError("expired session")
+
+            replacement_token = secrets.token_urlsafe(32)
+            replacement_digest = self._digest(replacement_token)
+            replacement_expiry = now + ttl
+            if (not math.isfinite(replacement_expiry)
+                    or replacement_expiry <= now):
+                raise ValueError(
+                    "clock cannot represent the requested session expiry"
+                )
+
+            self.db.execute(
+                "INSERT INTO durable_sessions "
+                "(token_hash, account_id, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?)",
+                (replacement_digest, account_id, now, replacement_expiry),
+            )
+            deleted = self.db.execute(
+                "DELETE FROM durable_sessions WHERE token_hash=?",
+                (digest,),
+            )
+            if deleted.rowcount != 1:
+                raise SessionError("invalid session")
+            self.db.execute("RELEASE SAVEPOINT durable_session_rotation")
+            return replacement_token
+        except BaseException:
+            self.db.execute("ROLLBACK TO SAVEPOINT durable_session_rotation")
+            self.db.execute("RELEASE SAVEPOINT durable_session_rotation")
+            raise
+
+    def rotate(self, token: str, ttl_seconds=None) -> str:
+        """Rotate a bearer token and commit replacement/revocation atomically.
+
+        Concurrent attempts to rotate the same token serialize under
+        BEGIN IMMEDIATE; only the first can replace the active digest.
+        """
+        self._require_idle_connection()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            replacement = self.rotate_in_transaction(token, ttl_seconds)
+            self.db.commit()
+            return replacement
+        except BaseException:
+            self.db.rollback()
+            raise
