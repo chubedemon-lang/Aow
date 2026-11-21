@@ -170,6 +170,10 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
         sql = "CHECK(balance >= 0)" + (" " * MAX_SCHEMA_SQL_CHARS)
         self.assertEqual(_extract_check_expressions(sql), set())
 
+    def test_does_not_treat_check_text_inside_string_literal_as_constraint(self):
+        sql = "CREATE TABLE wallets (note TEXT DEFAULT 'CHECK(balance >= 0)')"
+        self.assertEqual(_extract_check_expressions(sql), set())
+
     def test_rejects_wrong_required_column_affinity(self):
         database = Path(self.temp.name) / "wrong_type.sqlite3"
         self._create_schema_variant(database, quantity_type="TEXT")
