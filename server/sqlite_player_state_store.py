@@ -29,9 +29,10 @@ _LEGACY_SNAPSHOT_COLUMNS = {
     if name != "baseline_version"
 }
 _CREATION_COLUMNS = {
-    name: signature
-    for name, signature in _SNAPSHOT_COLUMNS.items()
-    if name != "baseline_version"
+    "character_id": ("TEXT", 0, 1, None),
+    "level": ("INTEGER", 1, 0, None),
+    "experience": ("INTEGER", 1, 0, None),
+    "currency": ("INTEGER", 1, 0, None),
 }
 _MUTATION_COLUMNS = {
     "request_id": ("TEXT", 0, 1, None),
