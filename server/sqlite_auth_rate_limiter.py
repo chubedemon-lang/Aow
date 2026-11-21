@@ -79,7 +79,12 @@ class SqliteAuthRateLimiter:
         self.db.commit()
 
     def _now(self) -> float:
-        value = self.clock()
+        try:
+            value = self.clock()
+        except Exception:
+            # Clock exception text may contain operator-private implementation
+            # details; expose only a stable, generic failure at this boundary.
+            raise ValueError("authentication rate-limit clock failed") from None
         # Clock providers are injected by the operator, but still form a
         # validation boundary. Numeric subclasses can override __float__ and
         # execute arbitrary code during expiry checks; accept built-ins only,
@@ -166,9 +171,12 @@ class SqliteAuthRateLimiter:
     def check_allowed(self, principal) -> None:
         """Reject an active lockout; expired buckets are removed atomically."""
         digest = self._principal_digest(principal)
-        now = self._now()
 
         def operation():
+            # Sample time only after BEGIN IMMEDIATE has acquired the writer
+            # reservation. A caller waiting on SQLite must not evaluate an
+            # expired lockout using a stale pre-lock timestamp.
+            now = self._now()
             state = self._load_state(digest)
             if state is None:
                 return
