@@ -869,10 +869,9 @@ def _summarize_bucketed_lookup_shape(code):
             continue
 
         bucket_branch_index = skip_nops(compare_index + 1)
-        if bucket_branch_index >= len(words):
-            continue
-        bucket_branch = _decode_aarch64_conditional_branch_condition(
-            words[bucket_branch_index]
+        bucket_branch = (
+            _decode_aarch64_conditional_branch_condition(words[bucket_branch_index])
+            if bucket_branch_index < len(words) else None
         )
         if (
             bucket_branch is None or bucket_branch.get("kind") != "b_cond"
@@ -940,11 +939,17 @@ def _summarize_bucketed_lookup_shape(code):
                 continue
             stride_register = stride[0]
 
+            entry_index_registers = {entry_index_register}
+            for index in range(sentinel_index + 1, len(words)):
+                move = _decode_aarch64_mov_w_register(words[index])
+                if move is not None and move[1] in entry_index_registers:
+                    entry_index_registers.add(move[0])
+
             multiply_index, multiply = find_after(
                 stride_index + 1,
                 _decode_aarch64_umaddl,
                 lambda item: (
-                    item[1] == entry_index_register
+                    item[1] in entry_index_registers
                     and item[2] == stride_register
                     and item[3] == 31
                 ),
@@ -969,14 +974,23 @@ def _summarize_bucketed_lookup_shape(code):
             key_compare_index, key_compare = find_after(
                 entry_hash_index + 1,
                 _decode_aarch64_cmp_w_register,
-                lambda item: (
-                    item[0] == entry_hash_register and item[1] == dividend
-                ) or (
-                    item[1] == entry_hash_register and item[0] == dividend
-                ),
+                lambda item: item[0] == entry_hash_register
+                or item[1] == entry_hash_register,
                 limit=8,
             )
             if key_compare is None:
+                continue
+            hash_register = (
+                key_compare[1]
+                if key_compare[0] == entry_hash_register
+                else key_compare[0]
+            )
+            hash_registers = {dividend}
+            for index in range(max(0, divide_index - 32), key_compare_index):
+                move = _decode_aarch64_mov_w_register(words[index])
+                if move is not None and move[1] in hash_registers:
+                    hash_registers.add(move[0])
+            if hash_register not in hash_registers:
                 continue
 
             unequal_branch_index = skip_nops(key_compare_index + 1)
@@ -994,7 +1008,7 @@ def _summarize_bucketed_lookup_shape(code):
                 unequal_branch_index + 1,
                 _decode_aarch64_umaddl,
                 lambda item: (
-                    item[1] == entry_index_register
+                    item[1] in entry_index_registers
                     and item[2] == stride_register
                     and item[3] == entries_base
                 ),
@@ -1016,20 +1030,32 @@ def _summarize_bucketed_lookup_shape(code):
                 continue
 
             comparer_index = None
-            for index in range(value_index + 1, min(len(words), value_index + 12)):
+            for index in range(value_index + 1, min(len(words), value_index + 16)):
                 if _decode_aarch64_blr_register(words[index]) is not None:
                     comparer_index = index
                     break
             if comparer_index is None:
                 continue
 
-            next_index, next_load = find_after(
+            next_address_index, next_address = find_after(
                 comparer_index + 1,
+                _decode_aarch64_umaddl,
+                lambda item: (
+                    item[1] in entry_index_registers
+                    and item[2] == stride_register
+                    and item[3] == entries_base
+                ),
+                limit=128,
+            )
+            if next_address is None:
+                continue
+            next_index, next_load = find_after(
+                next_address_index + 1,
                 _decode_aarch64_ldr_w_unsigned,
                 lambda item: (
-                    item[1] == entry_address_register and item[2] == 4
+                    item[1] == next_address[0] and item[2] == 4
                 ),
-                limit=12,
+                limit=8,
             )
             if next_load is None:
                 continue
@@ -1064,7 +1090,6 @@ def _summarize_bucketed_lookup_shape(code):
             }
 
     return unresolved
-
 
 def _summarize_receiver_integer_lookup(
     receiver_code, receiver_start_va, networksettings_cctor_code,
