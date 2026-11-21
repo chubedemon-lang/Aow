@@ -932,3 +932,32 @@ symmetry, compression/encryption placement, handshake order, LoginRequest
 field order and unchanged-APK compatibility remain unverified. No raw native
 addresses, instruction words, APK/native assets, packet captures, endpoints or
 proprietary resources are included in this repository update.
+
+
+## Receiver lookup matcher ABI and back-edge hardening — 2026-11-22
+
+A follow-up audit found that the prior synthetic recognizer searched up to 128
+instructions after an indirect `BLR` for the next-entry calculation. It did
+not model AAPCS64 caller-saved registers, so a candidate could be accepted even
+when values used after the call were held only in registers that the callee is
+allowed to overwrite.
+
+The recognizer is now more conservative:
+
+- the entry index, stride and entries-base inputs carried across the comparer
+  call must be in callee-saved `x19`–`x29` registers;
+- after the indirect call, only NOPs may precede the next-address calculation;
+- that calculation must consume the exact preserved registers and must not
+  overwrite them;
+- the next-index load must immediately follow (apart from NOPs); and
+- the sign-bit branch must target the exact entry-loop compare, not merely any
+  instruction inside the old search window.
+
+Synthetic regressions cover each caller-saved live input, a post-call register
+clobber, and a branch to a non-loop instruction. This change is analyzer
+hardening only. The previous 480-byte private static observation is historical
+for this change and has **not** been re-run through the stricter matcher against
+the APK in this PR. If the real helper uses stack spill/reload or another
+preservation pattern, the matcher will remain unresolved until that pattern is
+explicitly modeled. No new APK disassembly, packet, message-ID, framing,
+compression, handshake, LoginRequest-order or compatibility finding is claimed.
