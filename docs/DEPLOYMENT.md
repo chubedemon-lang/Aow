@@ -62,7 +62,8 @@ The preflight opens SQLite in read-only mode and checks:
   constraint, not merely one member of a composite foreign key;
 - required CHECK expressions are tokenized from the table definition (with
   a 64 Ki-character SQL-text limit), so matching text inside comments or
-  string literals cannot satisfy them.
+  string literals cannot satisfy them; unterminated comments or quoted tokens
+  invalidate the whole CHECK scan rather than allowing an earlier match.
 
 It does not create, migrate, repair, or modify the database. A successful result
 means only that the local synthetic prototype passes these checks. It validates the `synthetic-v1` schema contract. It explicitly reports
