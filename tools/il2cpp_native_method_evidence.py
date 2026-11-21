@@ -2937,7 +2937,7 @@ def _entrypoint_windows(sections, relocations, tables, images, executable):
             if size == 0:
                 continue
             windows[(section_name, target)] = (
-                size, available > MAX_ENTRYPOINT_WINDOW_BYTES
+                size, size != available
             )
     return windows
 
