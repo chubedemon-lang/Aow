@@ -41,7 +41,7 @@ python -m unittest discover -s tests -p 'test_sqlite_authorized_player_bootstrap
 python -m unittest discover -s tests -p 'test_*.py' -v
 ~~~
 
-Tests cover the coherent aggregate, read-only behavior, missing inventory/wallet, malformed wallet balances, foreign/unknown character indistinguishability, expiry/revocation and serialization of wallet updates and session revocation against the complete read.
+Tests cover the coherent aggregate, read-only behavior, missing inventory/wallet, malformed wallet balances, foreign/unknown character indistinguishability, expiry/revocation and serialization of wallet updates and session revocation against the complete read. The shared synthetic vertical-slice integration test also reads the aggregate after map movement and a quest inventory award, checking that the bootstrap snapshot matches the already-committed domain snapshots.
 
 ## Compatibility boundary
 
