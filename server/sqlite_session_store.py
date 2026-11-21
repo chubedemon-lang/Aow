@@ -43,19 +43,40 @@ class SqliteSessionStore:
         self.ttl_seconds = ttl_seconds
         self.clock = clock if clock is not None else time.time
         self.db.execute("PRAGMA busy_timeout = 10000")
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS durable_sessions (
-                token_hash BLOB PRIMARY KEY
-                    CHECK(typeof(token_hash) = 'blob' AND length(token_hash) = 32),
-                account_id INTEGER NOT NULL CHECK(account_id > 0),
-                created_at REAL NOT NULL,
-                expires_at REAL NOT NULL CHECK(expires_at > created_at)
-            )"""
-        )
-        self._validate_schema()
-        self.db.commit()
+        existing = self.db.execute(
+            "SELECT type FROM sqlite_master WHERE name='durable_sessions'"
+        ).fetchone()
+        if existing == ("table",):
+            # The common, already-initialized path is read-only. Do not acquire
+            # SQLite's write reservation merely to validate a usable store:
+            # authorized state transactions on other connections must not be
+            # delayed by constructing another store instance.
+            if self._validate_schema(create_missing_index=False):
+                return
+        elif existing is not None:
+            raise ValueError("incompatible durable session table")
 
-    def _validate_schema(self):
+        # Only missing DDL is created under a write reservation. Re-check the
+        # complete schema after acquiring it because another process may have
+        # initialized the store since the initial read.
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.db.execute(
+                """CREATE TABLE IF NOT EXISTS durable_sessions (
+                    token_hash BLOB PRIMARY KEY
+                        CHECK(typeof(token_hash) = 'blob' AND length(token_hash) = 32),
+                    account_id INTEGER NOT NULL CHECK(account_id > 0),
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL CHECK(expires_at > created_at)
+                )"""
+            )
+            self._validate_schema()
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
+
+    def _validate_schema(self, *, create_missing_index=True):
         """Reject an incompatible pre-existing session table or expiry index."""
         table = self.db.execute(
             "SELECT type FROM sqlite_master WHERE name='durable_sessions'"
@@ -89,11 +110,13 @@ class SqliteSessionStore:
             "WHERE name='durable_sessions_expiry'"
         ).fetchone()
         if index_object is None:
+            if not create_missing_index:
+                return False
             self.db.execute(
                 "CREATE INDEX durable_sessions_expiry "
                 "ON durable_sessions(expires_at)"
             )
-            return
+            return True
         if index_object != ("index", "durable_sessions"):
             raise ValueError("incompatible durable session expiry index")
 
@@ -113,6 +136,7 @@ class SqliteSessionStore:
         )
         if indexed_columns != ("expires_at",):
             raise ValueError("incompatible durable session expiry index")
+        return True
 
     @staticmethod
     def _validate_ttl(ttl_seconds):
