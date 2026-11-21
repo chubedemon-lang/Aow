@@ -3110,25 +3110,28 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
             0x1AC70CC5,  # sdiv w5, w6, w7
             0x1B0798A5,  # msub w5, w5, w7, w6
             0x6B0700BF,  # cmp w5, w7
-            0x54000222,  # b.hs
+            0x540002A2,  # b.hs
             0x8B254928,  # add x8, x9, w5, uxtw #2
             0xB940210A,  # ldr w10, [x8, #0x20]
             0x7100054B,  # subs w11, w10, #1
-            0x540001A4,  # b.mi
+            0x54000224,  # b.mi
             0xF9400E8F,  # ldr x15, [x20, #0x18]
             0x910081EF,  # add x15, x15, #0x20
             0x5280018C,  # mov w12, #12
+            0x6B08017F,  # loop: cmp w11, w8
+            0x54000182,  # b.hs
             0x9BAC7D6D,  # umull x13, w11, w12
             0xB86D69EE,  # ldr w14, [x15, x13]
             0x6B0601DF,  # cmp w14, w6
-            0x54000081,  # b.ne
+            0x540000E1,  # b.ne
             0x9BAC3D70,  # umaddl x16, w11, w12, x15
             0xB9400A11,  # ldr w17, [x16, #8]
             0xD63F0240,  # blr x18
             0x9BAC3D74,  # umaddl x20, w11, w12, x15
             0xB9400693,  # ldr w19, [x20, #4]
-            0x36F80033,  # tbz w19, #31
+            0x36FFFEB3,  # tbz w19, #31, loop
             0xD65F03C0,  # ret
+            0xD65F03C0,  # out: ret
         ]
         summary = _summarize_bucketed_lookup_shape(self._code(words))
         self.assertEqual(
@@ -3153,12 +3156,13 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
 
     def test_bucketed_lookup_shape_fails_closed_on_register_or_layout_mismatch(self):
         base_words = [
-            0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x54000222,
-            0x8B254928, 0xB940210A, 0x7100054B, 0x540001A4,
-            0xF9400E8F, 0x910081EF, 0x5280018C, 0x9BAC7D6D,
-            0xB86D69EE, 0x6B0601DF, 0x54000081, 0x9BAC3D70,
-            0xB9400A11, 0xD63F0240, 0x9BAC3D74, 0xB9400693,
-            0x36F80033, 0xD65F03C0,
+            0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x540002A2,
+            0x8B254928, 0xB940210A, 0x7100054B, 0x54000224,
+            0xF9400E8F, 0x910081EF, 0x5280018C, 0x6B08017F,
+            0x54000182, 0x9BAC7D6D, 0xB86D69EE, 0x6B0601DF,
+            0x540000E1, 0x9BAC3D70, 0xB9400A11, 0xD63F0240,
+            0x9BAC3D74, 0xB9400693, 0x36FFFEB3, 0xD65F03C0,
+            0xD65F03C0,
         ]
         wrong_divisor = list(base_words)
         wrong_divisor[1] = (
@@ -3167,15 +3171,18 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
         wrong_stride = list(base_words)
         wrong_stride[10] = 0x5280020C  # mov w12, #16
         missing_comparer = list(base_words)
-        missing_comparer[17] = 0xD503201F
+        missing_comparer[19] = 0xD503201F
         missing_chain = list(base_words)
-        missing_chain[19] = 0xD503201F
+        missing_chain[21] = 0xD503201F
+        wrong_loop_target = list(base_words)
+        wrong_loop_target[22] = 0x36F80033
 
         for label, words in (
             ("wrong divisor register", wrong_divisor),
             ("wrong entry stride", wrong_stride),
             ("missing comparer call", missing_comparer),
             ("missing next-entry load", missing_chain),
+            ("branch does not return to entry loop", wrong_loop_target),
         ):
             with self.subTest(label=label):
                 summary = _summarize_bucketed_lookup_shape(self._code(words))
