@@ -1,7 +1,12 @@
-"""Synthetic ELF/metadata tests for native method evidence; no APK fixture."""
+"""Synthetic ELF/metadata tests for native method evidence; no proprietary APK fixture."""
+import hashlib
 import json
 import struct
+import tempfile
 import unittest
+import warnings
+import zipfile
+from pathlib import Path
 
 from tools.il2cpp_native_method_evidence import (
     MAX_ENTRYPOINT_WINDOW_BYTES, R_AARCH64_RELATIVE, _entrypoint_windows,
@@ -21,7 +26,11 @@ from tools.il2cpp_native_method_evidence import (
     _summarize_ordered_serializer_helper_calls,
     _summarize_control_flow_helper_paths,
     _summarize_serializer_deserializer_path_alignment,
-    _compare_login_session_serializer_paths, inspect_bytes,
+    _compare_login_session_serializer_paths, inspect_apk, inspect_bytes,
+)
+
+from tools.il2cpp_codegen_inventory import (
+    ARM64_IL2CPP_MEMBER, METADATA_MEMBER, CodegenInventoryError,
 )
 
 
@@ -3374,6 +3383,47 @@ class EntryPointWindowBoundsTests(unittest.TestCase):
             self._single_window(MAX_ENTRYPOINT_WINDOW_BYTES + 4),
             (MAX_ENTRYPOINT_WINDOW_BYTES, True),
         )
+
+
+
+
+class StableApkReaderIntegrationTests(unittest.TestCase):
+    def _write_fixture(self, path, *, duplicate_metadata=False):
+        metadata = make_metadata(["Method"], type_name="Unlisted", namespace="")
+        elf = make_elf(1)
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(METADATA_MEMBER, metadata)
+            if duplicate_metadata:
+                archive.writestr(METADATA_MEMBER, metadata)
+            archive.writestr(ARM64_IL2CPP_MEMBER, elf)
+        return metadata, elf
+
+    def test_inspect_apk_uses_shared_stable_reader_and_matching_fingerprint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic.apk"
+            self._write_fixture(path)
+
+            report = inspect_apk(path)
+
+            self.assertEqual(
+                report["apk_sha256"],
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(report["metadata_version"], 31)
+            self.assertFalse(report["native_addresses_emitted"])
+            self.assertFalse(report["raw_instructions_emitted"])
+
+    def test_inspect_apk_rejects_duplicate_required_zip_members(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duplicate.apk"
+            self._write_fixture(path, duplicate_metadata=True)
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                with self.assertRaisesRegex(
+                    CodegenInventoryError, "expected exactly one metadata"
+                ):
+                    inspect_apk(path)
 
 
 if __name__ == "__main__":
