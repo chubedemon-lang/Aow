@@ -41,6 +41,13 @@ stable digests. By default it requires the ordered prefix through
 A caller may request a later boundary such as `handshake`, `login`, or
 `map`; every preceding stage must also be ready for the same APK fingerprint.
 
+The wrapper snapshots the caller-supplied record and approval collections
+into immutable tuples before evaluating readiness. The same snapshots are used
+for gate evaluation, terminal-record selection and retained evidence metadata,
+so a later mutation of the caller's original lists cannot change the basis on
+which the adapter was configured. Non-built-in approval collections are
+rejected before iteration.
+
 The wrapper does not infer or implement any wire format. It does not open a
 socket, enable a listener, or prove that injected callbacks match the APK.
 `TransportAdapter` remains a low-level dependency-injection boundary used by
