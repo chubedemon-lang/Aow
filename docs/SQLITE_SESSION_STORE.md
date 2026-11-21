@@ -16,6 +16,8 @@
 - Evaluates the clock after acquiring the write lock, so waiting for SQLite does not bypass expiry.
 - Enforces expiry at the exact boundary (`now >= expires_at`).
 - Revocation is idempotent: the first call returns true; later calls return false.
+- The rotate() API atomically replaces an active bearer token, preserves its account binding, and makes the old token unusable in the same BEGIN IMMEDIATE transaction. Concurrent attempts to rotate one token have exactly one winner.
+- The rotate_in_transaction() API performs the same replacement inside a caller-owned transaction and uses a savepoint so a failed rotation rolls back only its own partial work; the caller retains ownership of the outer commit/rollback.
 - `revoke_all_for_account(account_id)` removes every session for one account (logout all devices), returns the deleted row count, and is idempotent when repeated. It uses `BEGIN IMMEDIATE` so it serializes with protected `authorized_transaction()` work on other connections.
 - Concurrent revocation against separate SQLite connections has one winner.
 - Rejects an already-active caller transaction instead of committing work owned by the caller.
@@ -114,3 +116,29 @@ when composing work inside a caller-owned transaction; use
 authorized_transaction when the authorization check and protected mutation
 must share one BEGIN IMMEDIATE boundary. Integrity audits also require an
 idle connection and remain read-only.
+
+## Atomic bearer-token rotation
+
+After a trusted authentication or session-renewal decision, server code may
+rotate an active token:
+
+~~~python
+replacement = store.rotate(current_token, ttl_seconds=900)
+# Persist/deliver only the replacement token; the old token is now invalid.
+~~~
+
+rotate() starts BEGIN IMMEDIATE, validates the old row against one captured
+clock value, inserts a fresh 256-bit token digest for the same account, deletes
+the old digest, and commits both changes together. Two connections racing to
+rotate the same token serialize; one receives a replacement and the other gets
+an invalid-session error.
+
+When composing rotation into a larger account transaction, use
+rotate_in_transaction(). It requires an active caller transaction and wraps
+the insert/delete pair in a savepoint. If validation or either SQL operation
+fails, only the rotation's work is rolled back; unrelated caller writes remain
+inside the caller-owned transaction. The caller must still commit or roll back
+the outer transaction.
+
+Rotation is a generic synthetic session-store capability. It does not define
+an AOW reconnect, refresh, session-restore packet, or APK login behavior.
