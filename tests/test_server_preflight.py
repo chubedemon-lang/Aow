@@ -9,7 +9,9 @@ from pathlib import Path
 from server.mock import Domain
 from server.runtime_safety import RuntimeSafetyError, validate_loopback_bind
 from tools.server_preflight import (
+    MAX_SCHEMA_SQL_CHARS,
     PreflightError,
+    _extract_check_expressions,
     inspect_synthetic_database,
     main,
     run_preflight,
@@ -163,6 +165,10 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(PreflightError, "CHECK constraints"):
             inspect_synthetic_database(database)
+
+    def test_bounds_schema_sql_tokenization(self):
+        sql = "CHECK(balance >= 0)" + (" " * MAX_SCHEMA_SQL_CHARS)
+        self.assertEqual(_extract_check_expressions(sql), set())
 
     def test_rejects_wrong_required_column_affinity(self):
         database = Path(self.temp.name) / "wrong_type.sqlite3"
