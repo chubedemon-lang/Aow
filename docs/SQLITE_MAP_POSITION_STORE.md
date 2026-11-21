@@ -20,6 +20,18 @@ SqliteMapPositionStore supports:
 
 Every successful transition increments the revision exactly once.
 
+## Schema initialization
+
+Construction requires an idle connection and performs table/index creation plus
+schema validation in one `BEGIN IMMEDIATE` transaction. Before the store is
+usable it requires exact column signatures for both tables, the single
+`map_position_mutations.character_id → map_position_snapshots.character_id`
+cascade foreign key, no foreign keys on the snapshot table, and the named
+non-unique index on `(character_id, result_revision)`. A pre-existing table,
+foreign key, or index with an incompatible shape is rejected; any tables or
+indexes created during that failed bootstrap are rolled back. No legacy schema
+migration is currently supported.
+
 ## Transaction and retry semantics
 
 A standalone create or enter/move/leave transition uses one SQLite BEGIN IMMEDIATE transaction. When the caller already owns a transaction, each operation uses a private savepoint: success releases only that savepoint, while failure rolls back only that operation and leaves the outer transaction open. The caller remains responsible for the outer commit or rollback. A request ID is globally unique within this store:

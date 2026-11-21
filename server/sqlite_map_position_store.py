@@ -16,6 +16,22 @@ from server.synthetic_map_position import MapPosition, MapPositionError, Positio
 _MAX_REVISION = 2**63 - 1
 _MAX_MAP_ID = 2**31 - 1
 
+_MAP_POSITION_SNAPSHOT_COLUMNS = {
+    "character_id": ("TEXT", 0, 1, None),
+    "map_id": ("INTEGER", 0, 0, None),
+    "x": ("INTEGER", 0, 0, None),
+    "y": ("INTEGER", 0, 0, None),
+    "revision": ("INTEGER", 1, 0, None),
+}
+_MAP_POSITION_MUTATION_COLUMNS = {
+    "request_id": ("TEXT", 0, 1, None),
+    "character_id": ("TEXT", 1, 0, None),
+    "expected_revision": ("INTEGER", 1, 0, None),
+    "payload_json": ("TEXT", 1, 0, None),
+    "result_json": ("TEXT", 1, 0, None),
+    "result_revision": ("INTEGER", 1, 0, None),
+}
+
 
 class MapPositionStoreError(ValueError):
     """Invalid or inconsistent synthetic map-position state."""
@@ -90,43 +106,129 @@ class SqliteMapPositionStore:
         self.db = connection
         self.db.execute("PRAGMA busy_timeout = 10000")
         self.db.execute("PRAGMA foreign_keys = ON")
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS map_position_snapshots (
-                character_id TEXT PRIMARY KEY
-                    CHECK(length(character_id) BETWEEN 1 AND 128),
-                map_id INTEGER,
-                x INTEGER,
-                y INTEGER,
-                revision INTEGER NOT NULL
-                    CHECK(revision BETWEEN 0 AND 9223372036854775807),
-                CHECK(
-                    (map_id IS NULL AND x IS NULL AND y IS NULL)
-                    OR
-                    (map_id BETWEEN 0 AND 2147483647
-                     AND x BETWEEN -2147483648 AND 2147483647
-                     AND y BETWEEN -2147483648 AND 2147483647)
-                )
-            )"""
+        try:
+            # Bootstrap and schema verification are one transaction. A
+            # pre-existing incompatible object must not leave newly-created
+            # tables or indexes behind.
+            self.db.execute("BEGIN IMMEDIATE")
+            self.db.execute(
+                """CREATE TABLE IF NOT EXISTS map_position_snapshots (
+                    character_id TEXT PRIMARY KEY
+                        CHECK(length(character_id) BETWEEN 1 AND 128),
+                    map_id INTEGER,
+                    x INTEGER,
+                    y INTEGER,
+                    revision INTEGER NOT NULL
+                        CHECK(revision BETWEEN 0 AND 9223372036854775807),
+                    CHECK(
+                        (map_id IS NULL AND x IS NULL AND y IS NULL)
+                        OR
+                        (map_id BETWEEN 0 AND 2147483647
+                         AND x BETWEEN -2147483648 AND 2147483647
+                         AND y BETWEEN -2147483648 AND 2147483647)
+                    )
+                )"""
+            )
+            self.db.execute(
+                """CREATE TABLE IF NOT EXISTS map_position_mutations (
+                    request_id TEXT PRIMARY KEY
+                        CHECK(length(request_id) BETWEEN 1 AND 128),
+                    character_id TEXT NOT NULL,
+                    expected_revision INTEGER NOT NULL CHECK(expected_revision >= 0),
+                    payload_json TEXT NOT NULL,
+                    result_json TEXT NOT NULL,
+                    result_revision INTEGER NOT NULL CHECK(result_revision > 0),
+                    FOREIGN KEY(character_id)
+                        REFERENCES map_position_snapshots(character_id)
+                        ON DELETE CASCADE
+                )"""
+            )
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS map_position_mutations_character "
+                "ON map_position_mutations(character_id, result_revision)"
+            )
+            self._validate_schema()
+            self.db.commit()
+        except BaseException:
+            if self.db.in_transaction:
+                self.db.rollback()
+            raise
+
+    def _validate_table_columns(self, table_name, expected_columns):
+        """Require an exact persisted column signature for a known table."""
+        if type(table_name) is not str or table_name not in {
+            "map_position_snapshots", "map_position_mutations"
+        }:
+            raise MapPositionStoreError("invalid map-position table selector")
+        table = self.db.execute(
+            "SELECT type FROM sqlite_master WHERE name=?", (table_name,)
+        ).fetchone()
+        if table != ("table",):
+            raise MapPositionStoreError("incompatible map-position table")
+        rows = self.db.execute(
+            "PRAGMA table_info(" + table_name + ")"
+        ).fetchall()
+        actual_columns = {
+            row[1]: (
+                str(row[2]).strip().upper(), int(row[3]), int(row[5]), row[4]
+            )
+            for row in rows
+        }
+        if len(rows) != len(expected_columns) or actual_columns != expected_columns:
+            raise MapPositionStoreError("incompatible map-position schema")
+
+    def _validate_schema(self):
+        """Validate persisted layouts, ownership FK and mutation index."""
+        self._validate_table_columns(
+            "map_position_snapshots", _MAP_POSITION_SNAPSHOT_COLUMNS
         )
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS map_position_mutations (
-                request_id TEXT PRIMARY KEY
-                    CHECK(length(request_id) BETWEEN 1 AND 128),
-                character_id TEXT NOT NULL,
-                expected_revision INTEGER NOT NULL CHECK(expected_revision >= 0),
-                payload_json TEXT NOT NULL,
-                result_json TEXT NOT NULL,
-                result_revision INTEGER NOT NULL CHECK(result_revision > 0),
-                FOREIGN KEY(character_id)
-                    REFERENCES map_position_snapshots(character_id)
-                    ON DELETE CASCADE
-            )"""
+        self._validate_table_columns(
+            "map_position_mutations", _MAP_POSITION_MUTATION_COLUMNS
         )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS map_position_mutations_character "
-            "ON map_position_mutations(character_id, result_revision)"
+        if self.db.execute(
+            "PRAGMA foreign_key_list(map_position_snapshots)"
+        ).fetchall():
+            raise MapPositionStoreError("unexpected map-position snapshot foreign key")
+        foreign_keys = self.db.execute(
+            "PRAGMA foreign_key_list(map_position_mutations)"
+        ).fetchall()
+        actual_foreign_keys = tuple(
+            (row[2], row[3], row[4], row[5], row[6], row[7])
+            for row in foreign_keys
         )
-        self.db.commit()
+        expected_foreign_keys = ((
+            "map_position_snapshots", "character_id", "character_id",
+            "NO ACTION", "CASCADE", "NONE",
+        ),)
+        if actual_foreign_keys != expected_foreign_keys:
+            raise MapPositionStoreError("incompatible map-position ownership foreign key")
+
+        index_object = self.db.execute(
+            "SELECT type, tbl_name FROM sqlite_master "
+            "WHERE name='map_position_mutations_character'"
+        ).fetchone()
+        if index_object != ("index", "map_position_mutations"):
+            raise MapPositionStoreError("incompatible map-position mutation index")
+        indexes = [
+            row for row in self.db.execute(
+                "PRAGMA index_list(map_position_mutations)"
+            ).fetchall()
+            if row[1] == "map_position_mutations_character"
+        ]
+        if (
+            len(indexes) != 1
+            or int(indexes[0][2]) != 0
+            or indexes[0][3] != "c"
+            or (len(indexes[0]) > 4 and int(indexes[0][4]) != 0)
+        ):
+            raise MapPositionStoreError("incompatible map-position mutation index")
+        indexed_columns = tuple(
+            row[2] for row in self.db.execute(
+                "PRAGMA index_info(map_position_mutations_character)"
+            ).fetchall()
+        )
+        if indexed_columns != ("character_id", "result_revision"):
+            raise MapPositionStoreError("incompatible map-position mutation index")
 
     @staticmethod
     def _character_id(value):
