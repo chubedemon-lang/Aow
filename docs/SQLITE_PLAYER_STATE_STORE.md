@@ -14,6 +14,9 @@
 - The constructor accepts only an exact built-in `sqlite3.Connection`; subclasses are rejected before custom connection hooks can run.
 - Character and request identifiers must be exact built-in strings, non-empty after whitespace-only validation, and at most 128 characters. Existing non-empty identifiers with surrounding whitespace remain unchanged for compatibility. String subclasses are rejected before `strip`, length, or hash hooks can run.
 - Separate SQLite connections serialize writers; concurrent identical requests produce one mutation and idempotent replays.
+- Schema bootstrap and the legacy `baseline_version` migration run in one `BEGIN IMMEDIATE` transaction; a rejected schema leaves no partial tables or migration behind.
+- The constructor validates exact column names, declared types, nullability, primary-key layout and defaults for snapshots, creation receipts and mutation receipts. It also validates the named non-unique mutation-history index and its ordered columns before reusing an existing database.
+- Legacy snapshots are migrated only when their pre-migration column layout exactly matches the supported five-column schema; malformed or extra-column layouts are rejected rather than altered.
 
 ## Integrity audit
 

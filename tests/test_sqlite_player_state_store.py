@@ -468,6 +468,79 @@ class SqlitePlayerStateStoreTests(unittest.TestCase):
             0,
         )
 
+    def test_malformed_legacy_snapshot_schema_is_rejected_without_partial_migration(self):
+        legacy_path = os.path.join(self.temp.name, "malformed-legacy.sqlite3")
+        legacy = sqlite3.connect(legacy_path, isolation_level=None)
+        legacy.execute(
+            """CREATE TABLE player_state_snapshots (
+                character_id TEXT PRIMARY KEY,
+                level TEXT NOT NULL,
+                experience INTEGER NOT NULL,
+                currency INTEGER NOT NULL,
+                revision INTEGER NOT NULL
+            )"""
+        )
+        legacy.close()
+
+        connection = sqlite3.connect(legacy_path, isolation_level=None)
+        try:
+            with self.assertRaisesRegex(PlayerStoreError, "incompatible player-state schema"):
+                SqlitePlayerStateStore(connection)
+            self.assertFalse(connection.in_transaction)
+            columns = {
+                row[1] for row in connection.execute(
+                    "PRAGMA table_info(player_state_snapshots)"
+                )
+            }
+            self.assertNotIn("baseline_version", columns)
+            self.assertIsNone(connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE name='player_state_creations'"
+            ).fetchone())
+        finally:
+            connection.close()
+
+    def test_wrong_existing_mutation_index_is_rejected_and_preserved(self):
+        legacy_path = os.path.join(self.temp.name, "wrong-index.sqlite3")
+        legacy = sqlite3.connect(legacy_path, isolation_level=None)
+        legacy.execute(
+            """CREATE TABLE player_state_mutations (
+                request_id TEXT PRIMARY KEY,
+                character_id TEXT NOT NULL,
+                expected_revision INTEGER NOT NULL,
+                requested_level INTEGER,
+                experience_delta INTEGER NOT NULL,
+                currency_delta INTEGER NOT NULL,
+                result_level INTEGER NOT NULL,
+                result_experience INTEGER NOT NULL,
+                result_currency INTEGER NOT NULL,
+                result_revision INTEGER NOT NULL
+            )"""
+        )
+        legacy.execute(
+            "CREATE INDEX player_state_mutations_character "
+            "ON player_state_mutations(result_revision)"
+        )
+        legacy.close()
+
+        connection = sqlite3.connect(legacy_path, isolation_level=None)
+        try:
+            with self.assertRaisesRegex(PlayerStoreError, "mutation index"):
+                SqlitePlayerStateStore(connection)
+            self.assertFalse(connection.in_transaction)
+            indexed_columns = tuple(
+                row[2] for row in connection.execute(
+                    "PRAGMA index_info(player_state_mutations_character)"
+                ).fetchall()
+            )
+            self.assertEqual(indexed_columns, ("result_revision",))
+            self.assertIsNone(connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE name='player_state_snapshots'"
+            ).fetchone())
+        finally:
+            connection.close()
+
     def test_legacy_schema_migrates_as_unanchored(self):
         legacy_path = os.path.join(self.temp.name, "legacy.sqlite3")
         legacy = sqlite3.connect(legacy_path, isolation_level=None)

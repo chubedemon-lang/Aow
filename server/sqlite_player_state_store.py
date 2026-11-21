@@ -15,6 +15,37 @@ _MAX_EXPERIENCE = 2**63 - 1
 _MAX_CURRENCY = 2**31 - 1
 _MAX_REVISION = 2**63 - 1
 
+_SNAPSHOT_COLUMNS = {
+    "character_id": ("TEXT", 0, 1, None),
+    "level": ("INTEGER", 1, 0, None),
+    "experience": ("INTEGER", 1, 0, None),
+    "currency": ("INTEGER", 1, 0, None),
+    "revision": ("INTEGER", 1, 0, None),
+    "baseline_version": ("INTEGER", 1, 0, "0"),
+}
+_LEGACY_SNAPSHOT_COLUMNS = {
+    name: signature
+    for name, signature in _SNAPSHOT_COLUMNS.items()
+    if name != "baseline_version"
+}
+_CREATION_COLUMNS = {
+    name: signature
+    for name, signature in _SNAPSHOT_COLUMNS.items()
+    if name != "baseline_version"
+}
+_MUTATION_COLUMNS = {
+    "request_id": ("TEXT", 0, 1, None),
+    "character_id": ("TEXT", 1, 0, None),
+    "expected_revision": ("INTEGER", 1, 0, None),
+    "requested_level": ("INTEGER", 0, 0, None),
+    "experience_delta": ("INTEGER", 1, 0, None),
+    "currency_delta": ("INTEGER", 1, 0, None),
+    "result_level": ("INTEGER", 1, 0, None),
+    "result_experience": ("INTEGER", 1, 0, None),
+    "result_currency": ("INTEGER", 1, 0, None),
+    "result_revision": ("INTEGER", 1, 0, None),
+}
+
 
 class PlayerStoreError(ValueError):
     """Invalid or inconsistent durable player state."""
@@ -58,64 +89,146 @@ class SqlitePlayerStateStore:
             raise ValueError("connection must not have an active transaction")
         self.db = connection
         self.db.execute("PRAGMA busy_timeout = 10000")
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS player_state_snapshots (
-                character_id TEXT PRIMARY KEY
-                    CHECK(length(character_id) BETWEEN 1 AND 128),
-                level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 1000),
-                experience INTEGER NOT NULL
-                    CHECK(experience BETWEEN 0 AND 9223372036854775807),
-                currency INTEGER NOT NULL
-                    CHECK(currency BETWEEN 0 AND 2147483647),
-                revision INTEGER NOT NULL
-                    CHECK(revision BETWEEN 0 AND 9223372036854775807),
-                baseline_version INTEGER NOT NULL DEFAULT 0
-                    CHECK(baseline_version IN (0, 1))
-            )"""
-        )
-        snapshot_columns = {
-            row[1] for row in self.db.execute(
-                "PRAGMA table_info(player_state_snapshots)"
-            )
-        }
-        if "baseline_version" not in snapshot_columns:
-            # Existing databases remain readable as legacy/unanchored snapshots.
+        try:
+            # Schema creation and the legacy baseline-version migration must
+            # succeed as one unit. A malformed pre-existing table must not
+            # leave half-created player-state tables behind.
+            self.db.execute("BEGIN IMMEDIATE")
             self.db.execute(
-                "ALTER TABLE player_state_snapshots ADD COLUMN "
-                "baseline_version INTEGER NOT NULL DEFAULT 0 "
-                "CHECK(baseline_version IN (0, 1))"
+                """CREATE TABLE IF NOT EXISTS player_state_snapshots (
+                    character_id TEXT PRIMARY KEY
+                        CHECK(length(character_id) BETWEEN 1 AND 128),
+                    level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 1000),
+                    experience INTEGER NOT NULL
+                        CHECK(experience BETWEEN 0 AND 9223372036854775807),
+                    currency INTEGER NOT NULL
+                        CHECK(currency BETWEEN 0 AND 2147483647),
+                    revision INTEGER NOT NULL
+                        CHECK(revision BETWEEN 0 AND 9223372036854775807),
+                    baseline_version INTEGER NOT NULL DEFAULT 0
+                        CHECK(baseline_version IN (0, 1))
+                )"""
             )
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS player_state_creations (
-                character_id TEXT PRIMARY KEY
-                    CHECK(length(character_id) BETWEEN 1 AND 128),
-                level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 1000),
-                experience INTEGER NOT NULL
-                    CHECK(experience BETWEEN 0 AND 9223372036854775807),
-                currency INTEGER NOT NULL
-                    CHECK(currency BETWEEN 0 AND 2147483647)
-            )"""
+            snapshot_columns = {
+                row[1] for row in self.db.execute(
+                    "PRAGMA table_info(player_state_snapshots)"
+                )
+            }
+            if "baseline_version" not in snapshot_columns:
+                # Migrate only the exact legacy layout; do not ALTER a table
+                # that merely happens to share the expected table name.
+                self._validate_table_columns(
+                    "player_state_snapshots", _LEGACY_SNAPSHOT_COLUMNS
+                )
+                self.db.execute(
+                    "ALTER TABLE player_state_snapshots ADD COLUMN "
+                    "baseline_version INTEGER NOT NULL DEFAULT 0 "
+                    "CHECK(baseline_version IN (0, 1))"
+                )
+            self.db.execute(
+                """CREATE TABLE IF NOT EXISTS player_state_creations (
+                    character_id TEXT PRIMARY KEY
+                        CHECK(length(character_id) BETWEEN 1 AND 128),
+                    level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 1000),
+                    experience INTEGER NOT NULL
+                        CHECK(experience BETWEEN 0 AND 9223372036854775807),
+                    currency INTEGER NOT NULL
+                        CHECK(currency BETWEEN 0 AND 2147483647)
+                )"""
+            )
+            self.db.execute(
+                """CREATE TABLE IF NOT EXISTS player_state_mutations (
+                    request_id TEXT PRIMARY KEY
+                        CHECK(length(request_id) BETWEEN 1 AND 128),
+                    character_id TEXT NOT NULL,
+                    expected_revision INTEGER NOT NULL CHECK(expected_revision >= 0),
+                    requested_level INTEGER,
+                    experience_delta INTEGER NOT NULL,
+                    currency_delta INTEGER NOT NULL,
+                    result_level INTEGER NOT NULL,
+                    result_experience INTEGER NOT NULL,
+                    result_currency INTEGER NOT NULL,
+                    result_revision INTEGER NOT NULL
+                )"""
+            )
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS player_state_mutations_character "
+                "ON player_state_mutations(character_id, result_revision)"
+            )
+            self._validate_schema()
+            self.db.commit()
+        except BaseException:
+            if self.db.in_transaction:
+                self.db.rollback()
+            raise
+
+    def _validate_table_columns(self, table_name, expected_columns):
+        """Require an exact table shape before reading or migrating its rows."""
+        if type(table_name) is not str or table_name not in {
+            "player_state_snapshots",
+            "player_state_creations",
+            "player_state_mutations",
+        }:
+            raise PlayerStoreError("invalid player-state table selector")
+        table = self.db.execute(
+            "SELECT type FROM sqlite_master WHERE name=?", (table_name,)
+        ).fetchone()
+        if table != ("table",):
+            raise PlayerStoreError("incompatible player-state table")
+        rows = self.db.execute(
+            "PRAGMA table_info(" + table_name + ")"
+        ).fetchall()
+        actual_columns = {
+            row[1]: (
+                str(row[2]).strip().upper(),
+                int(row[3]),
+                int(row[5]),
+                row[4],
+            )
+            for row in rows
+        }
+        if (len(rows) != len(expected_columns)
+                or actual_columns != expected_columns):
+            raise PlayerStoreError("incompatible player-state schema")
+
+    def _validate_schema(self):
+        """Validate persisted table layouts and the named mutation index."""
+        self._validate_table_columns(
+            "player_state_snapshots", _SNAPSHOT_COLUMNS
         )
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS player_state_mutations (
-                request_id TEXT PRIMARY KEY
-                    CHECK(length(request_id) BETWEEN 1 AND 128),
-                character_id TEXT NOT NULL,
-                expected_revision INTEGER NOT NULL CHECK(expected_revision >= 0),
-                requested_level INTEGER,
-                experience_delta INTEGER NOT NULL,
-                currency_delta INTEGER NOT NULL,
-                result_level INTEGER NOT NULL,
-                result_experience INTEGER NOT NULL,
-                result_currency INTEGER NOT NULL,
-                result_revision INTEGER NOT NULL
-            )"""
+        self._validate_table_columns(
+            "player_state_creations", _CREATION_COLUMNS
         )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS player_state_mutations_character "
-            "ON player_state_mutations(character_id, result_revision)"
+        self._validate_table_columns(
+            "player_state_mutations", _MUTATION_COLUMNS
         )
-        self.db.commit()
+
+        index_object = self.db.execute(
+            "SELECT type, tbl_name FROM sqlite_master "
+            "WHERE name='player_state_mutations_character'"
+        ).fetchone()
+        if index_object != ("index", "player_state_mutations"):
+            raise PlayerStoreError("incompatible player-state mutation index")
+        indexes = [
+            row for row in self.db.execute(
+                "PRAGMA index_list(player_state_mutations)"
+            ).fetchall()
+            if row[1] == "player_state_mutations_character"
+        ]
+        if (
+            len(indexes) != 1
+            or int(indexes[0][2]) != 0
+            or indexes[0][3] != "c"
+            or (len(indexes[0]) > 4 and int(indexes[0][4]) != 0)
+        ):
+            raise PlayerStoreError("incompatible player-state mutation index")
+        indexed_columns = tuple(
+            row[2] for row in self.db.execute(
+                "PRAGMA index_info(player_state_mutations_character)"
+            ).fetchall()
+        )
+        if indexed_columns != ("character_id", "result_revision"):
+            raise PlayerStoreError("incompatible player-state mutation index")
 
     @staticmethod
     def _character_id(value):
