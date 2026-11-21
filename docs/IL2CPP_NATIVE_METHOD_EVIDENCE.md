@@ -210,3 +210,17 @@ This metadata summary complements the native callsite trace. It does not by
 itself resolve the field's managed type, prove the effective `HeaderLength`,
 identify the exact static field load/store, recover numeric message IDs, or
 establish a packet schema.
+
+
+## Native callsite analyzer input boundary — 2026-11-21
+
+The relocation-backed indirect-call and ordered serializer-helper summaries
+accept exact built-in `bytes` and `dict` inputs. Relocation slots must be
+non-negative built-in integers; a resolved relocation entry must be an exact
+two-integer tuple. Helper-target maps use non-negative built-in integer keys
+and built-in lists/tuples containing exact strings. Subclasses are rejected
+before custom length, lookup, or iteration hooks can run.
+
+This is analyzer input hardening only. It adds no APK observation, native
+disassembly, packet fixture, call-target attribution, wire semantics, or
+compatibility claim.

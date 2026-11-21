@@ -16,6 +16,7 @@ from tools.il2cpp_native_method_evidence import (
     _decode_aarch64_flag_setting_producer,
     _summarize_aarch64_calls, _summarize_control_flow_serializer_helper_blocks,
     _summarize_relocated_indirect_calls,
+    _relocated_indirect_call_events,
     _summarize_ordered_serializer_helper_calls,
     _summarize_control_flow_helper_paths,
     _summarize_serializer_deserializer_path_alignment,
@@ -836,6 +837,58 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertIsNone(_decode_aarch64_add_imm64(0xD503201F))
         self.assertIsNone(_decode_aarch64_ldr_x_unsigned(0xD503201F))
 
+
+    def test_relocated_indirect_events_reject_hostile_code_and_mapping_subclasses(self):
+        class HostileBytes(bytes):
+            def __len__(self):
+                raise AssertionError("custom byte length hook must not run")
+
+        class HostileDict(dict):
+            def get(self, *args, **kwargs):
+                raise AssertionError("custom mapping lookup must not run")
+
+        with self.assertRaisesRegex(ValueError, "exact built-in bytes"):
+            _relocated_indirect_call_events(HostileBytes(b""), 0x5000, {})
+        with self.assertRaisesRegex(ValueError, "exact built-in dict"):
+            _relocated_indirect_call_events(b"", 0x5000, HostileDict())
+
+    def test_relocated_indirect_events_reject_hostile_relocation_tuple(self):
+        class HostileTuple(tuple):
+            def __len__(self):
+                raise AssertionError("custom tuple length hook must not run")
+
+        start = 0x5000
+        words = (
+            self._encode_adrp(start, 0x3000, 8),
+            self._encode_add_x(8, 8, 0x80),
+            self._encode_ldr_x(9, 8),
+            self._encode_blr(9),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        with self.assertRaisesRegex(ValueError, "exact two-integer tuple"):
+            _relocated_indirect_call_events(
+                code,
+                start,
+                {0x3080: HostileTuple((R_AARCH64_RELATIVE, 0x6010))},
+            )
+
+    def test_ordered_helper_summary_rejects_hostile_container_subclasses(self):
+        class HostileDict(dict):
+            def get(self, *args, **kwargs):
+                raise AssertionError("custom mapping lookup must not run")
+
+        class HostileLabels(list):
+            def __len__(self):
+                raise AssertionError("custom label length hook must not run")
+
+        with self.assertRaisesRegex(ValueError, "exact built-in dicts"):
+            _summarize_ordered_serializer_helper_calls(
+                b"", 0x5000, {}, HostileDict()
+            )
+        with self.assertRaisesRegex(ValueError, "helper target labels"):
+            _summarize_ordered_serializer_helper_calls(
+                b"", 0x5000, {}, {0x2000: HostileLabels(["SimpleSerializer::serializeInt"])}
+            )
 
     def test_ordered_helper_summary_interleaves_direct_indirect_and_tail_calls(self):
         start = 0x5000
