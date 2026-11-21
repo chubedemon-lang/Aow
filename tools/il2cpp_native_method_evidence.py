@@ -939,6 +939,16 @@ def _summarize_bucketed_lookup_shape(code):
                 continue
             stride_register = stride[0]
 
+            # The next-index calculation occurs after an indirect call. Under
+            # AAPCS64, only x19-x29 are guaranteed to survive that call. Without
+            # stack spill/reload analysis, do not carry caller-saved values
+            # across BLR and label the result as register-linked.
+            if not all(
+                19 <= register <= 29
+                for register in (entry_index_register, stride_register, entries_base)
+            ):
+                continue
+
             multiply_index, multiply = find_after(
                 stride_index + 1,
                 _decode_aarch64_umaddl,
