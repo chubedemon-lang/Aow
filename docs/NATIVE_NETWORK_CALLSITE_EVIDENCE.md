@@ -961,3 +961,19 @@ the APK in this PR. If the real helper uses stack spill/reload or another
 preservation pattern, the matcher will remain unresolved until that pattern is
 explicitly modeled. No new APK disassembly, packet, message-ID, framing,
 compression, handshake, LoginRequest-order or compatibility finding is claimed.
+
+
+## Stable APK input for native callsite analysis
+
+The native callsite analyzer now delegates APK reading to the same bounded
+no-follow descriptor reader used by the IL2CPP codegen inventory. The metadata
+member, ARM64 native member and SHA-256 are obtained from one opened regular-file
+descriptor rather than hashing a pathname and reopening it for ZIP extraction.
+The shared reader rejects symlinks, path replacement, duplicate required
+members, encrypted required members, oversized members and file-identity
+changes during the read/hash passes.
+
+This is input-provenance hardening only. It does not add APK observations,
+native disassembly, packet bytes, framing, handshake, LoginRequest field order
+or compatibility evidence. Synthetic integration tests cover the native
+analyzer's use of the shared reader and rejection of duplicate required members.

@@ -6,10 +6,8 @@ This is static registration evidence, not a wire-protocol compatibility proof.
 """
 import argparse
 import bisect
-import hashlib
 import json
 import struct
-import zipfile
 from collections import Counter, defaultdict
 
 from tools.aarch64_eh_frame_index import (
@@ -18,9 +16,8 @@ from tools.aarch64_eh_frame_index import (
 from pathlib import Path
 
 from tools.il2cpp_codegen_inventory import (
-    ARM64_IL2CPP_MEMBER, MAX_APK, MAX_ELF, MAX_METADATA, METADATA_MEMBER,
     R_AARCH64_RELATIVE, CodegenInventoryError, _contains, _elf_sections,
-    _metadata_images, _slice, _table,
+    _metadata_images, _read_apk_members, _slice, _table,
 )
 
 from tools.aarch64_memory_access_evidence import (
@@ -3756,32 +3753,9 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
 
 
 def inspect_apk(apk_path):
-    """Read only bounded metadata and arm64 libil2cpp members from a local APK."""
-    path = Path(apk_path)
-    if path.is_symlink() or not path.is_file():
-        raise CodegenInventoryError("expected a regular local APK")
-    if not 0 < path.stat().st_size <= MAX_APK:
-        raise CodegenInventoryError("APK size outside safety bounds")
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    try:
-        with zipfile.ZipFile(path) as archive:
-            metadata_info = archive.getinfo(METADATA_MEMBER)
-            elf_info = archive.getinfo(ARM64_IL2CPP_MEMBER)
-            if (metadata_info.file_size > MAX_METADATA
-                    or elf_info.file_size > MAX_ELF):
-                raise CodegenInventoryError("analysis member exceeds size limit")
-            with archive.open(metadata_info) as member:
-                metadata = member.read(MAX_METADATA + 1)
-            with archive.open(elf_info) as member:
-                elf = member.read(MAX_ELF + 1)
-    except (KeyError, zipfile.BadZipFile, OSError) as exc:
-        raise CodegenInventoryError("APK is missing valid IL2CPP members") from exc
-    if len(metadata) > MAX_METADATA or len(elf) > MAX_ELF:
-        raise CodegenInventoryError("analysis member exceeds size limit")
-    return inspect_bytes(metadata, elf, digest.hexdigest())
+    """Inspect members and fingerprint from one stable, no-follow APK descriptor."""
+    metadata, elf, apk_sha256 = _read_apk_members(Path(apk_path))
+    return inspect_bytes(metadata, elf, apk_sha256)
 
 
 def main(argv=None):
