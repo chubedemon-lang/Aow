@@ -43,17 +43,25 @@ class SqliteSessionStore:
         self.ttl_seconds = ttl_seconds
         self.clock = clock if clock is not None else time.time
         self.db.execute("PRAGMA busy_timeout = 10000")
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS durable_sessions (
-                token_hash BLOB PRIMARY KEY
-                    CHECK(typeof(token_hash) = 'blob' AND length(token_hash) = 32),
-                account_id INTEGER NOT NULL CHECK(account_id > 0),
-                created_at REAL NOT NULL,
-                expires_at REAL NOT NULL CHECK(expires_at > created_at)
-            )"""
-        )
-        self._validate_schema()
-        self.db.commit()
+        # SQLite DDL is transactional. Keep table creation, validation and the
+        # expiry-index migration in one write transaction so a rejected
+        # pre-existing object cannot leave a partially initialized store.
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.db.execute(
+                """CREATE TABLE IF NOT EXISTS durable_sessions (
+                    token_hash BLOB PRIMARY KEY
+                        CHECK(typeof(token_hash) = 'blob' AND length(token_hash) = 32),
+                    account_id INTEGER NOT NULL CHECK(account_id > 0),
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL CHECK(expires_at > created_at)
+                )"""
+            )
+            self._validate_schema()
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
 
     def _validate_schema(self):
         """Reject an incompatible pre-existing session table or expiry index."""

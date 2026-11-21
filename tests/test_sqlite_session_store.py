@@ -868,6 +868,32 @@ class SqliteSessionStoreTests(unittest.TestCase):
             "WHERE type='index' AND name='durable_sessions_expiry'"
         ).fetchone())
 
+    def test_constructor_rolls_back_new_table_when_expiry_index_name_is_owned_elsewhere(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.execute("CREATE TABLE unrelated (value INTEGER)")
+        connection.execute(
+            "CREATE INDEX durable_sessions_expiry ON unrelated(value)"
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "incompatible durable session expiry index"
+        ):
+            SqliteSessionStore(connection, clock=lambda: self.now)
+
+        self.assertFalse(connection.in_transaction)
+        self.assertIsNone(connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='durable_sessions'"
+        ).fetchone())
+        self.assertEqual(
+            connection.execute(
+                "SELECT type, tbl_name FROM sqlite_master "
+                "WHERE name='durable_sessions_expiry'"
+            ).fetchone(),
+            ("index", "unrelated"),
+        )
+
     def test_constructor_rejects_existing_expiry_index_on_wrong_column(self):
         connection = sqlite3.connect(":memory:", isolation_level=None)
         self.addCleanup(connection.close)
