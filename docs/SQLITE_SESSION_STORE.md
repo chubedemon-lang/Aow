@@ -20,6 +20,7 @@
 - Concurrent revocation against separate SQLite connections has one winner.
 - Rejects an already-active caller transaction instead of committing work owned by the caller.
 - The constructor accepts only an exact built-in `sqlite3.Connection`; connection subclasses are rejected before any overridden properties or methods can run.
+- The constructor validates the existing `durable_sessions` table's exact column names, declared types, nullability, primary-key layout and defaults before accepting it. It also validates the named non-unique expiry index and its target column; an incompatible pre-existing table or index is rejected instead of being silently reused.
 
 ## Persisted-row validation
 
@@ -86,9 +87,8 @@ No APK bytes, proprietary assets, credentials or packet captures belong in this 
 `verify_integrity()` pins one SQLite read snapshot, runs
 `PRAGMA quick_check`, then streams all durable-session rows through
 the same strict account/expiry validation used by token resolution. It also
-requires each stored token digest to be a 32-byte BLOB. It returns
-`{"session_count": N}` and does not delete expired rows, repair
-corruption, or expose token digests. Expired rows remain included until the
+requires each stored token digest to be a 32-byte BLOB. It returns the session, active-session and expired-session counts and does not
+delete expired rows, repair corruption, or expose token digests. Expired rows remain included until the
 separate `purge_expired()` cleanup operation runs.
 
 The audit requires an idle connection and always rolls back its read
