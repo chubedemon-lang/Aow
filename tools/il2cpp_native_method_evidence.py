@@ -939,17 +939,11 @@ def _summarize_bucketed_lookup_shape(code):
                 continue
             stride_register = stride[0]
 
-            entry_index_registers = {entry_index_register}
-            for index in range(sentinel_index + 1, len(words)):
-                move = _decode_aarch64_mov_w_register(words[index])
-                if move is not None and move[1] in entry_index_registers:
-                    entry_index_registers.add(move[0])
-
             multiply_index, multiply = find_after(
                 stride_index + 1,
                 _decode_aarch64_umaddl,
                 lambda item: (
-                    item[1] in entry_index_registers
+                    item[1] == entry_index_register
                     and item[2] == stride_register
                     and item[3] == 31
                 ),
@@ -986,12 +980,18 @@ def _summarize_bucketed_lookup_shape(code):
                 else key_compare[0]
             )
             hash_registers = {dividend}
-            for index in range(max(0, divide_index - 32), key_compare_index):
+            for index in range(max(0, divide_index - 32), divide_index):
                 move = _decode_aarch64_mov_w_register(words[index])
                 if move is not None and move[1] in hash_registers:
                     hash_registers.add(move[0])
             if hash_register not in hash_registers:
                 continue
+
+            entry_index_registers = {entry_index_register}
+            for index in range(multiply_index + 1, key_compare_index):
+                move = _decode_aarch64_mov_w_register(words[index])
+                if move is not None and move[1] in entry_index_registers:
+                    entry_index_registers.add(move[0])
 
             unequal_branch_index = skip_nops(key_compare_index + 1)
             unequal_branch = (
