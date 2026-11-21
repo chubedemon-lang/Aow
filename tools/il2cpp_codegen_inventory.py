@@ -343,11 +343,16 @@ def _file_identity(info):
 
 def _read_apk_members(path):
     """Read required members and hash one stable, no-follow APK descriptor."""
-    if path.is_symlink():
-        raise CodegenInventoryError("expected a regular local APK file")
+    try:
+        path_info = os.lstat(path)
+    except OSError as exc:
+        raise CodegenInventoryError("invalid or unsafe APK path") from exc
+    if not stat.S_ISREG(path_info.st_mode):
+        raise CodegenInventoryError("APK path must be a regular non-symlink file")
 
     flags = (
         os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
         | getattr(os, "O_NONBLOCK", 0)
@@ -356,19 +361,28 @@ def _read_apk_members(path):
         descriptor = os.open(path, flags)
     except OSError as exc:
         raise CodegenInventoryError(
-            "unable to open a regular local APK file without following links"
+            "unable to open APK without following links"
         ) from exc
 
     try:
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise CodegenInventoryError("expected a regular local APK file")
-        apk_size = before.st_size
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or _file_identity(path_info) != _file_identity(opened)
+        ):
+            raise CodegenInventoryError("APK path changed before open")
+        apk_size = opened.st_size
         if not 0 < apk_size <= MAX_APK:
             raise CodegenInventoryError("APK path or size is invalid")
 
-        with os.fdopen(descriptor, "rb") as stream:
-            descriptor = -1
+        try:
+            stream = os.fdopen(descriptor, "rb")
+        except OSError as exc:
+            raise CodegenInventoryError(
+                "unable to wrap stable APK descriptor"
+            ) from exc
+        descriptor = None
+        with stream:
             try:
                 with zipfile.ZipFile(stream) as archive:
                     entries = archive.infolist()
@@ -402,45 +416,49 @@ def _read_apk_members(path):
                     if len(elf) != elf_info.file_size:
                         raise CodegenInventoryError("native member size mismatch")
 
-                after_archive = os.fstat(stream.fileno())
-                if _file_identity(before) != _file_identity(after_archive):
-                    raise CodegenInventoryError(
-                        "APK changed while reading its IL2CPP members"
-                    )
-
-                # Hash the same descriptor that supplied the ZIP members.
-                # Reopening the pathname here could pair a digest from one APK
-                # with metadata/native bytes from a replacement file.
-                stream.seek(0)
-                digest = hashlib.sha256()
-                hashed_bytes = 0
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    hashed_bytes += len(chunk)
-                    if hashed_bytes > apk_size:
-                        raise CodegenInventoryError(
-                            "APK grew while computing its fingerprint"
-                        )
-                    digest.update(chunk)
-
-                after_hash = os.fstat(stream.fileno())
-                if (
-                    hashed_bytes != apk_size
-                    or _file_identity(before) != _file_identity(after_hash)
-                ):
-                    raise CodegenInventoryError(
-                        "APK changed while computing its fingerprint"
-                    )
-                return metadata, elf, digest.hexdigest()
-            except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
-                raise CodegenInventoryError("not a readable APK ZIP") from exc
-            except OSError as exc:
+            except (KeyError, zipfile.BadZipFile, zipfile.LargeZipFile, RuntimeError) as exc:
                 raise CodegenInventoryError(
-                    "unable to read a stable regular local APK file"
+                    "APK is missing valid IL2CPP members"
                 ) from exc
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
 
+            after_archive = os.fstat(stream.fileno())
+            if _file_identity(opened) != _file_identity(after_archive):
+                raise CodegenInventoryError("APK changed while reading IL2CPP members")
+
+            # Hash the same descriptor that supplied the ZIP members. Reopening
+            # the pathname could pair a digest from one APK with bytes from another.
+            stream.seek(0)
+            digest = hashlib.sha256()
+            hashed_bytes = 0
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                hashed_bytes += len(chunk)
+                if hashed_bytes > apk_size:
+                    raise CodegenInventoryError("APK grew while computing its fingerprint")
+                digest.update(chunk)
+
+            after_hash = os.fstat(stream.fileno())
+            if (
+                hashed_bytes != apk_size
+                or _file_identity(opened) != _file_identity(after_hash)
+            ):
+                raise CodegenInventoryError("APK changed while computing its fingerprint")
+
+            try:
+                path_after = os.lstat(path)
+            except OSError as exc:
+                raise CodegenInventoryError("APK path changed while reading") from exc
+            if (
+                not stat.S_ISREG(path_after.st_mode)
+                or _file_identity(opened) != _file_identity(path_after)
+            ):
+                raise CodegenInventoryError("APK path changed while reading")
+
+            return metadata, elf, digest.hexdigest()
+    except OSError as exc:
+        raise CodegenInventoryError("unable to read stable APK file") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 def inspect_apk(apk_path):
     """Read only metadata and arm64 libil2cpp from one stable local APK."""
