@@ -119,19 +119,31 @@ class EvidenceGatedTransportAdapter(TransportAdapter):
             raise ValueError("required_through must be a known protocol stage")
         if type(records) not in (list, tuple):
             raise EvidenceError("records must be a built-in list or tuple")
+        if type(approved_evidence_digests) not in (list, tuple, frozenset):
+            raise EvidenceError(
+                "approved_evidence_digests must be a built-in list, tuple, or frozenset"
+            )
+
+        # Snapshot both caller-supplied collections once. The exact same
+        # immutable inputs must be used for readiness evaluation, terminal
+        # record selection, and the adapter's retained evidence metadata.
+        # Otherwise a concurrent caller mutation could change the allowlist
+        # or records after the gate has approved a different collection.
+        record_snapshot = tuple(records)
+        approval_snapshot = tuple(approved_evidence_digests)
 
         stage_index = STAGES.index(required_through)
         required_stages = STAGES[:stage_index + 1]
-        if not records:
+        if not record_snapshot:
             raise UnverifiedProtocolError(
                 "no protocol evidence records supplied",
                 missing_stages=required_stages,
             )
 
         gates = evaluate_evidence(
-            records,
+            record_snapshot,
             artifact_sha256=artifact_sha256,
-            approved_evidence_digests=approved_evidence_digests,
+            approved_evidence_digests=approval_snapshot,
         )
         selected_gate = gates[stage_index]
         if not selected_gate.ready:
@@ -143,10 +155,10 @@ class EvidenceGatedTransportAdapter(TransportAdapter):
                 missing_stages=selected_gate.missing,
             )
 
-        approved = set(approved_evidence_digests)
+        approved = set(approval_snapshot)
         terminal_record = next(
             (
-                record for record in reversed(records)
+                record for record in reversed(record_snapshot)
                 if (
                     record.artifact_sha256 == artifact_sha256
                     and record.topic == required_through
@@ -178,7 +190,7 @@ class EvidenceGatedTransportAdapter(TransportAdapter):
         self._required_through = required_through
         self._gate_results = tuple(gates[:stage_index + 1])
         self._evidence_records = tuple(
-            record for record in records
+            record for record in record_snapshot
             if (
                 record.artifact_sha256 == artifact_sha256
                 and record.topic in required_stages
