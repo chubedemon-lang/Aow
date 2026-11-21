@@ -872,6 +872,51 @@ class NativeMethodEvidenceTests(unittest.TestCase):
                 {0x3080: HostileTuple((R_AARCH64_RELATIVE, 0x6010))},
             )
 
+    def test_control_flow_summary_rejects_hostile_container_subclasses(self):
+        class HostileBytes(bytes):
+            def __len__(self):
+                raise AssertionError("custom byte length hook must not run")
+
+        class HostileDict(dict):
+            def get(self, *args, **kwargs):
+                raise AssertionError("custom mapping lookup must not run")
+
+        with self.assertRaisesRegex(ValueError, "exact built-in bytes"):
+            _summarize_control_flow_serializer_helper_blocks(
+                HostileBytes(b""), 0x5000, {}, {}
+            )
+        with self.assertRaisesRegex(ValueError, "exact built-in dicts"):
+            _summarize_control_flow_serializer_helper_blocks(
+                b"", 0x5000, {}, HostileDict()
+            )
+        with self.assertRaisesRegex(ValueError, "exact built-in dicts"):
+            _summarize_control_flow_serializer_helper_blocks(
+                b"", 0x5000, HostileDict(), {}
+            )
+        with self.assertRaisesRegex(ValueError, "exact built-in dict"):
+            _summarize_control_flow_serializer_helper_blocks(
+                b"", 0x5000, {}, {}, method_targets=HostileDict()
+            )
+
+    def test_control_flow_summary_validates_target_map_keys_and_labels(self):
+        class HostileLabels(list):
+            def __len__(self):
+                raise AssertionError("custom label length hook must not run")
+
+        with self.assertRaisesRegex(ValueError, "helper target labels"):
+            _summarize_control_flow_serializer_helper_blocks(
+                b"", 0x5000, {}, {0x2000: HostileLabels(["SimpleSerializer::serializeInt"])}
+            )
+        with self.assertRaisesRegex(ValueError, "aligned built-in integers"):
+            _summarize_control_flow_serializer_helper_blocks(
+                b"", 0x5000, {}, {0x2001: ["SimpleSerializer::serializeInt"]}
+            )
+        with self.assertRaisesRegex(ValueError, "method target labels"):
+            _summarize_control_flow_serializer_helper_blocks(
+                b"", 0x5000, {}, {},
+                method_targets={0x2000: [object()]},
+            )
+
     def test_ordered_helper_summary_rejects_hostile_container_subclasses(self):
         class HostileDict(dict):
             def get(self, *args, **kwargs):

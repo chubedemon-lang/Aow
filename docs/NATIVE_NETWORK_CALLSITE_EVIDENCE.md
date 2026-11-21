@@ -877,3 +877,20 @@ bytes contain executable instructions or establish a formal function end.
 Synthetic tests cover aligned, non-word-aligned and capped windows. No new APK
 disassembly or wire-protocol finding is implied.
 
+
+
+## CFG analyzer input boundary — tooling only
+
+The bounded control-flow serializer analyzer now accepts exact built-in
+`bytes`, `dict`, `list` and `tuple` containers at its public input boundary.
+Helper and metadata-method target maps require non-negative, instruction-aligned
+integer keys and non-empty built-in string label sequences. This prevents
+caller-defined container hooks from running during validation or lookup and
+keeps malformed target maps from silently affecting redacted callsite labels.
+The in-memory method-target index is materialized as a plain dictionary before
+being passed to the analyzer.
+
+Synthetic tests cover hostile `bytes`/`dict` subclasses, hostile label lists,
+misaligned target keys and malformed metadata-method labels. This is input
+hardening only; it does not add APK observations, resolve a serializer field,
+infer LoginRequest order, or establish framing, handshake, or compatibility.
