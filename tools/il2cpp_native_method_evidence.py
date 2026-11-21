@@ -1508,14 +1508,34 @@ def _summarize_control_flow_serializer_helper_blocks(
     edges are both considered possible; branches leaving the method window are
     exits. No native addresses or instruction words are emitted.
     """
-    if not isinstance(code, bytes) or len(code) % 4:
+    if type(code) is not bytes:
+        raise ValueError("AArch64 code window must be exact built-in bytes")
+    if len(code) % 4:
         raise ValueError("AArch64 code window must be a multiple of four bytes")
     if type(start_va) is not int or start_va < 0 or start_va % 4:
         raise ValueError("AArch64 code window start must be an aligned address")
-    if not isinstance(relocations, dict) or not isinstance(helper_targets, dict):
-        raise ValueError("relocations and helper targets must be mappings")
-    if method_targets is not None and not isinstance(method_targets, dict):
-        raise ValueError("method targets must be a mapping")
+    if type(relocations) is not dict or type(helper_targets) is not dict:
+        raise ValueError("relocations and helper targets must be exact built-in dicts")
+    if method_targets is not None and type(method_targets) is not dict:
+        raise ValueError("method targets must be an exact built-in dict")
+
+    def validate_target_labels(mapping, label):
+        for target, labels in mapping.items():
+            if type(target) is not int or target < 0 or target % 4:
+                raise ValueError(
+                    f"{label} targets must be non-negative aligned built-in integers"
+                )
+            if (
+                type(labels) not in (list, tuple)
+                or any(type(item) is not str or not item for item in labels)
+            ):
+                raise ValueError(
+                    f"{label} labels must be non-empty built-in string lists or tuples"
+                )
+
+    validate_target_labels(helper_targets, "helper target")
+    if method_targets is not None:
+        validate_target_labels(method_targets, "method target")
 
     instruction_count = len(code) // 4
     if instruction_count == 0:
@@ -3076,10 +3096,10 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
             _relocated_indirect_call_targets(code, target, relocations)
         )
 
-    method_targets = _all_method_targets(
+    method_targets = dict(_all_method_targets(
         metadata, info, tables, relocations, executable,
         direct_targets | indirect_targets,
-    )
+    ))
     callsite_summary = []
     for method, section_name, target, window_bytes, truncated, code in serializer_windows:
         summary = _summarize_aarch64_calls(code, target, helper_targets)
