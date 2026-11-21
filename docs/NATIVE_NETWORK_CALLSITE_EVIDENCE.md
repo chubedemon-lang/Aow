@@ -894,3 +894,41 @@ Synthetic tests cover hostile `bytes`/`dict` subclasses, hostile label lists,
 misaligned target keys and malformed metadata-method labels. This is input
 hardening only; it does not add APK observations, resolve a serializer field,
 infer LoginRequest order, or establish framing, handshake, or compatibility.
+
+
+## Receiver lookup callee: register-linked bucket-chain shape — 2026-11-22
+
+A fresh private disassembly of the bounded helper FDE window associated with
+the second \`Receiver.Cycle\` integer lookup was rechecked against the unchanged
+authorized APK. The window is 480 bytes. The helper contains a coherent
+register-linked bucket lookup sequence:
+
+- signed division followed by multiply-subtract to form a modulo bucket index;
+- indexed bucket-head load and a \`-1\` empty-bucket sentinel check;
+- 12-byte entry addressing;
+- stored entry-hash comparison against the computed hash;
+- indirect comparer dispatch for the candidate element;
+- a second entry-address calculation, next-index load at byte offset 4, and
+  a sign-bit branch that continues entry traversal.
+
+The analyzer now emits \`callee_bucketed_lookup_shape\` only when these operations
+are linked through the relevant registers and occur in the expected order.
+This is stronger than the prior broad opcode-family co-occurrence flag. The
+report still labels the result
+\`bucketed_membership_lookup_shape_candidate\`; it does **not** identify the
+managed generic method, prove a concrete \`HashSet<T>\` or \`Dictionary<TKey,TValue>\`
+type, attribute the static field to \`m_zippetMessageTypes\`, or establish the
+runtime outcome.
+
+The second \`SimpleDeserializer.deserializeInt\` result is still only a
+lookup-key candidate. This does not establish that the value is a numeric wire
+message ID, which message types are compressed, or whether the lookup's
+membership result selects the decompression path at runtime. The field name
+\`m_zippetMessageTypes\` remains a metadata-order candidate only.
+
+The four-byte big-endian receive-length remains a static candidate. Effective
+\`NetworkSettings.HeaderLength\` use, complete frame boundaries, sender/receiver
+symmetry, compression/encryption placement, handshake order, LoginRequest
+field order and unchanged-APK compatibility remain unverified. No raw native
+addresses, instruction words, APK/native assets, packet captures, endpoints or
+proprietary resources are included in this repository update.

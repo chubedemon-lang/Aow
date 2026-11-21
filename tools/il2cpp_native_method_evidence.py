@@ -693,6 +693,411 @@ def _contains_hash_bucket_opcode_families(code):
     )
 
 
+def _decode_aarch64_sdiv_w(word):
+    """Decode 32-bit SDIV as (destination, dividend, divisor)."""
+    if (
+        type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+        or word & (1 << 31)
+        or (word & 0x7FE0FC00) != 0x1AC00C00
+    ):
+        return None
+    return word & 0x1F, (word >> 5) & 0x1F, (word >> 16) & 0x1F
+
+
+def _decode_aarch64_msub_w(word):
+    """Decode 32-bit MSUB as (destination, left, right, addend)."""
+    if (
+        type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+        or word & (1 << 31)
+        or (word & 0x7FE08000) != 0x1B008000
+    ):
+        return None
+    return (
+        word & 0x1F,
+        (word >> 5) & 0x1F,
+        (word >> 16) & 0x1F,
+        (word >> 10) & 0x1F,
+    )
+
+
+def _decode_aarch64_cmp_w_register(word):
+    """Decode CMP Wn, Wm as (left, right)."""
+    if (
+        type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+        or (word & 0xFF20001F) != 0x6B00001F
+    ):
+        return None
+    return (word >> 5) & 0x1F, (word >> 16) & 0x1F
+
+
+def _decode_aarch64_add_x_w_uxtw(word):
+    """Decode ADD Xd, Xn, Wm, UXTW #shift."""
+    if (
+        type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+        or (word & 0xFFE00000) != 0x8B200000
+    ):
+        return None
+    return (
+        word & 0x1F,
+        (word >> 5) & 0x1F,
+        (word >> 16) & 0x1F,
+        (word >> 13) & 0x7,
+        (word >> 10) & 0x7,
+    )
+
+
+def _decode_aarch64_ldr_w_unsigned(word):
+    """Decode LDR Wt, [Xn, #offset] as (target, base, byte_offset)."""
+    if (
+        type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+        or (word & 0xFFC00000) != 0xB9400000
+    ):
+        return None
+    return word & 0x1F, (word >> 5) & 0x1F, ((word >> 10) & 0xFFF) * 4
+
+
+def _decode_aarch64_subs_w_immediate(word):
+    """Decode 32-bit SUBS immediate as (destination, source, immediate)."""
+    if (
+        type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+        or (word & 0xFF800000) != 0x71000000
+    ):
+        return None
+    immediate = (word >> 10) & 0xFFF
+    if word & (1 << 22):
+        immediate <<= 12
+    return word & 0x1F, (word >> 5) & 0x1F, immediate
+
+
+def _decode_aarch64_movz_w_immediate(word):
+    """Decode MOVZ Wd, #imm16 as (destination, immediate)."""
+    if (
+        type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+        or word & (1 << 31)
+        or (word & 0x7F800000) != 0x52800000
+        or ((word >> 21) & 0x3) != 0
+    ):
+        return None
+    return word & 0x1F, (word >> 5) & 0xFFFF
+
+
+def _decode_aarch64_umaddl(word):
+    """Decode UMADDL/UMULL as (destination, left, right, addend)."""
+    if (
+        type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+        or (word & 0xFFE08000) != 0x9BA00000
+    ):
+        return None
+    return (
+        word & 0x1F,
+        (word >> 5) & 0x1F,
+        (word >> 16) & 0x1F,
+        (word >> 10) & 0x1F,
+    )
+
+
+def _decode_aarch64_ldr_w_register(word):
+    """Decode unshifted LDR Wt, [Xn, Xm] as (target, base, index)."""
+    if (
+        type(word) is not int or not 0 <= word <= 0xFFFFFFFF
+        or (word & 0xFFE0FC00) != 0xB8606800
+    ):
+        return None
+    option = (word >> 13) & 0x7
+    scaled = bool(word & (1 << 12))
+    if option != 0x3 or scaled:
+        return None
+    return word & 0x1F, (word >> 5) & 0x1F, (word >> 16) & 0x1F
+
+
+def _summarize_bucketed_lookup_shape(code):
+    """Recognize a narrow bucket/hash/entry-chain lookup shape without naming its owner.
+
+    The matcher requires register-linked modulo bucket selection, a bucket-head
+    sentinel, a 12-byte entry stride, stored-hash comparison, an indirect
+    comparer call, and a next-entry index load. It does not identify the
+    managed generic method, collection field, key semantics, or runtime path.
+    """
+    if type(code) is not bytes or len(code) % 4:
+        raise ValueError("bucketed lookup code must be aligned AArch64 bytes")
+    words = [
+        struct.unpack_from("<I", code, offset)[0]
+        for offset in range(0, len(code), 4)
+    ]
+
+    def skip_nops(index):
+        while index < len(words) and words[index] == 0xD503201F:
+            index += 1
+        return index
+
+    def find_after(start, decoder, predicate, limit=128):
+        end = min(len(words), start + limit)
+        for index in range(start, end):
+            decoded = decoder(words[index])
+            if decoded is not None and predicate(decoded):
+                return index, decoded
+        return None, None
+
+    unresolved = {
+        "status": "unresolved",
+        "managed_method_identity_verified": False,
+        "managed_collection_owner_verified": False,
+    }
+
+    for divide_index, word in enumerate(words):
+        divide = _decode_aarch64_sdiv_w(word)
+        if divide is None:
+            continue
+        quotient, dividend, divisor = divide
+
+        msub_index = skip_nops(divide_index + 1)
+        if msub_index >= len(words):
+            continue
+        msub = _decode_aarch64_msub_w(words[msub_index])
+        if msub is None:
+            continue
+        remainder, left, right, addend = msub
+        if (left, right, addend) != (quotient, divisor, dividend):
+            continue
+
+        compare_index = skip_nops(msub_index + 1)
+        compare = (
+            _decode_aarch64_cmp_w_register(words[compare_index])
+            if compare_index < len(words) else None
+        )
+        if compare != (remainder, divisor):
+            continue
+
+        bucket_branch_index = skip_nops(compare_index + 1)
+        bucket_branch = (
+            _decode_aarch64_conditional_branch_condition(words[bucket_branch_index])
+            if bucket_branch_index < len(words) else None
+        )
+        if (
+            bucket_branch is None or bucket_branch.get("kind") != "b_cond"
+            or bucket_branch.get("condition_code") != 2
+        ):
+            continue
+
+        bucket_add_index = skip_nops(bucket_branch_index + 1)
+        bucket_add = (
+            _decode_aarch64_add_x_w_uxtw(words[bucket_add_index])
+            if bucket_add_index < len(words) else None
+        )
+        if (
+            bucket_add is None or bucket_add[2] != remainder
+            or bucket_add[3:] != (2, 2)
+        ):
+            continue
+        bucket_address = bucket_add[0]
+
+        head_index = skip_nops(bucket_add_index + 1)
+        head_load = (
+            _decode_aarch64_ldr_w_unsigned(words[head_index])
+            if head_index < len(words) else None
+        )
+        if (
+            head_load is None or head_load[1] != bucket_address
+            or head_load[2] != 0x20
+        ):
+            continue
+        bucket_head = head_load[0]
+
+        sentinel_index = skip_nops(head_index + 1)
+        sentinel = (
+            _decode_aarch64_subs_w_immediate(words[sentinel_index])
+            if sentinel_index < len(words) else None
+        )
+        if sentinel is None or sentinel[1:] != (bucket_head, 1):
+            continue
+        entry_index_register = sentinel[0]
+
+        empty_branch_index = skip_nops(sentinel_index + 1)
+        empty_branch = (
+            _decode_aarch64_conditional_branch_condition(words[empty_branch_index])
+            if empty_branch_index < len(words) else None
+        )
+        if (
+            empty_branch is None or empty_branch.get("kind") != "b_cond"
+            or empty_branch.get("condition_code") != 4
+        ):
+            continue
+
+        for base_index in range(empty_branch_index + 1, min(len(words), empty_branch_index + 65)):
+            base_add = _decode_aarch64_add_imm64(words[base_index])
+            if base_add is None or base_add[2] != 0x20:
+                continue
+            entries_base = base_add[0]
+
+            stride_index, stride = find_after(
+                base_index + 1,
+                _decode_aarch64_movz_w_immediate,
+                lambda item: item[1] == 12,
+                limit=16,
+            )
+            if stride is None:
+                continue
+            stride_register = stride[0]
+
+            multiply_index, multiply = find_after(
+                stride_index + 1,
+                _decode_aarch64_umaddl,
+                lambda item: (
+                    item[1] == entry_index_register
+                    and item[2] == stride_register
+                    and item[3] == 31
+                ),
+                limit=24,
+            )
+            if multiply is None:
+                continue
+            offset_register = multiply[0]
+
+            entry_hash_index, entry_hash_load = find_after(
+                multiply_index + 1,
+                _decode_aarch64_ldr_w_register,
+                lambda item: (
+                    item[1] == entries_base and item[2] == offset_register
+                ),
+                limit=8,
+            )
+            if entry_hash_load is None:
+                continue
+            entry_hash_register = entry_hash_load[0]
+
+            key_compare_index, key_compare = find_after(
+                entry_hash_index + 1,
+                _decode_aarch64_cmp_w_register,
+                lambda item: item[0] == entry_hash_register
+                or item[1] == entry_hash_register,
+                limit=8,
+            )
+            if key_compare is None:
+                continue
+            hash_register = (
+                key_compare[1]
+                if key_compare[0] == entry_hash_register
+                else key_compare[0]
+            )
+            hash_registers = {dividend}
+            for index in range(max(0, divide_index - 32), divide_index):
+                move = _decode_aarch64_mov_w_register(words[index])
+                if move is not None and move[1] in hash_registers:
+                    hash_registers.add(move[0])
+            if hash_register not in hash_registers:
+                continue
+
+            entry_index_registers = {entry_index_register}
+            for index in range(multiply_index + 1, key_compare_index):
+                move = _decode_aarch64_mov_w_register(words[index])
+                if move is not None and move[1] in entry_index_registers:
+                    entry_index_registers.add(move[0])
+
+            unequal_branch_index = skip_nops(key_compare_index + 1)
+            unequal_branch = (
+                _decode_aarch64_conditional_branch_condition(words[unequal_branch_index])
+                if unequal_branch_index < len(words) else None
+            )
+            if (
+                unequal_branch is None or unequal_branch.get("kind") != "b_cond"
+                or unequal_branch.get("condition_code") != 1
+            ):
+                continue
+
+            entry_address_index, entry_address = find_after(
+                unequal_branch_index + 1,
+                _decode_aarch64_umaddl,
+                lambda item: (
+                    item[1] in entry_index_registers
+                    and item[2] == stride_register
+                    and item[3] == entries_base
+                ),
+                limit=12,
+            )
+            if entry_address is None:
+                continue
+            entry_address_register = entry_address[0]
+
+            value_index, value_load = find_after(
+                entry_address_index + 1,
+                _decode_aarch64_ldr_w_unsigned,
+                lambda item: (
+                    item[1] == entry_address_register and item[2] == 8
+                ),
+                limit=12,
+            )
+            if value_load is None:
+                continue
+
+            comparer_index = None
+            for index in range(value_index + 1, min(len(words), value_index + 64)):
+                if _decode_aarch64_blr_register(words[index]) is not None:
+                    comparer_index = index
+                    break
+            if comparer_index is None:
+                continue
+
+            next_address_index, next_address = find_after(
+                comparer_index + 1,
+                _decode_aarch64_umaddl,
+                lambda item: (
+                    item[1] in entry_index_registers
+                    and item[2] == stride_register
+                    and item[3] == entries_base
+                ),
+                limit=128,
+            )
+            if next_address is None:
+                continue
+            next_index, next_load = find_after(
+                next_address_index + 1,
+                _decode_aarch64_ldr_w_unsigned,
+                lambda item: (
+                    item[1] == next_address[0] and item[2] == 4
+                ),
+                limit=8,
+            )
+            if next_load is None:
+                continue
+            next_register = next_load[0]
+
+            chain_branch = None
+            for index in range(next_index + 1, min(len(words), next_index + 8)):
+                condition = _decode_aarch64_conditional_branch_condition(words[index])
+                if condition is None:
+                    continue
+                immediate = (words[index] >> 5) & 0x3FFF
+                if immediate & 0x2000:
+                    immediate -= 0x4000
+                target_index = index + immediate
+                if (
+                    condition.get("kind") == "tbz_tbnz"
+                    and condition.get("register_index") == next_register
+                    and condition.get("bit_index") == 31
+                    and condition.get("predicate") == "zero"
+                    and stride_index < target_index < multiply_index
+                ):
+                    chain_branch = condition
+                    break
+            if chain_branch is None:
+                continue
+
+            return {
+                "status": "bucketed_membership_lookup_shape_candidate",
+                "hash_modulo_bucket_index": True,
+                "bucket_head_sentinel_check": True,
+                "entry_stride_bytes": 12,
+                "entry_hash_comparison": True,
+                "indirect_comparer_dispatch": True,
+                "entry_next_index_traversal": True,
+                "entry_value_offset_bytes": 8,
+                "entry_next_index_offset_bytes": 4,
+                "managed_method_identity_verified": False,
+                "managed_collection_owner_verified": False,
+            }
+
+    return unresolved
+
 def _summarize_receiver_integer_lookup(
     receiver_code, receiver_start_va, networksettings_cctor_code,
     networksettings_cctor_start_va, deserialize_int_targets,
@@ -862,6 +1267,11 @@ def _summarize_receiver_integer_lookup(
         "callee_fde_entry_resolved": False,
         "callee_entry_window_bytes": None,
         "callee_hash_bucket_opcode_families_present": False,
+        "callee_bucketed_lookup_shape": {
+            "status": "unresolved",
+            "managed_method_identity_verified": False,
+            "managed_collection_owner_verified": False,
+        },
         "wire_message_id_verified": False,
         "compression_behavior_verified": False,
         "wire_contract_verified": False,
@@ -3233,6 +3643,9 @@ def inspect_bytes(metadata, elf, apk_sha256=None):
                 receiver_integer_lookup_summary["callee_entry_window_bytes"] = fde_size
                 receiver_integer_lookup_summary["callee_hash_bucket_opcode_families_present"] = (
                     _contains_hash_bucket_opcode_families(fde_code)
+                )
+                receiver_integer_lookup_summary["callee_bucketed_lookup_shape"] = (
+                    _summarize_bucketed_lookup_shape(fde_code)
                 )
 
     primitive_helper_summary = []
