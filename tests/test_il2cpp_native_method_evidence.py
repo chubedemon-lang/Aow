@@ -935,6 +935,26 @@ class NativeMethodEvidenceTests(unittest.TestCase):
                 b"", 0x5000, {}, {0x2000: HostileLabels(["SimpleSerializer::serializeInt"])}
             )
 
+    def test_ordered_helper_summary_rejects_unaligned_or_invalid_target_addresses(self):
+        for target in (True, -4, 0x2001):
+            with self.subTest(target=target):
+                with self.assertRaisesRegex(
+                    ValueError, "non-negative aligned built-in integers"
+                ):
+                    _summarize_ordered_serializer_helper_calls(
+                        b"", 0x5000, {}, {target: ["SimpleSerializer::serializeInt"]}
+                    )
+
+    def test_ordered_helper_summary_rejects_empty_or_invalid_target_labels(self):
+        for labels in ([], [""], [None]):
+            with self.subTest(labels=labels):
+                with self.assertRaisesRegex(
+                    ValueError, "non-empty built-in string lists or tuples"
+                ):
+                    _summarize_ordered_serializer_helper_calls(
+                        b"", 0x5000, {}, {0x2000: labels}
+                    )
+
     def test_ordered_helper_summary_interleaves_direct_indirect_and_tail_calls(self):
         start = 0x5000
         words = (
