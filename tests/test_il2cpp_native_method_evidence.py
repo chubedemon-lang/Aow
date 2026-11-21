@@ -3325,6 +3325,24 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
                 self.assertFalse(summary["managed_method_identity_verified"])
                 self.assertFalse(summary["managed_collection_owner_verified"])
 
+    def test_bucketed_lookup_shape_does_not_import_hash_alias_across_branch(self):
+        words = [
+            0x2A0603E9,  # mov w9, w6 in the predecessor block
+            0x14000001,  # b to the sdiv entry; do not merge predecessor state
+            0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x540002A2,
+            0x8B254928, 0xB940210A, 0x71000553, 0x54000224,
+            0xF9400EB4, 0x91008294, 0x52800195, 0x6B08027F,
+            0x54000182, 0x9BB57E6D, 0xB86D6A8E,
+            0x6B0901DF,  # cmp w14, w9; alias is outside the current block
+            0x540000E1, 0x9BB55270, 0xB9400A11, 0xD63F0240,
+            0x9BB55276, 0xB94006D7, 0x36FFFEB7, 0xD65F03C0,
+            0xD65F03C0,
+        ]
+        summary = _summarize_bucketed_lookup_shape(self._code(words))
+        self.assertEqual(summary["status"], "unresolved")
+        self.assertFalse(summary["managed_method_identity_verified"])
+        self.assertFalse(summary["managed_collection_owner_verified"])
+
     def test_bucketed_lookup_shape_rejects_unaligned_instruction_bytes(self):
         with self.assertRaisesRegex(ValueError, "aligned AArch64 bytes"):
             _summarize_bucketed_lookup_shape(b"\x00\x00\x00")
