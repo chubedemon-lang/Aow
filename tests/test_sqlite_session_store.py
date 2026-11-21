@@ -897,7 +897,8 @@ class SqliteSessionStoreTests(unittest.TestCase):
     def test_constructor_reuses_valid_schema_without_waiting_for_writer_lock(self):
         token = self.store.issue(401)
         second = sqlite3.connect(
-            self.path, timeout=10, isolation_level=None
+            self.path, timeout=10, isolation_level=None,
+            check_same_thread=False,
         )
         self.addCleanup(second.close)
         started = threading.Event()
