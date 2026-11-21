@@ -17,6 +17,24 @@
 - Supports reopening the same private SQLite database file.
 
 
+## Atomic schema initialization and compatibility
+
+Construction creates or migrates the inventory schema inside one
+BEGIN IMMEDIATE transaction and validates persisted column signatures,
+character ownership foreign keys, and the named mutation-history index before
+commit. A malformed legacy snapshot or incompatible existing index rolls back
+newly-created tables and the additive baseline migration.
+
+The supported legacy snapshot is the exact four-column
+inventory_snapshots layout; it is migrated by adding baseline_version=0, so
+existing rows remain explicitly unanchored. Historical inventory_items and
+inventory_mutations tables may lack their character foreign key for backward
+compatibility. If either relationship is present, it must reference
+inventory_snapshots(character_id) with ON DELETE CASCADE. Freshly created
+tables include these relationships. This validation checks structural columns
+and declared foreign keys/indexes; it does not compare every SQL CHECK
+expression in a pre-existing table.
+
 ## Strict caller inputs
 
 Public inventory identifiers must be exact built-in strings. Mutation batches

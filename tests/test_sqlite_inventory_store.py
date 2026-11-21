@@ -510,6 +510,85 @@ class SqliteInventoryStoreTests(unittest.TestCase):
         )
         self.db.rollback()
 
+    def test_malformed_legacy_snapshot_schema_is_rejected_without_partial_bootstrap(self):
+        legacy = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(legacy.close)
+        legacy.execute(
+            """CREATE TABLE inventory_snapshots (
+                   character_id TEXT PRIMARY KEY,
+                   capacity TEXT NOT NULL,
+                   max_stack INTEGER NOT NULL,
+                   revision INTEGER NOT NULL
+               )"""
+        )
+
+        with self.assertRaisesRegex(InventoryStoreError, "incompatible inventory schema"):
+            SqliteInventoryStore(legacy)
+
+        self.assertFalse(legacy.in_transaction)
+        columns = {
+            row[1] for row in legacy.execute(
+                "PRAGMA table_info(inventory_snapshots)"
+            )
+        }
+        self.assertNotIn("baseline_version", columns)
+        for table_name in (
+            "inventory_creations", "inventory_items", "inventory_mutations"
+        ):
+            self.assertIsNone(legacy.execute(
+                "SELECT name FROM sqlite_master WHERE name=?",
+                (table_name,),
+            ).fetchone())
+
+    def test_wrong_mutation_index_rolls_back_legacy_migration_and_bootstrap(self):
+        legacy = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(legacy.close)
+        legacy.executescript(
+            """CREATE TABLE inventory_snapshots (
+                   character_id TEXT PRIMARY KEY,
+                   capacity INTEGER NOT NULL,
+                   max_stack INTEGER NOT NULL,
+                   revision INTEGER NOT NULL
+               );
+               CREATE TABLE inventory_items (
+                   character_id TEXT NOT NULL,
+                   item_id TEXT NOT NULL,
+                   quantity INTEGER NOT NULL,
+                   PRIMARY KEY(character_id,item_id)
+               );
+               CREATE TABLE inventory_mutations (
+                   request_id TEXT PRIMARY KEY,
+                   character_id TEXT NOT NULL,
+                   expected_revision INTEGER NOT NULL,
+                   payload_json TEXT NOT NULL,
+                   result_json TEXT NOT NULL,
+                   result_revision INTEGER NOT NULL
+               );
+               CREATE INDEX inventory_mutations_character
+                   ON inventory_mutations(result_revision);"""
+        )
+
+        with self.assertRaisesRegex(InventoryStoreError, "mutation index"):
+            SqliteInventoryStore(legacy)
+
+        self.assertFalse(legacy.in_transaction)
+        columns = {
+            row[1] for row in legacy.execute(
+                "PRAGMA table_info(inventory_snapshots)"
+            )
+        }
+        self.assertNotIn("baseline_version", columns)
+        self.assertIsNone(legacy.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE name='inventory_creations'"
+        ).fetchone())
+        indexed_columns = tuple(
+            row[2] for row in legacy.execute(
+                "PRAGMA index_info(inventory_mutations_character)"
+            ).fetchall()
+        )
+        self.assertEqual(indexed_columns, ("result_revision",))
+
     def test_legacy_inventory_rows_remain_unanchored_after_migration(self):
         legacy = sqlite3.connect(":memory:", isolation_level=None)
         self.addCleanup(legacy.close)
