@@ -52,11 +52,67 @@ class SqliteSessionStore:
                 expires_at REAL NOT NULL CHECK(expires_at > created_at)
             )"""
         )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS durable_sessions_expiry "
-            "ON durable_sessions(expires_at)"
-        )
+        self._validate_schema()
         self.db.commit()
+
+    def _validate_schema(self):
+        """Reject an incompatible pre-existing session table or expiry index."""
+        table = self.db.execute(
+            "SELECT type FROM sqlite_master WHERE name='durable_sessions'"
+        ).fetchone()
+        if table != ("table",):
+            raise ValueError("incompatible durable session table")
+
+        expected_columns = {
+            "token_hash": ("BLOB", 0, 1, None),
+            "account_id": ("INTEGER", 1, 0, None),
+            "created_at": ("REAL", 1, 0, None),
+            "expires_at": ("REAL", 1, 0, None),
+        }
+        rows = self.db.execute(
+            "PRAGMA table_info(durable_sessions)"
+        ).fetchall()
+        actual_columns = {
+            row[1]: (
+                str(row[2]).strip().upper(),
+                int(row[3]),
+                int(row[5]),
+                row[4],
+            )
+            for row in rows
+        }
+        if len(rows) != len(expected_columns) or actual_columns != expected_columns:
+            raise ValueError("incompatible durable session schema")
+
+        index_object = self.db.execute(
+            "SELECT type, tbl_name FROM sqlite_master "
+            "WHERE name='durable_sessions_expiry'"
+        ).fetchone()
+        if index_object is None:
+            self.db.execute(
+                "CREATE INDEX durable_sessions_expiry "
+                "ON durable_sessions(expires_at)"
+            )
+            return
+        if index_object != ("index", "durable_sessions"):
+            raise ValueError("incompatible durable session expiry index")
+
+        indexes = [
+            row for row in self.db.execute(
+                "PRAGMA index_list(durable_sessions)"
+            ).fetchall()
+            if row[1] == "durable_sessions_expiry"
+        ]
+        if (len(indexes) != 1 or int(indexes[0][2]) != 0
+                or (len(indexes[0]) > 4 and int(indexes[0][4]) != 0)):
+            raise ValueError("incompatible durable session expiry index")
+        indexed_columns = tuple(
+            row[2] for row in self.db.execute(
+                "PRAGMA index_info(durable_sessions_expiry)"
+            ).fetchall()
+        )
+        if indexed_columns != ("expires_at",):
+            raise ValueError("incompatible durable session expiry index")
 
     @staticmethod
     def _validate_ttl(ttl_seconds):
