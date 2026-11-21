@@ -12,6 +12,7 @@ from tools.server_preflight import (
     MAX_SCHEMA_SQL_CHARS,
     PreflightError,
     _extract_check_expressions,
+    _tokenize_sql,
     inspect_synthetic_database,
     main,
     run_preflight,
@@ -173,6 +174,31 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
     def test_does_not_treat_check_text_inside_string_literal_as_constraint(self):
         sql = "CREATE TABLE wallets (note TEXT DEFAULT 'CHECK(balance >= 0)')"
         self.assertEqual(_extract_check_expressions(sql), set())
+
+    def test_tokenizer_rejects_unterminated_quoted_tokens(self):
+        malformed_sql = (
+            "CREATE TABLE t (note TEXT DEFAULT 'unterminated",
+            'CREATE TABLE t ("unterminated',
+            "CREATE TABLE t (`unterminated",
+            "CREATE TABLE t ([unterminated",
+        )
+        for sql in malformed_sql:
+            with self.subTest(sql=sql):
+                self.assertIn(
+                    ("invalid", "unterminated-string")
+                    if sql.endswith("'unterminated")
+                    else ("invalid", "unterminated-identifier"),
+                    _tokenize_sql(sql),
+                )
+
+    def test_check_extractor_fails_closed_on_malformed_schema_tail(self):
+        valid_prefix = "CREATE TABLE wallets (balance INTEGER CHECK(balance >= 0), note TEXT "
+        for suffix in ("DEFAULT 'unterminated", "/* unterminated"):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(
+                    _extract_check_expressions(valid_prefix + suffix),
+                    set(),
+                )
 
     def test_rejects_wrong_required_column_affinity(self):
         database = Path(self.temp.name) / "wrong_type.sqlite3"

@@ -116,20 +116,26 @@ def _tokenize_sql(sql):
             continue
         if character == "'":
             index += 1
+            closed = False
             while index < len(sql):
                 if sql[index] == "'":
                     if index + 1 < len(sql) and sql[index + 1] == "'":
                         index += 2
                         continue
                     index += 1
+                    closed = True
                     break
                 index += 1
+            if not closed:
+                tokens.append(("invalid", "unterminated-string"))
+                break
             tokens.append(("string", ""))
             continue
         if character in ('"', "`", "["):
             closing = "]" if character == "[" else character
             index += 1
             value = []
+            closed = False
             while index < len(sql):
                 if sql[index] == closing:
                     if closing != "]" and index + 1 < len(sql) and sql[index + 1] == closing:
@@ -137,9 +143,13 @@ def _tokenize_sql(sql):
                         index += 2
                         continue
                     index += 1
+                    closed = True
                     break
                 value.append(sql[index])
                 index += 1
+            if not closed:
+                tokens.append(("invalid", "unterminated-identifier"))
+                break
             tokens.append(("identifier", "".join(value).lower()))
             continue
         if character.isalpha() or character == "_":
@@ -181,6 +191,11 @@ def _tokenize_sql(sql):
 def _extract_check_expressions(sql):
     """Return balanced CHECK expressions, ignoring comments and quoted strings."""
     tokens = _tokenize_sql(sql)
+    # A valid CHECK found before malformed trailing SQL is not sufficient:
+    # reject the entire schema fragment if tokenization encountered an
+    # unterminated comment or quoted token.
+    if any(kind == "invalid" for kind, _value in tokens):
+        return set()
     expressions = set()
     for index, token in enumerate(tokens[:-1]):
         if token != ("keyword", "check") or tokens[index + 1] != ("punctuation", "("):
