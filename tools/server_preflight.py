@@ -55,10 +55,28 @@ REQUIRED_FOREIGN_KEYS = {
     "wallets": {("character_id", "characters", "id", "NO ACTION", "NO ACTION")},
     "inventory": {("character_id", "characters", "id", "NO ACTION", "NO ACTION")},
 }
+MAX_SCHEMA_SQL_CHARS = 64 * 1024
+
+
 REQUIRED_CHECKS = {
-    "wallets": {"check(balance>=0)"},
-    "shop_catalog": {"check(price>0)", "check(enabledin(0,1))"},
-    "inventory": {"check(quantity>=0)"},
+    "wallets": {
+        (("identifier", "balance"), ("operator", ">="), ("number", "0")),
+    },
+    "shop_catalog": {
+        (("identifier", "price"), ("operator", ">"), ("number", "0")),
+        (
+            ("identifier", "enabled"),
+            ("keyword", "in"),
+            ("punctuation", "("),
+            ("number", "0"),
+            ("punctuation", ","),
+            ("number", "1"),
+            ("punctuation", ")"),
+        ),
+    },
+    "inventory": {
+        (("identifier", "quantity"), ("operator", ">="), ("number", "0")),
+    },
 }
 
 
@@ -71,6 +89,118 @@ def _normalize_sql_fragment(value):
         return None
     return "".join(str(value).lower().split())
 
+
+def _tokenize_sql(sql):
+    """Tokenize bounded schema SQL, excluding comments and string-literal contents."""
+    if type(sql) is not str or len(sql) > MAX_SCHEMA_SQL_CHARS:
+        return [("invalid", "schema-sql-limit")]
+    tokens = []
+    index = 0
+    operators = ("->>", "<<", ">>", "->", ">=", "<=", "<>", "!=", "==", "||")
+
+    while index < len(sql):
+        character = sql[index]
+        if character.isspace():
+            index += 1
+            continue
+        if sql.startswith("--", index):
+            newline = sql.find("\n", index + 2)
+            index = len(sql) if newline < 0 else newline + 1
+            continue
+        if sql.startswith("/*", index):
+            end = sql.find("*/", index + 2)
+            if end < 0:
+                tokens.append(("invalid", "unterminated-comment"))
+                break
+            index = end + 2
+            continue
+        if character == "'":
+            index += 1
+            while index < len(sql):
+                if sql[index] == "'":
+                    if index + 1 < len(sql) and sql[index + 1] == "'":
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            tokens.append(("string", ""))
+            continue
+        if character in ('"', "`", "["):
+            closing = "]" if character == "[" else character
+            index += 1
+            value = []
+            while index < len(sql):
+                if sql[index] == closing:
+                    if closing != "]" and index + 1 < len(sql) and sql[index + 1] == closing:
+                        value.append(closing)
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                value.append(sql[index])
+                index += 1
+            tokens.append(("identifier", "".join(value).lower()))
+            continue
+        if character.isalpha() or character == "_":
+            start = index
+            index += 1
+            while index < len(sql) and (sql[index].isalnum() or sql[index] in "_$"):
+                index += 1
+            word = sql[start:index].lower()
+            kind = "keyword" if word in {"check", "in"} else "identifier"
+            tokens.append((kind, word))
+            continue
+        if character.isdigit():
+            start = index
+            index += 1
+            while index < len(sql) and (sql[index].isalnum() or sql[index] in "._"):
+                index += 1
+            tokens.append(("number", sql[start:index].lower()))
+            continue
+
+        operator = next((item for item in operators if sql.startswith(item, index)), None)
+        if operator is not None:
+            tokens.append(("operator", operator))
+            index += len(operator)
+            continue
+        if character in "(),":
+            tokens.append(("punctuation", character))
+            index += 1
+            continue
+        if character in "=><+-*/%|&~":
+            tokens.append(("operator", character))
+            index += 1
+            continue
+        tokens.append(("other", character))
+        index += 1
+
+    return tokens
+
+
+def _extract_check_expressions(sql):
+    """Return balanced CHECK expressions, ignoring comments and quoted strings."""
+    tokens = _tokenize_sql(sql)
+    expressions = set()
+    for index, token in enumerate(tokens[:-1]):
+        if token != ("keyword", "check") or tokens[index + 1] != ("punctuation", "("):
+            continue
+        depth = 1
+        expression = []
+        cursor = index + 2
+        while cursor < len(tokens):
+            current = tokens[cursor]
+            if current == ("punctuation", "("):
+                depth += 1
+            elif current == ("punctuation", ")"):
+                depth -= 1
+                if depth == 0:
+                    break
+            expression.append(current)
+            cursor += 1
+        if depth == 0:
+            expressions.add(tuple(expression))
+    return expressions
 
 
 def inspect_synthetic_database(database):
@@ -184,13 +314,10 @@ def inspect_synthetic_database(database):
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
                 (table,),
             ).fetchone()
-            normalized_table_sql = _normalize_sql_fragment(
-                table_sql_row[0] if table_sql_row else None
-            ) or ""
-            if any(
-                check not in normalized_table_sql
-                for check in REQUIRED_CHECKS.get(table, set())
-            ):
+            check_expressions = _extract_check_expressions(
+                table_sql_row[0] if table_sql_row else ""
+            )
+            if not REQUIRED_CHECKS.get(table, set()).issubset(check_expressions):
                 raise PreflightError("required synthetic CHECK constraints are missing")
     except PreflightError:
         raise

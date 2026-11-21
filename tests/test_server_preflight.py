@@ -9,7 +9,9 @@ from pathlib import Path
 from server.mock import Domain
 from server.runtime_safety import RuntimeSafetyError, validate_loopback_bind
 from tools.server_preflight import (
+    MAX_SCHEMA_SQL_CHARS,
     PreflightError,
+    _extract_check_expressions,
     inspect_synthetic_database,
     main,
     run_preflight,
@@ -44,7 +46,8 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
 
     def _create_schema_variant(
         self, path, *, unique=True, foreign_keys=True, checks=True,
-        quantity_type="INTEGER", composite_character_fk=False
+        quantity_type="INTEGER", composite_character_fk=False,
+        check_lookalikes_in_comments=False
     ):
         unique_clause = " UNIQUE" if unique else ""
         account_tenant_columns = (
@@ -73,10 +76,26 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
             ", FOREIGN KEY(character_id) REFERENCES characters(id)"
             if foreign_keys else ""
         )
-        balance_check = " CHECK(balance >= 0)" if checks else ""
-        price_check = " CHECK(price > 0)" if checks else ""
-        enabled_check = " CHECK(enabled IN (0,1))" if checks else ""
-        quantity_check = " CHECK(quantity >= 0)" if checks else ""
+        balance_check = (
+            " /* CHECK(balance >= 0) */"
+            if check_lookalikes_in_comments
+            else " CHECK(balance >= 0)" if checks else ""
+        )
+        price_check = (
+            " /* CHECK(price > 0) */"
+            if check_lookalikes_in_comments
+            else " CHECK(price > 0)" if checks else ""
+        )
+        enabled_check = (
+            " /* CHECK(enabled IN (0,1)) */"
+            if check_lookalikes_in_comments
+            else " CHECK(enabled IN (0,1))" if checks else ""
+        )
+        quantity_check = (
+            " /* CHECK(quantity >= 0) */"
+            if check_lookalikes_in_comments
+            else " CHECK(quantity >= 0)" if checks else ""
+        )
         with sqlite3.connect(path) as connection:
             connection.executescript(
                 """
@@ -138,6 +157,22 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
         self._create_schema_variant(database, checks=False)
         with self.assertRaisesRegex(PreflightError, "CHECK constraints"):
             inspect_synthetic_database(database)
+
+    def test_rejects_check_lookalikes_inside_sql_comments(self):
+        database = Path(self.temp.name) / "commented_checks.sqlite3"
+        self._create_schema_variant(
+            database, checks=False, check_lookalikes_in_comments=True
+        )
+        with self.assertRaisesRegex(PreflightError, "CHECK constraints"):
+            inspect_synthetic_database(database)
+
+    def test_bounds_schema_sql_tokenization(self):
+        sql = "CHECK(balance >= 0)" + (" " * MAX_SCHEMA_SQL_CHARS)
+        self.assertEqual(_extract_check_expressions(sql), set())
+
+    def test_does_not_treat_check_text_inside_string_literal_as_constraint(self):
+        sql = "CREATE TABLE wallets (note TEXT DEFAULT 'CHECK(balance >= 0)')"
+        self.assertEqual(_extract_check_expressions(sql), set())
 
     def test_rejects_wrong_required_column_affinity(self):
         database = Path(self.temp.name) / "wrong_type.sqlite3"
