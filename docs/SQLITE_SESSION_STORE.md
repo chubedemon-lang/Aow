@@ -23,7 +23,7 @@
 - Rejects an already-active caller transaction instead of committing work owned by the caller.
 - The constructor accepts only an exact built-in `sqlite3.Connection`; connection subclasses are rejected before any overridden properties or methods can run.
 - The constructor validates the existing `durable_sessions` table's exact column names, declared types, nullability, primary-key layout and defaults before accepting it. It also validates the named non-unique expiry index and its target column; an incompatible pre-existing table or index is rejected instead of being silently reused.
-- Constructor bootstrap is atomic: `BEGIN IMMEDIATE` covers table creation, schema validation and expiry-index creation. If a conflicting pre-existing object is found, all DDL created by that attempt is rolled back, leaving the prior schema untouched.
+- Constructor validates an already-complete table/index read-only and does not take a write lock on the common path. If the table or expiry index is missing, it rechecks and creates the required DDL inside one `BEGIN IMMEDIATE` transaction. If a conflicting pre-existing object is found, all DDL created by that attempt is rolled back, leaving the prior schema untouched.
 
 ## Persisted-row validation
 

@@ -894,6 +894,57 @@ class SqliteSessionStoreTests(unittest.TestCase):
             ("index", "unrelated"),
         )
 
+    def test_constructor_reuses_valid_schema_without_waiting_for_writer_lock(self):
+        token = self.store.issue(401)
+        second = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None
+        )
+        self.addCleanup(second.close)
+        started = threading.Event()
+        finished = threading.Event()
+        outcome = {}
+
+        def construct_store():
+            started.set()
+            try:
+                outcome["store"] = SqliteSessionStore(
+                    second, ttl_seconds=60, clock=lambda: self.now
+                )
+            except BaseException as exc:
+                outcome["error"] = exc
+            finally:
+                finished.set()
+
+        worker = threading.Thread(target=construct_store)
+        with self.store.authorized_transaction(token) as account_id:
+            self.assertEqual(account_id, 401)
+            worker.start()
+            self.assertTrue(started.wait(1))
+            completed_while_writer_lock_held = finished.wait(0.5)
+
+        worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(completed_while_writer_lock_held)
+        self.assertNotIn("error", outcome)
+        self.assertEqual(outcome["store"].resolve(token), 401)
+
+    def test_constructor_creates_missing_expiry_index(self):
+        self.db.execute("DROP INDEX durable_sessions_expiry")
+        self.assertFalse(self.db.in_transaction)
+
+        reopened = SqliteSessionStore(
+            self.db, ttl_seconds=60, clock=lambda: self.now
+        )
+
+        self.assertIsInstance(reopened, SqliteSessionStore)
+        self.assertEqual(
+            tuple(row[2] for row in self.db.execute(
+                "PRAGMA index_info(durable_sessions_expiry)"
+            ).fetchall()),
+            ("expires_at",),
+        )
+        self.assertFalse(self.db.in_transaction)
+
     def test_constructor_rejects_existing_expiry_index_on_wrong_column(self):
         connection = sqlite3.connect(":memory:", isolation_level=None)
         self.addCleanup(connection.close)
