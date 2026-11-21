@@ -1030,7 +1030,7 @@ def _summarize_bucketed_lookup_shape(code):
                 continue
 
             comparer_index = None
-            for index in range(value_index + 1, min(len(words), value_index + 16)):
+            for index in range(value_index + 1, min(len(words), value_index + 64)):
                 if _decode_aarch64_blr_register(words[index]) is not None:
                     comparer_index = index
                     break
