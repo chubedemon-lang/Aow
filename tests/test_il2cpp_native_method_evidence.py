@@ -3271,6 +3271,60 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
         summary = _summarize_bucketed_lookup_shape(self._code(words))
         self.assertEqual(summary["status"], "unresolved")
 
+    def test_bucketed_lookup_shape_stops_at_unconditional_control_flow_barriers(self):
+        base_words = [
+            0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x540002A2,
+            0x8B254928, 0xB940210A, 0x71000553, 0x54000224,
+            0xF9400EB4, 0x91008294, 0x52800195, 0x6B08027F,
+            0x54000182, 0x9BB57E6D, 0xB86D6A8E, 0x6B0601DF,
+            0x540000E1, 0x9BB55270, 0xB9400A11, 0xD63F0240,
+            0x9BB55276, 0xB94006D7, 0x36FFFEB7, 0xD65F03C0,
+            0xD65F03C0,
+        ]
+
+        def insert_unreachable_barrier(index, kind):
+            words = base_words[:index] + [0] + base_words[index:]
+            if kind == "b":
+                # Jump to the final RET, making the intervening candidate
+                # sequence unreachable from the linear fallthrough path.
+                words[index] = 0x14000000 | (len(words) - 1 - index)
+            elif kind == "bl":
+                words[index] = 0x94000002
+            elif kind == "blr":
+                words[index] = 0xD63F0000
+            elif kind == "br":
+                words[index] = 0xD61F0000
+            elif kind == "ret":
+                words[index] = 0xD65F03C0
+            else:
+                raise AssertionError(kind)
+
+            chain_index = words.index(0x36FFFEB7)
+            loop_compare_index = 11 + (1 if index <= 11 else 0)
+            delta = loop_compare_index - chain_index
+            words[chain_index] = (
+                (words[chain_index] & ~(0x3FFF << 5))
+                | ((delta & 0x3FFF) << 5)
+            )
+            return words
+
+        cases = (
+            ("branch in bucket-base scan", 8, "b"),
+            ("call in bucket-base scan", 8, "bl"),
+            ("branch in multiply scan", 13, "b"),
+            ("call in multiply scan", 13, "blr"),
+            ("indirect branch in multiply scan", 13, "br"),
+            ("return in multiply scan", 13, "ret"),
+        )
+        for label, index, kind in cases:
+            with self.subTest(label=label):
+                summary = _summarize_bucketed_lookup_shape(
+                    self._code(insert_unreachable_barrier(index, kind))
+                )
+                self.assertEqual(summary["status"], "unresolved")
+                self.assertFalse(summary["managed_method_identity_verified"])
+                self.assertFalse(summary["managed_collection_owner_verified"])
+
     def test_bucketed_lookup_shape_rejects_unaligned_instruction_bytes(self):
         with self.assertRaisesRegex(ValueError, "aligned AArch64 bytes"):
             _summarize_bucketed_lookup_shape(b"\x00\x00\x00")
