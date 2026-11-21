@@ -44,7 +44,8 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
 
     def _create_schema_variant(
         self, path, *, unique=True, foreign_keys=True, checks=True,
-        quantity_type="INTEGER", composite_character_fk=False
+        quantity_type="INTEGER", composite_character_fk=False,
+        check_lookalikes_in_comments=False
     ):
         unique_clause = " UNIQUE" if unique else ""
         account_tenant_columns = (
@@ -73,10 +74,26 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
             ", FOREIGN KEY(character_id) REFERENCES characters(id)"
             if foreign_keys else ""
         )
-        balance_check = " CHECK(balance >= 0)" if checks else ""
-        price_check = " CHECK(price > 0)" if checks else ""
-        enabled_check = " CHECK(enabled IN (0,1))" if checks else ""
-        quantity_check = " CHECK(quantity >= 0)" if checks else ""
+        balance_check = (
+            " /* CHECK(balance >= 0) */"
+            if check_lookalikes_in_comments
+            else " CHECK(balance >= 0)" if checks else ""
+        )
+        price_check = (
+            " /* CHECK(price > 0) */"
+            if check_lookalikes_in_comments
+            else " CHECK(price > 0)" if checks else ""
+        )
+        enabled_check = (
+            " /* CHECK(enabled IN (0,1)) */"
+            if check_lookalikes_in_comments
+            else " CHECK(enabled IN (0,1)" if False else " CHECK(enabled IN (0,1))" if checks else ""
+        )
+        quantity_check = (
+            " /* CHECK(quantity >= 0) */"
+            if check_lookalikes_in_comments
+            else " CHECK(quantity >= 0)" if checks else ""
+        )
         with sqlite3.connect(path) as connection:
             connection.executescript(
                 """
@@ -136,6 +153,14 @@ class SyntheticDatabasePreflightTests(unittest.TestCase):
     def test_rejects_missing_check_constraints(self):
         database = Path(self.temp.name) / "missing_checks.sqlite3"
         self._create_schema_variant(database, checks=False)
+        with self.assertRaisesRegex(PreflightError, "CHECK constraints"):
+            inspect_synthetic_database(database)
+
+    def test_rejects_check_lookalikes_inside_sql_comments(self):
+        database = Path(self.temp.name) / "commented_checks.sqlite3"
+        self._create_schema_variant(
+            database, checks=False, check_lookalikes_in_comments=True
+        )
         with self.assertRaisesRegex(PreflightError, "CHECK constraints"):
             inspect_synthetic_database(database)
 
