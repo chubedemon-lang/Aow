@@ -17,6 +17,37 @@ _MAX_BATCH = 4096
 _MAX_RECEIPT_JSON_BYTES = 512 * 1024
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
+_INVENTORY_SNAPSHOT_COLUMNS = {
+    "character_id": ("TEXT", 0, 1, None),
+    "capacity": ("INTEGER", 1, 0, None),
+    "max_stack": ("INTEGER", 1, 0, None),
+    "revision": ("INTEGER", 1, 0, None),
+    "baseline_version": ("INTEGER", 1, 0, "0"),
+}
+_LEGACY_INVENTORY_SNAPSHOT_COLUMNS = {
+    name: signature
+    for name, signature in _INVENTORY_SNAPSHOT_COLUMNS.items()
+    if name != "baseline_version"
+}
+_INVENTORY_CREATION_COLUMNS = {
+    "character_id": ("TEXT", 0, 1, None),
+    "baseline_json": ("TEXT", 1, 0, None),
+}
+_INVENTORY_ITEM_COLUMNS = {
+    "character_id": ("TEXT", 1, 1, None),
+    "item_id": ("TEXT", 1, 2, None),
+    "quantity": ("INTEGER", 1, 0, None),
+}
+_INVENTORY_MUTATION_COLUMNS = {
+    "request_id": ("TEXT", 0, 1, None),
+    "character_id": ("TEXT", 1, 0, None),
+    "expected_revision": ("INTEGER", 1, 0, None),
+    "payload_json": ("TEXT", 1, 0, None),
+    "result_json": ("TEXT", 1, 0, None),
+    "result_revision": ("INTEGER", 1, 0, None),
+}
+
+
 
 class InventoryStoreError(ValueError):
     """Invalid or inconsistent synthetic inventory state."""
@@ -75,68 +106,188 @@ class SqliteInventoryStore:
         self.db = connection
         self.db.execute("PRAGMA busy_timeout = 10000")
         self.db.execute("PRAGMA foreign_keys = ON")
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS inventory_snapshots (
-                character_id TEXT PRIMARY KEY
-                    CHECK(length(character_id) BETWEEN 1 AND 128),
-                capacity INTEGER NOT NULL CHECK(capacity BETWEEN 1 AND 4096),
-                max_stack INTEGER NOT NULL CHECK(max_stack BETWEEN 1 AND 2147483647),
-                revision INTEGER NOT NULL
-                    CHECK(revision BETWEEN 0 AND 9223372036854775807),
-                baseline_version INTEGER NOT NULL DEFAULT 0
-                    CHECK(baseline_version IN (0, 1))
-            )"""
-        )
-        snapshot_columns = {
-            row[1] for row in self.db.execute(
-                "PRAGMA table_info(inventory_snapshots)"
-            )
-        }
-        if "baseline_version" not in snapshot_columns:
-            # Existing rows remain explicitly legacy/unanchored after migration.
+        try:
+            # Schema creation, the legacy baseline migration and validation
+            # form one unit. A rejected pre-existing schema must not leave
+            # newly-created tables or a half-applied migration behind.
+            self.db.execute("BEGIN IMMEDIATE")
             self.db.execute(
-                "ALTER TABLE inventory_snapshots ADD COLUMN "
-                "baseline_version INTEGER NOT NULL DEFAULT 0 "
-                "CHECK(baseline_version IN (0, 1))"
+                """CREATE TABLE IF NOT EXISTS inventory_snapshots (
+                    character_id TEXT PRIMARY KEY
+                        CHECK(length(character_id) BETWEEN 1 AND 128),
+                    capacity INTEGER NOT NULL CHECK(capacity BETWEEN 1 AND 4096),
+                    max_stack INTEGER NOT NULL CHECK(max_stack BETWEEN 1 AND 2147483647),
+                    revision INTEGER NOT NULL
+                        CHECK(revision BETWEEN 0 AND 9223372036854775807),
+                    baseline_version INTEGER NOT NULL DEFAULT 0
+                        CHECK(baseline_version IN (0, 1))
+                )"""
             )
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS inventory_creations (
-                character_id TEXT PRIMARY KEY
-                    CHECK(length(character_id) BETWEEN 1 AND 128),
-                baseline_json TEXT NOT NULL,
-                FOREIGN KEY(character_id) REFERENCES inventory_snapshots(character_id)
-                    ON DELETE CASCADE
-            )"""
+            snapshot_object = self.db.execute(
+                "SELECT type FROM sqlite_master WHERE name='inventory_snapshots'"
+            ).fetchone()
+            if snapshot_object != ("table",):
+                raise InventoryStoreError("incompatible inventory snapshot table")
+            snapshot_columns = {
+                row[1] for row in self.db.execute(
+                    "PRAGMA table_info(inventory_snapshots)"
+                )
+            }
+            if "baseline_version" not in snapshot_columns:
+                # Only the exact supported four-column legacy layout may be
+                # migrated. Existing rows remain explicitly unanchored.
+                self._validate_table_columns(
+                    "inventory_snapshots",
+                    _LEGACY_INVENTORY_SNAPSHOT_COLUMNS,
+                )
+                self.db.execute(
+                    "ALTER TABLE inventory_snapshots ADD COLUMN "
+                    "baseline_version INTEGER NOT NULL DEFAULT 0 "
+                    "CHECK(baseline_version IN (0, 1))"
+                )
+            self.db.execute(
+                """CREATE TABLE IF NOT EXISTS inventory_creations (
+                    character_id TEXT PRIMARY KEY
+                        CHECK(length(character_id) BETWEEN 1 AND 128),
+                    baseline_json TEXT NOT NULL,
+                    FOREIGN KEY(character_id) REFERENCES inventory_snapshots(character_id)
+                        ON DELETE CASCADE
+                )"""
+            )
+            self.db.execute(
+                """CREATE TABLE IF NOT EXISTS inventory_items (
+                    character_id TEXT NOT NULL,
+                    item_id TEXT NOT NULL
+                        CHECK(length(item_id) BETWEEN 1 AND 64),
+                    quantity INTEGER NOT NULL CHECK(quantity BETWEEN 1 AND 2147483647),
+                    PRIMARY KEY(character_id, item_id),
+                    FOREIGN KEY(character_id) REFERENCES inventory_snapshots(character_id)
+                        ON DELETE CASCADE
+                )"""
+            )
+            self.db.execute(
+                """CREATE TABLE IF NOT EXISTS inventory_mutations (
+                    request_id TEXT PRIMARY KEY
+                        CHECK(length(request_id) BETWEEN 1 AND 128),
+                    character_id TEXT NOT NULL,
+                    expected_revision INTEGER NOT NULL CHECK(expected_revision >= 0),
+                    payload_json TEXT NOT NULL,
+                    result_json TEXT NOT NULL,
+                    result_revision INTEGER NOT NULL CHECK(result_revision > 0),
+                    FOREIGN KEY(character_id) REFERENCES inventory_snapshots(character_id)
+                        ON DELETE CASCADE
+                )"""
+            )
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS inventory_mutations_character "
+                "ON inventory_mutations(character_id, result_revision)"
+            )
+            self._validate_schema()
+            self.db.commit()
+        except BaseException:
+            if self.db.in_transaction:
+                self.db.rollback()
+            raise
+
+    def _validate_table_columns(self, table_name, expected_columns):
+        """Require an exact persisted column signature for a known table."""
+        if type(table_name) is not str or table_name not in {
+            "inventory_snapshots",
+            "inventory_creations",
+            "inventory_items",
+            "inventory_mutations",
+        }:
+            raise InventoryStoreError("invalid inventory table selector")
+        table = self.db.execute(
+            "SELECT type FROM sqlite_master WHERE name=?", (table_name,)
+        ).fetchone()
+        if table != ("table",):
+            raise InventoryStoreError("incompatible inventory table")
+        rows = self.db.execute(
+            "PRAGMA table_info(" + table_name + ")"
+        ).fetchall()
+        actual_columns = {
+            row[1]: (
+                str(row[2]).strip().upper(),
+                int(row[3]),
+                int(row[5]),
+                row[4],
+            )
+            for row in rows
+        }
+        if (len(rows) != len(expected_columns)
+                or actual_columns != expected_columns):
+            raise InventoryStoreError("incompatible inventory schema")
+
+    def _validate_foreign_key(self, table_name, *, allow_legacy_missing=False):
+        """Validate a character ownership FK, tolerating its absence in legacy tables."""
+        rows = self.db.execute(
+            "PRAGMA foreign_key_list(" + table_name + ")"
+        ).fetchall()
+        actual = tuple(
+            (row[2], row[3], row[4], row[5], row[6], row[7])
+            for row in rows
         )
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS inventory_items (
-                character_id TEXT NOT NULL,
-                item_id TEXT NOT NULL
-                    CHECK(length(item_id) BETWEEN 1 AND 64),
-                quantity INTEGER NOT NULL CHECK(quantity BETWEEN 1 AND 2147483647),
-                PRIMARY KEY(character_id, item_id),
-                FOREIGN KEY(character_id) REFERENCES inventory_snapshots(character_id)
-                    ON DELETE CASCADE
-            )"""
+        expected = ((
+            "inventory_snapshots", "character_id", "character_id",
+            "NO ACTION", "CASCADE", "NONE",
+        ),)
+        if not actual and allow_legacy_missing:
+            return
+        if actual != expected:
+            raise InventoryStoreError("incompatible inventory ownership foreign key")
+
+    def _validate_schema(self):
+        """Validate persisted inventory tables, ownership links and mutation index."""
+        self._validate_table_columns(
+            "inventory_snapshots", _INVENTORY_SNAPSHOT_COLUMNS
         )
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS inventory_mutations (
-                request_id TEXT PRIMARY KEY
-                    CHECK(length(request_id) BETWEEN 1 AND 128),
-                character_id TEXT NOT NULL,
-                expected_revision INTEGER NOT NULL CHECK(expected_revision >= 0),
-                payload_json TEXT NOT NULL,
-                result_json TEXT NOT NULL,
-                result_revision INTEGER NOT NULL CHECK(result_revision > 0),
-                FOREIGN KEY(character_id) REFERENCES inventory_snapshots(character_id)
-                    ON DELETE CASCADE
-            )"""
+        self._validate_table_columns(
+            "inventory_creations", _INVENTORY_CREATION_COLUMNS
         )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS inventory_mutations_character "
-            "ON inventory_mutations(character_id, result_revision)"
+        self._validate_table_columns(
+            "inventory_items", _INVENTORY_ITEM_COLUMNS
         )
-        self.db.commit()
+        self._validate_table_columns(
+            "inventory_mutations", _INVENTORY_MUTATION_COLUMNS
+        )
+        self._validate_foreign_key("inventory_creations")
+        # Older supported databases predate these two foreign keys. If one is
+        # present it must be the exact cascade relationship; a malformed FK
+        # is never accepted.
+        self._validate_foreign_key(
+            "inventory_items", allow_legacy_missing=True
+        )
+        self._validate_foreign_key(
+            "inventory_mutations", allow_legacy_missing=True
+        )
+
+        index_object = self.db.execute(
+            "SELECT type, tbl_name FROM sqlite_master "
+            "WHERE name='inventory_mutations_character'"
+        ).fetchone()
+        if index_object != ("index", "inventory_mutations"):
+            raise InventoryStoreError("incompatible inventory mutation index")
+        indexes = [
+            row for row in self.db.execute(
+                "PRAGMA index_list(inventory_mutations)"
+            ).fetchall()
+            if row[1] == "inventory_mutations_character"
+        ]
+        if (
+            len(indexes) != 1
+            or int(indexes[0][2]) != 0
+            or indexes[0][3] != "c"
+            or (len(indexes[0]) > 4 and int(indexes[0][4]) != 0)
+        ):
+            raise InventoryStoreError("incompatible inventory mutation index")
+        indexed_columns = tuple(
+            row[2] for row in self.db.execute(
+                "PRAGMA index_info(inventory_mutations_character)"
+            ).fetchall()
+        )
+        if indexed_columns != ("character_id", "result_revision"):
+            raise InventoryStoreError("incompatible inventory mutation index")
 
     @staticmethod
     def _character_id(value):
