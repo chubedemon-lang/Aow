@@ -3416,10 +3416,10 @@ class StableApkReaderIntegrationTests(unittest.TestCase):
     def test_inspect_apk_rejects_duplicate_required_zip_members(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "duplicate.apk"
-            self._write_fixture(path, duplicate_metadata=True)
 
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
+                self._write_fixture(path, duplicate_metadata=True)
                 with self.assertRaisesRegex(
                     CodegenInventoryError, "expected exactly one metadata"
                 ):
