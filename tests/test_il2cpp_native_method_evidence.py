@@ -3113,23 +3113,23 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
             0x540002A2,  # b.hs
             0x8B254928,  # add x8, x9, w5, uxtw #2
             0xB940210A,  # ldr w10, [x8, #0x20]
-            0x7100054B,  # subs w11, w10, #1
+            0x71000553,  # subs w19, w10, #1
             0x54000224,  # b.mi
-            0xF9400E8F,  # ldr x15, [x20, #0x18]
-            0x910081EF,  # add x15, x15, #0x20
-            0x5280018C,  # mov w12, #12
-            0x6B08017F,  # loop: cmp w11, w8
+            0xF9400EB4,  # ldr x20, [x21, #0x18]
+            0x91008294,  # add x20, x20, #0x20
+            0x52800195,  # mov w21, #12
+            0x6B08027F,  # loop: cmp w19, w8
             0x54000182,  # b.hs
-            0x9BAC7D6D,  # umull x13, w11, w12
-            0xB86D69EE,  # ldr w14, [x15, x13]
+            0x9BB57E6D,  # umull x13, w19, w21
+            0xB86D6A8E,  # ldr w14, [x20, x13]
             0x6B0601DF,  # cmp w14, w6
             0x540000E1,  # b.ne
-            0x9BAC3D70,  # umaddl x16, w11, w12, x15
+            0x9BB55270,  # umaddl x16, w19, w21, x20
             0xB9400A11,  # ldr w17, [x16, #8]
             0xD63F0240,  # blr x18
-            0x9BAC3D74,  # umaddl x20, w11, w12, x15
-            0xB9400693,  # ldr w19, [x20, #4]
-            0x36FFFEB3,  # tbz w19, #31, loop
+            0x9BB55276,  # umaddl x22, w19, w21, x20
+            0xB94006D7,  # ldr w23, [x22, #4]
+            0x36FFFEB7,  # tbz w23, #31, loop
             0xD65F03C0,  # ret
             0xD65F03C0,  # out: ret
         ]
@@ -3146,6 +3146,8 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
                 "entry_next_index_traversal": True,
                 "entry_value_offset_bytes": 8,
                 "entry_next_index_offset_bytes": 4,
+                "post_comparer_live_inputs_call_preserved": True,
+                "entry_chain_branch_targets_loop_compare": True,
                 "managed_method_identity_verified": False,
                 "managed_collection_owner_verified": False,
             },
@@ -3157,11 +3159,11 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
     def test_bucketed_lookup_shape_fails_closed_on_register_or_layout_mismatch(self):
         base_words = [
             0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x540002A2,
-            0x8B254928, 0xB940210A, 0x7100054B, 0x54000224,
-            0xF9400E8F, 0x910081EF, 0x5280018C, 0x6B08017F,
-            0x54000182, 0x9BAC7D6D, 0xB86D69EE, 0x6B0601DF,
-            0x540000E1, 0x9BAC3D70, 0xB9400A11, 0xD63F0240,
-            0x9BAC3D74, 0xB9400693, 0x36FFFEB3, 0xD65F03C0,
+            0x8B254928, 0xB940210A, 0x71000553, 0x54000224,
+            0xF9400EB4, 0x91008294, 0x52800195, 0x6B08027F,
+            0x54000182, 0x9BB57E6D, 0xB86D6A8E, 0x6B0601DF,
+            0x540000E1, 0x9BB55270, 0xB9400A11, 0xD63F0240,
+            0x9BB55276, 0xB94006D7, 0x36FFFEB7, 0xD65F03C0,
             0xD65F03C0,
         ]
         wrong_divisor = list(base_words)
@@ -3169,13 +3171,13 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
             (wrong_divisor[1] & ~(0x1F << 16)) | (8 << 16)
         )
         wrong_stride = list(base_words)
-        wrong_stride[10] = 0x5280020C  # mov w12, #16
+        wrong_stride[10] = 0x52800215  # mov w21, #16
         missing_comparer = list(base_words)
         missing_comparer[19] = 0xD503201F
         missing_chain = list(base_words)
         missing_chain[21] = 0xD503201F
         wrong_loop_target = list(base_words)
-        wrong_loop_target[22] = 0x36F80033
+        wrong_loop_target[22] = 0x36FFFED7
 
         for label, words in (
             ("wrong divisor register", wrong_divisor),
@@ -3189,6 +3191,46 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
                 self.assertEqual(summary["status"], "unresolved")
                 self.assertFalse(summary["managed_method_identity_verified"])
                 self.assertFalse(summary["managed_collection_owner_verified"])
+
+    def test_bucketed_lookup_shape_rejects_caller_saved_live_inputs(self):
+        words = [
+            0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x540002A2,
+            0x8B254928, 0xB940210A, 0x71000553, 0x54000224,
+            0xF9400EAF, 0x910081EF, 0x52800195, 0x6B08027F,
+            0x54000182, 0x9BB57E6D, 0xB86D69EE, 0x6B0601DF,
+            0x540000E1, 0x9BB53E6F, 0xB9400A11, 0xD63F0240,
+            0x9BB53E75, 0xB94006D7, 0x36FFFEB7, 0xD65F03C0,
+            0xD65F03C0,
+        ]
+        summary = _summarize_bucketed_lookup_shape(self._code(words))
+        self.assertEqual(summary["status"], "unresolved")
+
+    def test_bucketed_lookup_shape_rejects_post_comparer_clobber(self):
+        words = [
+            0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x540002A2,
+            0x8B254928, 0xB940210A, 0x71000553, 0x54000224,
+            0xF9400EB4, 0x91008294, 0x52800195, 0x6B08027F,
+            0x54000182, 0x9BB57E6D, 0xB86D6A8E, 0x6B0601DF,
+            0x540000E1, 0x9BB55270, 0xB9400A11, 0xD63F0240,
+            0x52800013,  # mov w19, #0: clobbers the loop index after BLR
+            0x9BB55276, 0xB94006D7, 0x36FFFEB7, 0xD65F03C0,
+            0xD65F03C0,
+        ]
+        summary = _summarize_bucketed_lookup_shape(self._code(words))
+        self.assertEqual(summary["status"], "unresolved")
+
+    def test_bucketed_lookup_shape_requires_backedge_to_loop_compare(self):
+        words = [
+            0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x540002A2,
+            0x8B254928, 0xB940210A, 0x71000553, 0x54000224,
+            0xF9400EB4, 0x91008294, 0x52800195, 0x6B08027F,
+            0x54000182, 0x9BB57E6D, 0xB86D6A8E, 0x6B0601DF,
+            0x540000E1, 0x9BB55270, 0xB9400A11, 0xD63F0240,
+            0x9BB55276, 0xB94006D7, 0x36FFFED7,  # targets B.hs, not loop CMP
+            0xD65F03C0, 0xD65F03C0,
+        ]
+        summary = _summarize_bucketed_lookup_shape(self._code(words))
+        self.assertEqual(summary["status"], "unresolved")
 
     def test_bucketed_lookup_shape_rejects_unaligned_instruction_bytes(self):
         with self.assertRaisesRegex(ValueError, "aligned AArch64 bytes"):
