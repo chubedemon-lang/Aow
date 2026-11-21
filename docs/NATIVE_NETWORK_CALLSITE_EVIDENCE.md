@@ -862,3 +862,18 @@ Synthetic tests cover immediate and shifted-register aliases, NOP adjacency,
 non-NOP separation, and malformed producer metadata. This is static
 instruction-provenance tooling only; it adds no APK observation, packet field,
 framing, handshake, login, or compatibility finding.
+
+## Entry-window alignment completeness — tooling only
+
+A bounded entry window is retained only in complete four-byte AArch64
+instruction units. The analyzer now marks the window truncated whenever the
+retained byte count differs from the available range, including the 64 KiB
+cap and a non-word-aligned trailing remainder. Downstream evidence gates must
+treat either case as incomplete; the Receiver lookup candidate is suppressed
+when either relevant entry window is truncated.
+
+This is conservative boundary handling. It does not claim that omitted tail
+bytes contain executable instructions or establish a formal function end.
+Synthetic tests cover aligned, non-word-aligned and capped windows. No new APK
+disassembly or wire-protocol finding is implied.
+
