@@ -493,5 +493,55 @@ class SqliteShopStoreTests(unittest.TestCase):
         self.assertEqual(self.players.get("hero").currency, 100)
         self.assertEqual(self.inventory.get("hero").items, ())
 
+
+    def _assert_bad_shop_schema_has_no_dependency_side_effects(self, ddl):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.execute(ddl)
+        with self.assertRaises(ShopStoreError):
+            SqliteShopStore(connection, {})
+        objects = {
+            row[0] for row in connection.execute(
+                """SELECT name FROM sqlite_master
+                   WHERE type IN ('table', 'view')"""
+            )
+        }
+        self.assertEqual(objects, {"shop_purchase_receipts"})
+
+    def test_store_rejects_wrong_receipt_column_type_before_dependencies(self):
+        self._assert_bad_shop_schema_has_no_dependency_side_effects(
+            """CREATE TABLE shop_purchase_receipts (
+                request_id BLOB PRIMARY KEY,
+                character_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                player_revision INTEGER NOT NULL,
+                inventory_revision INTEGER NOT NULL
+            )"""
+        )
+
+    def test_store_rejects_receipt_table_without_request_primary_key(self):
+        self._assert_bad_shop_schema_has_no_dependency_side_effects(
+            """CREATE TABLE shop_purchase_receipts (
+                request_id TEXT,
+                character_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                player_revision INTEGER NOT NULL,
+                inventory_revision INTEGER NOT NULL
+            )"""
+        )
+
+    def test_store_rejects_receipt_view_before_dependencies(self):
+        self._assert_bad_shop_schema_has_no_dependency_side_effects(
+            """CREATE VIEW shop_purchase_receipts AS
+               SELECT 'request' AS request_id,
+                      'character' AS character_id,
+                      '[]' AS payload_json,
+                      '{}' AS result_json,
+                      1 AS player_revision,
+                      1 AS inventory_revision"""
+        )
+
 if __name__ == "__main__":
     unittest.main()

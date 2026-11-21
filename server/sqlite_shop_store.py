@@ -28,6 +28,15 @@ _MAX_STACK = 2**31 - 1
 _MAX_PURCHASE_QUANTITY = 999
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
+_SHOP_RECEIPT_COLUMNS = {
+    "request_id": ("TEXT", 0, 1, None),
+    "character_id": ("TEXT", 1, 0, None),
+    "payload_json": ("TEXT", 1, 0, None),
+    "result_json": ("TEXT", 1, 0, None),
+    "player_revision": ("INTEGER", 1, 0, None),
+    "inventory_revision": ("INTEGER", 1, 0, None),
+}
+
 
 class ShopStoreError(ValueError):
     """Invalid or inconsistent synthetic shop transaction."""
@@ -117,22 +126,83 @@ class SqliteShopStore:
         self.offers = dict(offers)
         self.max_purchase_quantity = max_purchase_quantity
         self.db.execute("PRAGMA busy_timeout = 10000")
+        # Reject an incompatible pre-existing shop object before the dependent
+        # player/inventory stores can create tables as a side effect.
+        self._validate_schema(allow_missing=True)
         # Reuse the established schema and validation boundaries.
         SqlitePlayerStateStore(self.db)
         SqliteInventoryStore(self.db)
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS shop_purchase_receipts (
-                request_id TEXT PRIMARY KEY
-                    CHECK(length(request_id) BETWEEN 1 AND 128),
-                character_id TEXT NOT NULL
-                    CHECK(length(character_id) BETWEEN 1 AND 128),
-                payload_json TEXT NOT NULL,
-                result_json TEXT NOT NULL,
-                player_revision INTEGER NOT NULL CHECK(player_revision > 0),
-                inventory_revision INTEGER NOT NULL CHECK(inventory_revision > 0)
-            )"""
-        )
-        self.db.commit()
+        try:
+            # Receipt-table creation and its schema verification are atomic.
+            self.db.execute("BEGIN IMMEDIATE")
+            self.db.execute(
+                """CREATE TABLE IF NOT EXISTS shop_purchase_receipts (
+                    request_id TEXT PRIMARY KEY
+                        CHECK(length(request_id) BETWEEN 1 AND 128),
+                    character_id TEXT NOT NULL
+                        CHECK(length(character_id) BETWEEN 1 AND 128),
+                    payload_json TEXT NOT NULL,
+                    result_json TEXT NOT NULL,
+                    player_revision INTEGER NOT NULL CHECK(player_revision > 0),
+                    inventory_revision INTEGER NOT NULL CHECK(inventory_revision > 0)
+                )"""
+            )
+            self._validate_schema()
+            self.db.commit()
+        except BaseException:
+            if self.db.in_transaction:
+                self.db.rollback()
+            raise
+
+    def _validate_schema(self, *, allow_missing=False):
+        """Validate the durable receipt table before it is used."""
+        objects = self.db.execute(
+            """SELECT type FROM sqlite_master
+               WHERE name=? AND type IN ('table', 'view')""",
+            ("shop_purchase_receipts",),
+        ).fetchall()
+        if not objects:
+            if allow_missing:
+                return False
+            raise ShopStoreError("shop receipt table is missing")
+        if objects != [("table",)]:
+            raise ShopStoreError("incompatible shop receipt object")
+
+        rows = self.db.execute(
+            "PRAGMA table_info(shop_purchase_receipts)"
+        ).fetchall()
+        actual_columns = {
+            row[1]: (
+                str(row[2]).strip().upper(), int(row[3]), int(row[5]), row[4]
+            )
+            for row in rows
+        }
+        if (len(rows) != len(_SHOP_RECEIPT_COLUMNS)
+                or actual_columns != _SHOP_RECEIPT_COLUMNS):
+            raise ShopStoreError("incompatible shop receipt schema")
+
+        indexes = self.db.execute(
+            "PRAGMA index_list(shop_purchase_receipts)"
+        ).fetchall()
+        primary_indexes = [
+            row for row in indexes
+            if len(row) >= 5 and row[2] == 1
+            and row[3] == "pk" and row[4] == 0
+        ]
+        if len(primary_indexes) != 1:
+            raise ShopStoreError("incompatible shop receipt primary key")
+        index_name = primary_indexes[0][1]
+        quoted_index_name = index_name.replace('"', '""')
+        index_columns = self.db.execute(
+            'PRAGMA index_info("' + quoted_index_name + '")'
+        ).fetchall()
+        if tuple(row[2] for row in index_columns) != ("request_id",):
+            raise ShopStoreError("incompatible shop receipt primary key")
+        if self.db.execute(
+            "PRAGMA foreign_key_list(shop_purchase_receipts)"
+        ).fetchall():
+            raise ShopStoreError("unexpected shop receipt foreign key")
+        return True
 
     @staticmethod
     def _character_id(value):
