@@ -55,6 +55,9 @@ REQUIRED_FOREIGN_KEYS = {
     "wallets": {("character_id", "characters", "id", "NO ACTION", "NO ACTION")},
     "inventory": {("character_id", "characters", "id", "NO ACTION", "NO ACTION")},
 }
+MAX_SCHEMA_SQL_CHARS = 64 * 1024
+
+
 REQUIRED_CHECKS = {
     "wallets": {
         (("identifier", "balance"), ("operator", ">="), ("number", "0")),
@@ -88,7 +91,9 @@ def _normalize_sql_fragment(value):
 
 
 def _tokenize_sql(sql):
-    """Tokenize schema SQL while excluding comments and string-literal contents."""
+    """Tokenize bounded schema SQL, excluding comments and string-literal contents."""
+    if type(sql) is not str or len(sql) > MAX_SCHEMA_SQL_CHARS:
+        return [("invalid", "schema-sql-limit")]
     tokens = []
     index = 0
     operators = ("->>", "<<", ">>", "->", ">=", "<=", "<>", "!=", "==", "||")
