@@ -939,6 +939,16 @@ def _summarize_bucketed_lookup_shape(code):
                 continue
             stride_register = stride[0]
 
+            # The next-index calculation occurs after an indirect call. Under
+            # AAPCS64, only x19-x29 are guaranteed to survive that call. Without
+            # stack spill/reload analysis, do not carry caller-saved values
+            # across BLR and label the result as register-linked.
+            if not all(
+                19 <= register <= 29
+                for register in (entry_index_register, stride_register, entries_base)
+            ):
+                continue
+
             multiply_index, multiply = find_after(
                 stride_index + 1,
                 _decode_aarch64_umaddl,
@@ -1037,49 +1047,74 @@ def _summarize_bucketed_lookup_shape(code):
             if comparer_index is None:
                 continue
 
-            next_address_index, next_address = find_after(
-                comparer_index + 1,
-                _decode_aarch64_umaddl,
-                lambda item: (
-                    item[1] in entry_index_registers
-                    and item[2] == stride_register
-                    and item[3] == entries_base
-                ),
-                limit=128,
-            )
-            if next_address is None:
+            # Do not scan through arbitrary instructions after BLR: they may
+            # overwrite even callee-saved values in the caller. Permit only NOPs
+            # before the exact next-address calculation and its next-index load.
+            next_address_index = skip_nops(comparer_index + 1)
+            if next_address_index >= len(words):
                 continue
-            next_index, next_load = find_after(
-                next_address_index + 1,
-                _decode_aarch64_ldr_w_unsigned,
-                lambda item: (
-                    item[1] == next_address[0] and item[2] == 4
-                ),
-                limit=8,
+            next_address = _decode_aarch64_umaddl(words[next_address_index])
+            if (
+                next_address is None
+                or next_address[1] != entry_index_register
+                or next_address[2] != stride_register
+                or next_address[3] != entries_base
+                or next_address[0] in {
+                    entry_index_register, stride_register, entries_base,
+                }
+            ):
+                continue
+
+            next_index = skip_nops(next_address_index + 1)
+            next_load = (
+                _decode_aarch64_ldr_w_unsigned(words[next_index])
+                if next_index < len(words) else None
             )
-            if next_load is None:
+            if (
+                next_load is None or next_load[1] != next_address[0]
+                or next_load[2] != 4
+            ):
                 continue
             next_register = next_load[0]
 
-            chain_branch = None
-            for index in range(next_index + 1, min(len(words), next_index + 8)):
-                condition = _decode_aarch64_conditional_branch_condition(words[index])
-                if condition is None:
+            loop_compare_index = None
+            for candidate in range(stride_index + 1, multiply_index):
+                loop_compare = _decode_aarch64_cmp_w_register(words[candidate])
+                if loop_compare is None or entry_index_register not in loop_compare:
                     continue
-                immediate = (words[index] >> 5) & 0x3FFF
-                if immediate & 0x2000:
-                    immediate -= 0x4000
-                target_index = index + immediate
+                loop_branch_index = skip_nops(candidate + 1)
+                loop_branch = (
+                    _decode_aarch64_conditional_branch_condition(words[loop_branch_index])
+                    if loop_branch_index < len(words) else None
+                )
                 if (
-                    condition.get("kind") == "tbz_tbnz"
-                    and condition.get("register_index") == next_register
-                    and condition.get("bit_index") == 31
-                    and condition.get("predicate") == "zero"
-                    and stride_index < target_index < multiply_index
+                    loop_branch is not None
+                    and loop_branch.get("kind") == "b_cond"
+                    and loop_branch.get("condition_code") == 2
                 ):
-                    chain_branch = condition
+                    loop_compare_index = candidate
                     break
+            if loop_compare_index is None:
+                continue
+
+            chain_branch_index = skip_nops(next_index + 1)
+            chain_branch = (
+                _decode_aarch64_conditional_branch_condition(words[chain_branch_index])
+                if chain_branch_index < len(words) else None
+            )
             if chain_branch is None:
+                continue
+            immediate = (words[chain_branch_index] >> 5) & 0x3FFF
+            if immediate & 0x2000:
+                immediate -= 0x4000
+            target_index = chain_branch_index + immediate
+            if (
+                chain_branch.get("kind") != "tbz_tbnz"
+                or chain_branch.get("register_index") != next_register
+                or chain_branch.get("bit_index") != 31
+                or chain_branch.get("predicate") != "zero"
+                or target_index != loop_compare_index
+            ):
                 continue
 
             return {
@@ -1092,6 +1127,8 @@ def _summarize_bucketed_lookup_shape(code):
                 "entry_next_index_traversal": True,
                 "entry_value_offset_bytes": 8,
                 "entry_next_index_offset_bytes": 4,
+                "post_comparer_live_inputs_call_preserved": True,
+                "entry_chain_branch_targets_loop_compare": True,
                 "managed_method_identity_verified": False,
                 "managed_collection_owner_verified": False,
             }
