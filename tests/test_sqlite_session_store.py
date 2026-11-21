@@ -848,5 +848,55 @@ class SqliteSessionStoreTests(unittest.TestCase):
         )
 
 
+    def test_constructor_rejects_incompatible_existing_table_before_creating_index(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.execute(
+            """CREATE TABLE durable_sessions (
+                token_hash TEXT PRIMARY KEY,
+                account_id INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL
+            )"""
+        )
+
+        with self.assertRaisesRegex(ValueError, "incompatible durable session schema"):
+            SqliteSessionStore(connection, clock=lambda: self.now)
+
+        self.assertFalse(connection.in_transaction)
+        self.assertIsNone(connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='index' AND name='durable_sessions_expiry'"
+        ).fetchone())
+
+    def test_constructor_rejects_existing_expiry_index_on_wrong_column(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.execute(
+            """CREATE TABLE durable_sessions (
+                token_hash BLOB PRIMARY KEY
+                    CHECK(typeof(token_hash) = 'blob' AND length(token_hash) = 32),
+                account_id INTEGER NOT NULL CHECK(account_id > 0),
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL CHECK(expires_at > created_at)
+            )"""
+        )
+        connection.execute(
+            "CREATE INDEX durable_sessions_expiry ON durable_sessions(account_id)"
+        )
+
+        with self.assertRaisesRegex(ValueError, "incompatible durable session expiry index"):
+            SqliteSessionStore(connection, clock=lambda: self.now)
+
+        self.assertFalse(connection.in_transaction)
+        self.assertEqual(
+            tuple(row[2] for row in connection.execute(
+                "PRAGMA index_info(durable_sessions_expiry)"
+            ).fetchall()),
+            ("account_id",),
+        )
+
+
+
 if __name__ == "__main__":
     unittest.main()
