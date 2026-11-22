@@ -248,6 +248,44 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
             with self.subTest(word=hex(word)):
                 self.assertIsNone(_decode_orr_immediate(word))
 
+    def test_exhaustively_decodes_valid_logical_immediate_masks(self):
+        # Independent bit-by-bit oracle: rotate a low run of ones within each
+        # element, then replicate it across the selected W/X operand width.
+        checked = 0
+        for width in (32, 64):
+            sf = int(width == 64)
+            max_length = 5 if width == 32 else 6
+            for length in range(1, max_length + 1):
+                element_size = 1 << length
+                n = int(length == 6)
+                high_imms = (0x3F ^ ((1 << (length + 1)) - 1)) & 0x3F
+                for ones_count in range(1, element_size):
+                    imms = high_imms | (ones_count - 1)
+                    source_mask = (1 << ones_count) - 1
+                    for rotation in range(element_size):
+                        rotated = 0
+                        for bit in range(element_size):
+                            source_bit = (bit + rotation) % element_size
+                            if source_mask & (1 << source_bit):
+                                rotated |= 1 << bit
+
+                        expected = 0
+                        for offset in range(0, width, element_size):
+                            expected |= rotated << offset
+
+                        word = orr_immediate(
+                            sf, 7, n=n, immr=rotation, imms=imms, source=3
+                        )
+                        self.assertEqual(
+                            _decode_orr_immediate(word),
+                            (7, 3, expected, (1 << width) - 1),
+                            "width={}, element={}, ones={}, rotation={}".format(
+                                width, element_size, ones_count, rotation
+                            ),
+                        )
+                        checked += 1
+        self.assertEqual(checked, 6636)
+
     def test_tracks_orr_immediate_zero_before_allowlisted_call(self):
         code = words(
             orr_immediate(1, 1, n=1, immr=0, imms=3),
