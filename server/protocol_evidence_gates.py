@@ -12,6 +12,7 @@ import re
 from server.protocol_evidence_registry import (
     Evidence,
     EvidenceError,
+    MAX_EVIDENCE_RECORDS,
     _validated_evidence_copy,
 )
 
@@ -21,7 +22,6 @@ STAGES = (
     "player", "map", "movement", "inventory", "shop", "combat", "quest",
 )
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-MAX_EVIDENCE_RECORDS = 4096
 MAX_APPROVED_EVIDENCE_DIGESTS = 4096
 
 # Static APK inventory/decompilation/native analysis can verify a static fact,
