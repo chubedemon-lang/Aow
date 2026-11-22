@@ -12,6 +12,7 @@ from urllib.parse import unquote
 
 
 _SHA = re.compile(r"^[0-9a-f]{64}$")
+MAX_EVIDENCE_RECORDS = 4096
 ALLOWED_TOPICS = frozenset({
     "transport", "framing", "serialization", "handshake", "login",
     "session", "player", "map", "movement", "inventory", "shop",
@@ -246,12 +247,20 @@ class EvidenceRegistry:
         with self._lock:
             if stored_record in self._records:
                 raise EvidenceError("duplicate evidence")
+            if len(self._records) >= MAX_EVIDENCE_RECORDS:
+                raise EvidenceError(
+                    f"registry must contain at most {MAX_EVIDENCE_RECORDS} records"
+                )
             # Keep a validated copy, never the caller-owned dataclass instance.
             self._records.append(stored_record)
 
     def _snapshot_records(self):
         """Return one immutable record snapshot under the registry lock."""
         with self._lock:
+            if len(self._records) > MAX_EVIDENCE_RECORDS:
+                raise EvidenceError(
+                    f"registry contains more than {MAX_EVIDENCE_RECORDS} records"
+                )
             return tuple(self._records)
 
     def summary(self, artifact_sha256=None):
