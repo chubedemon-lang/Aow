@@ -1003,3 +1003,16 @@ handshake, login, or unchanged-APK compatibility.
 - Direct in-window `B` edges are followed; conditional branches retain both target and fallthrough; `BL`/`BLR` retain local fallthrough; `BR` and `RET` terminate the local walk.
 - This is conservative bounded reachability, not predicate evaluation or symbolic execution. It does not identify a managed method, collection owner, wire message ID, or runtime-selected branch.
 - Synthetic regressions verify that a candidate block reached by a direct branch remains analyzable and an identical decoy skipped by the entry branch is rejected.
+
+
+## Bounded bucketed-lookup matcher input
+
+The bucketed lookup shape matcher accepts only aligned built-in instruction bytes
+and now rejects a method window larger than `MAX_ENTRYPOINT_WINDOW_BYTES` (64 KiB).
+This matches the maximum entry window used by the native-method inventory and
+keeps direct helper use from bypassing the established analyzer resource bound.
+
+A synthetic regression test exercises the first byte count above that limit.
+This is input/resource hardening only: it adds no APK observation, does not
+identify a managed collection owner, and does not change framing, message-ID,
+handshake, LoginRequest, or compatibility confidence.
