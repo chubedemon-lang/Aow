@@ -26,6 +26,7 @@ from server.signed_be_length_candidate import (
 
 MAX_FIXTURE_BYTES = 20 * 1024 * 1024
 MAX_JSON_NESTING = 64
+MAX_JSON_TOKENS = 100_000
 MAX_CHUNK_BYTES = 1024 * 1024
 MAX_TOTAL_STREAM_BYTES = 8 * 1024 * 1024
 MAX_CHUNKS_PER_DIRECTION = 4096
@@ -161,10 +162,15 @@ def _reject_json_constant(_value):
 
 
 def _validate_json_nesting(text):
-    """Reject deeply nested JSON before the decoder builds nested objects."""
+    """Bound nesting and token count before json.loads builds Python objects."""
     depth = 0
+    token_count = 0
     in_string = False
     escaped = False
+    previous_character = None
+    value_delimiters = " \t\r\n[{,:"
+    primitive_starts = "-0123456789tfn"
+
     for character in text:
         if in_string:
             if escaped:
@@ -173,10 +179,15 @@ def _validate_json_nesting(text):
                 escaped = True
             elif character == '"':
                 in_string = False
+            previous_character = character
             continue
+
         if character == '"':
+            # Count object keys and string values as individual JSON tokens.
+            token_count += 1
             in_string = True
         elif character in "[{":
+            token_count += 1
             depth += 1
             if depth > MAX_JSON_NESTING:
                 raise FixtureAuditError("fixture JSON nesting exceeds the configured depth limit")
@@ -184,6 +195,21 @@ def _validate_json_nesting(text):
             depth -= 1
             if depth < 0:
                 raise FixtureAuditError("fixture must be valid UTF-8 JSON")
+        elif (
+            character in primitive_starts
+            and (
+                previous_character is None
+                or previous_character in value_delimiters
+            )
+        ):
+            # Count a number, true, false, or null once at its first character.
+            token_count += 1
+
+        if token_count > MAX_JSON_TOKENS:
+            raise FixtureAuditError(
+                "fixture JSON token count exceeds the configured limit"
+            )
+        previous_character = character
 
 
 def _decode_chunks(
