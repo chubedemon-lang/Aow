@@ -88,7 +88,7 @@ class AowPrimitiveWriter:
 
     def write_string(self, value):
         if value is None:
-            return self._append(b"\\xff\\xff")
+            return self._append(b"\xff\xff")
         # Exact built-in strings keep encoding deterministic and avoid invoking
         # an overridden encode() method on a user-defined str subclass.
         if type(value) is not str:
