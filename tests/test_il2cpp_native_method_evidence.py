@@ -3355,7 +3355,8 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
         ]
 
         # A direct branch to the candidate entry keeps that block reachable.
-        reachable = [self._encode_b(0, 8), 0xD503201F] + base_words
+        # B imm26 at PC 0 targets instruction index 2 (byte offset 8).
+        reachable = [0x14000002, 0xD503201F] + base_words
         self.assertEqual(
             _summarize_bucketed_lookup_shape(self._code(reachable))["status"],
             "bucketed_membership_lookup_shape_candidate",
@@ -3364,7 +3365,7 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
         # A branch around the candidate to the terminal RET makes the same
         # instruction pattern unreachable from the method-window entry.
         unreachable = [
-            self._encode_b(0, len(base_words) * 4),
+            0x14000000 | len(base_words),  # B from index 0 to the final RET index.
         ] + base_words
         summary = _summarize_bucketed_lookup_shape(self._code(unreachable))
         self.assertEqual(summary["status"], "unresolved")
