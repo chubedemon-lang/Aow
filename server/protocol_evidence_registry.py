@@ -255,13 +255,27 @@ class EvidenceRegistry:
             self._records.append(stored_record)
 
     def _snapshot_records(self):
-        """Return one immutable record snapshot under the registry lock."""
+        """Return a validated, detached record snapshot under the registry lock.
+
+        The tuple alone is not an immutability boundary: frozen Evidence
+        instances can still be changed with object.__setattr__. Reconstruct
+        every stored record while holding the lock so callers of this private
+        snapshot helper never receive references to registry-owned objects.
+        Corrupted internal records fail closed instead of being summarized.
+        """
         with self._lock:
             if len(self._records) > MAX_EVIDENCE_RECORDS:
                 raise EvidenceError(
                     f"registry contains more than {MAX_EVIDENCE_RECORDS} records"
                 )
-            return tuple(self._records)
+            try:
+                return tuple(
+                    _validated_evidence_copy(record) for record in self._records
+                )
+            except EvidenceError as exc:
+                raise EvidenceError(
+                    "registry contains an invalid evidence record"
+                ) from exc
 
     def summary(self, artifact_sha256=None):
         """Summarize one APK fingerprint; never silently combine builds.
