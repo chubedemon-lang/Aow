@@ -139,10 +139,12 @@ class SqliteAuthRateLimiter:
             or int(indexes[0][4]) != 0
         ):
             raise ValueError("incompatible authentication rate-limit primary key")
+        if indexes[0][1] != "sqlite_autoindex_auth_attempt_limits_1":
+            raise ValueError("incompatible authentication rate-limit primary key")
         indexed_columns = tuple(
             row[2]
             for row in self.db.execute(
-                "PRAGMA index_info(" + indexes[0][1] + ")"
+                "PRAGMA index_info(sqlite_autoindex_auth_attempt_limits_1)"
             ).fetchall()
         )
         if indexed_columns != ("principal_digest",):
