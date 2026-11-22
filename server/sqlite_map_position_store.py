@@ -240,14 +240,6 @@ class SqliteMapPositionStore:
         if check_setting != (0,):
             raise MapPositionStoreError("SQLite CHECK constraints are disabled")
 
-        triggers = self.db.execute(
-            "SELECT name FROM sqlite_master WHERE type='trigger' "
-            "AND tbl_name IN (?, ?)",
-            ("map_position_snapshots", "map_position_mutations"),
-        ).fetchall()
-        if triggers:
-            raise MapPositionStoreError("unexpected map-position trigger")
-
         definitions = dict(self.db.execute(
             "SELECT name, sql FROM sqlite_master WHERE type='table' "
             "AND name IN (?, ?)",
