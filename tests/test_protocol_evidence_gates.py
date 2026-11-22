@@ -280,6 +280,15 @@ class EvidenceGateTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "valid exact Evidence"):
             evaluate_evidence([record])
 
+    def test_rejects_frozen_record_with_deleted_field_at_gate_and_digest_boundaries(self):
+        record = evidence("transport")
+        object.__delattr__(record, "observation")
+
+        with self.assertRaisesRegex(EvidenceError, "invalid record"):
+            evidence_record_digest(record)
+        with self.assertRaisesRegex(EvidenceError, "valid exact Evidence"):
+            evaluate_evidence([record])
+
     def test_gate_uses_validated_record_copies_during_concurrent_mutation(self):
         records = [evidence(topic) for topic in STAGES[:4]]
         mutable_candidate = Evidence(
