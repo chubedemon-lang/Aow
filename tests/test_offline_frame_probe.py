@@ -204,6 +204,38 @@ class OfflineFrameProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exact string"):
             FrameSpec(1, HostileByteorder("big"))
 
+    def test_decoder_snapshots_validated_spec_at_construction(self):
+        spec = FrameSpec(1, "big", max_payload=2, max_chunk_bytes=3)
+        decoder = LengthFrameDecoder(spec)
+
+        object.__setattr__(spec, "max_payload", 8)
+        object.__setattr__(spec, "max_chunk_bytes", 8)
+
+        with self.assertRaisesRegex(FrameDecodeError, "invalid declared frame size"):
+            decoder.feed(b"\\x03")
+
+    def test_decoder_spec_property_returns_detached_copy(self):
+        decoder = LengthFrameDecoder(FrameSpec(1, "big", max_payload=2))
+        exposed = decoder.spec
+        object.__setattr__(exposed, "max_payload", 8)
+
+        with self.assertRaisesRegex(FrameDecodeError, "invalid declared frame size"):
+            decoder.feed(b"\\x03")
+
+    def test_decoder_revalidates_mutated_spec_before_use(self):
+        spec = FrameSpec(1, "big", max_payload=2)
+        object.__setattr__(spec, "max_payload", -1)
+
+        with self.assertRaisesRegex(ValueError, "max_payload"):
+            LengthFrameDecoder(spec)
+
+    def test_decoder_rejects_spec_with_deleted_configuration(self):
+        spec = FrameSpec(1, "big")
+        object.__delattr__(spec, "max_chunk_bytes")
+
+        with self.assertRaisesRegex(TypeError, "intact FrameSpec"):
+            LengthFrameDecoder(spec)
+
     def test_rejects_frame_spec_subclasses(self):
         class ExtendedFrameSpec(FrameSpec):
             pass
