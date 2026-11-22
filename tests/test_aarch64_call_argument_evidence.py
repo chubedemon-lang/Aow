@@ -586,6 +586,25 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
             )
 
 
+    def test_unrecognized_branch_register_family_encodings_terminate_cfg(self):
+        for terminator in (0xD6FFFFE0, 0xD7FFFFE0):
+            scenarios = (
+                words(terminator, movz_x(1, 4), bl(0x1008, self.target)),
+                words(
+                    movz_x(1, 4), terminator, movz_x(1, 5),
+                    bl(0x100C, self.target),
+                ),
+            )
+            for scenario_index, code in enumerate(scenarios):
+                with self.subTest(
+                    terminator=hex(terminator), scenario=scenario_index
+                ):
+                    result = summarize_small_argument_constants(
+                        code, 0x1000, self.targets,
+                        target_prefixes=self.prefixes,
+                    )
+                    self.assertEqual(result, [])
+
     def test_pointer_authenticated_branches_and_returns_terminate_cfg(self):
         terminators = (
             0xD71F0801,  # braa x0, x1

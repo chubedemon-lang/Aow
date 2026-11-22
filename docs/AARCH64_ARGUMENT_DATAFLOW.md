@@ -11,6 +11,9 @@ The analyzer recognizes these intraprocedural control-flow instructions:
 - B.cond, CBZ/CBNZ, and TBZ/TBNZ as two-way conditional branches;
 - direct B as an unconditional branch;
 - BR/RET and pointer-authenticated BRAA/BRAB/BRAAZ/BRABZ as bounded-window exits;
+- unrecognized encodings in the D6/D7 branch-register major-opcode family as
+  conservative terminal barriers (recognized BLR/PAC-call encodings are
+  classified first and retain caller fallthrough);
 - RETAA/RETAB, ERET/ERETAA/ERETAB and DRPS as terminal return/exception edges;
 - BL/BLR and pointer-authenticated BLRAA/BLRAB/BLRAAZ/BLRABZ as calls that
   clobber caller-saved abstract registers.
@@ -50,8 +53,10 @@ therefore create ordinal gaps. No native addresses, raw instructions, APK
 bytes, endpoint values or packet data are emitted.
 
 The method window is capped at 64 KiB. Indirect branch targets are not
-resolved; the supported BR/PAC-branch forms terminate the bounded path, while
-BLR/PAC-call forms return to fallthrough after caller-saved state is cleared.
+resolved; supported BR/PAC-branch forms and unrecognized D6/D7
+branch-register-family encodings terminate the bounded path. Recognized
+BLR/PAC-call forms are classified before that conservative family barrier and
+retain fallthrough after caller-saved state is cleared.
 The analyzer classifies pointer-authenticated instruction encodings only; it
 does not emulate pointer authentication. It does not evaluate branch
 conditions, model register writes outside its small instruction subset,
