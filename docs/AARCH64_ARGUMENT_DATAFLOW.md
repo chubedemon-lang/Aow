@@ -42,6 +42,17 @@ joins and backedges start with an empty abstract state. This deliberately loses
 some valid facts rather than merging uncertain register values or iterating
 loops unsafely.
 
+## Logical-immediate exhaustive validation
+
+The synthetic AArch64 argument-analysis tests enumerate all 6,636 valid
+logical-immediate combinations for 32-bit and 64-bit operands: element sizes,
+non-empty/non-full runs of one bits, and every rotation. Expected masks are
+constructed bit-by-bit by rotating a low run of ones and replicating the
+element across the operand width, rather than calling the production decoder.
+This validates the decoder's mask construction and W/X width behavior only;
+the generated instruction words are synthetic and are not evidence that any
+particular instruction occurs in the AOW APK.
+
 ## Output and limits
 
 Observations are emitted only for uniquely resolved direct BL targets whose
