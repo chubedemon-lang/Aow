@@ -282,7 +282,15 @@ class EvidenceGateTests(unittest.TestCase):
 
     def test_gate_uses_validated_record_copies_during_concurrent_mutation(self):
         records = [evidence(topic) for topic in STAGES[:4]]
-        mutable_candidate = evidence("transport")
+        mutable_candidate = Evidence(
+            "transport",
+            "a" * 64,
+            "second transport observation",
+            "authorized_local_test",
+            True,
+            "tests/test_protocol_evidence_gates.py",
+            "python -m unittest discover -s tests -p test_protocol_evidence_gates.py -v",
+        )
         records.append(mutable_candidate)
         approved = tuple(evidence_record_digest(record) for record in records)
         original_digest = evidence_record_digest
