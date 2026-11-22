@@ -248,7 +248,16 @@ def _build_control_flow_blocks(words, start_va):
                 boundaries.add(index + 1)
             continue
 
-        if _is_indirect_branch(word):
+        if (
+            _is_indirect_branch(word)
+            or (
+                (word & 0xFF000000) in (0xD6000000, 0xD7000000)
+                and not _is_indirect_call(word)
+            )
+        ):
+            # Known indirect calls are handled first as calls and retain
+            # caller fallthrough. Every other unrecognized D6/D7 family
+            # encoding is a conservative terminal barrier.
             indirect_terminators.add(index)
             if index + 1 < instruction_count:
                 boundaries.add(index + 1)
