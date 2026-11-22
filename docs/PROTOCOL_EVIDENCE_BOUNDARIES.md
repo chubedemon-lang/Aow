@@ -16,6 +16,11 @@ APK compatibility.
 - The registry uses the same 4,096-record limit. It rejects additions at
   capacity and refuses to summarize an over-limit internal state before
   allocating a snapshot.
+- Registry snapshots reconstruct and revalidate every stored record while
+  holding the lock. The returned tuple contains detached copies, never
+  registry-owned Evidence objects; bypassing frozen=True on a returned
+  copy therefore cannot mutate future summaries. Corrupted stored records
+  fail closed during snapshot creation.
 - Gate evaluation revalidates and copies each record before fingerprint,
   digest, or topic aggregation; caller-owned frozen instances are never read
   again after that snapshot is built.
