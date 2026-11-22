@@ -258,7 +258,7 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
             for length in range(1, max_length + 1):
                 element_size = 1 << length
                 n = int(length == 6)
-                high_imms = 0x3F ^ ((1 << (length + 1)) - 1)
+                high_imms = (0x3F ^ ((1 << (length + 1)) - 1)) & 0x3F
                 for ones_count in range(1, element_size):
                     imms = high_imms | (ones_count - 1)
                     source_mask = (1 << ones_count) - 1
