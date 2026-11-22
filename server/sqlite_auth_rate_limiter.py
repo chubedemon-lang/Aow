@@ -256,7 +256,7 @@ class SqliteAuthRateLimiter:
         if not self.db.in_transaction:
             raise ValueError("active SQLite transaction required")
 
-    def _load_state(self, digest: bytes):
+    def _load_state(self, digest: bytes, now: float):
         row = self.db.execute(
             """SELECT window_started_at, attempt_count, blocked_until
                FROM auth_attempt_limits WHERE principal_digest = ?""",
@@ -266,19 +266,19 @@ class SqliteAuthRateLimiter:
             return None
         started, attempts, blocked_until = row
         if (
-            isinstance(started, bool)
-            or not isinstance(started, (int, float))
+            type(started) not in (int, float)
             or not math.isfinite(float(started))
             or started < 0
+            or started > now
             or type(attempts) is not int
             or attempts < 0
             or (
                 blocked_until is not None
                 and (
-                    isinstance(blocked_until, bool)
-                    or not isinstance(blocked_until, (int, float))
+                    type(blocked_until) not in (int, float)
                     or not math.isfinite(float(blocked_until))
                     or blocked_until < 0
+                    or blocked_until < started
                 )
             )
         ):
@@ -308,7 +308,7 @@ class SqliteAuthRateLimiter:
             # reservation. A caller waiting on SQLite must not evaluate an
             # expired lockout using a stale pre-lock timestamp.
             now = self._now()
-            state = self._load_state(digest)
+            state = self._load_state(digest, now)
             if state is None:
                 return
             started, attempts, blocked_until = state
@@ -353,7 +353,7 @@ class SqliteAuthRateLimiter:
                   OR (blocked_until IS NOT NULL AND blocked_until <= ?)""",
             (now - self.window_seconds, now),
         )
-        state = self._load_state(digest)
+        state = self._load_state(digest, now)
 
         if state is None:
             bucket_count = self.db.execute(
