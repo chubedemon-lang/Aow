@@ -352,5 +352,42 @@ class EvidenceRegistryTests(unittest.TestCase):
             registry.summary(artifact_sha256=other_sha)
 
 
+    def test_snapshot_records_are_detached_from_registry_owned_instances(self):
+        registry = EvidenceRegistry()
+        original = Evidence(
+            "transport", self.sha, "offline observation", "synthetic_test"
+        )
+        registry.add(original)
+
+        snapshot = registry._snapshot_records()
+        self.assertEqual(len(snapshot), 1)
+        self.assertIsNot(snapshot[0], original)
+
+        # Even bypassing frozen=True on the returned copy must not mutate the
+        # registry's private stored record.
+        object.__setattr__(snapshot[0], "topic", "login")
+        object.__setattr__(snapshot[0], "verified", True)
+
+        summary = registry.summary()
+        self.assertEqual(
+            summary["transport"], {"observations": 1, "verified": 0}
+        )
+        self.assertEqual(
+            summary["login"], {"observations": 0, "verified": 0}
+        )
+
+    def test_summary_rejects_corrupted_registry_owned_record(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence(
+            "transport", self.sha, "offline observation", "synthetic_test"
+        ))
+        # Simulate corruption of private state; a detached snapshot must
+        # revalidate the stored record rather than trusting frozen=True.
+        object.__setattr__(registry._records[0], "topic", "unknown")
+
+        with self.assertRaisesRegex(EvidenceError, "invalid evidence record"):
+            registry.summary()
+
+
 if __name__ == "__main__":
     unittest.main()
