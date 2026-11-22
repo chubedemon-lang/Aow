@@ -849,6 +849,46 @@ def _summarize_bucketed_lookup_shape(code):
                 return index, decoded
         return None, None
 
+    # Only inspect candidate starts reachable from the method-window entry.
+    # Conditional edges are both retained; BL/BLR return to fallthrough, while
+    # B follows only an in-window target and BR/RET terminate the local walk.
+    reachable = set()
+    pending = [0] if words else []
+    while pending:
+        current = pending.pop()
+        if current in reachable or not 0 <= current < len(words):
+            continue
+        reachable.add(current)
+        current_word = words[current]
+        pc = current * 4
+        direct_branch = _decode_aarch64_b_target(current_word, pc)
+        if direct_branch is not None:
+            if 0 <= direct_branch < len(code) and direct_branch % 4 == 0:
+                pending.append(direct_branch // 4)
+            continue
+        conditional_branch = _decode_aarch64_conditional_branch(current_word, pc)
+        if conditional_branch is not None:
+            target = conditional_branch[1]
+            if 0 <= target < len(code) and target % 4 == 0:
+                pending.append(target // 4)
+            if current + 1 < len(words):
+                pending.append(current + 1)
+            continue
+        if (
+            _decode_aarch64_bl_target(current_word, pc) is not None
+            or _decode_aarch64_blr_register(current_word) is not None
+        ):
+            if current + 1 < len(words):
+                pending.append(current + 1)
+            continue
+        if (
+            _decode_aarch64_br_register(current_word) is not None
+            or _is_aarch64_return(current_word)
+        ):
+            continue
+        if current + 1 < len(words):
+            pending.append(current + 1)
+
     unresolved = {
         "status": "unresolved",
         "managed_method_identity_verified": False,
@@ -856,6 +896,8 @@ def _summarize_bucketed_lookup_shape(code):
     }
 
     for divide_index, word in enumerate(words):
+        if divide_index not in reachable:
+            continue
         divide = _decode_aarch64_sdiv_w(word)
         if divide is None:
             continue
