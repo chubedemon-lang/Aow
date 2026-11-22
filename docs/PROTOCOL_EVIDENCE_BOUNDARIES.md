@@ -13,6 +13,9 @@ APK compatibility.
   later `object.__setattr__` mutations cannot alter stored evidence.
 - Gate input must be an exact built-in `list` or `tuple`, containing only
   exact `Evidence` instances, with at most 4,096 records per evaluation.
+- Gate evaluation revalidates and copies each record before fingerprint,
+  digest, or topic aggregation; caller-owned frozen instances are never read
+  again after that snapshot is built.
 - The approved-digest allowlist must be an exact built-in `list`, `tuple`, or
   `frozenset`, with at most 4,096 entries.
 - Artifact fingerprints must be exact built-in lowercase SHA-256 strings.
@@ -24,6 +27,13 @@ accepted or evaluated. The collection caps also bound the work and temporary
 memory used to validate records, build the fingerprint set, and materialize
 the approved-digest allowlist. They also keep the registry and ordered gates
 on the same narrow input contract.
+
+Python's `frozen=True` dataclass setting is not an absolute immutability
+boundary: callers can bypass normal assignment with `object.__setattr__`.
+The registry and readiness gates therefore reconstruct each exact record
+through the `Evidence` validator and retain/use only the fresh copy. This
+also prevents a concurrent caller mutation between digest calculation and
+topic aggregation from relabeling already-approved evidence.
 
 ## Static verification versus protocol readiness
 
