@@ -4,6 +4,7 @@ import unittest
 
 from tools.aarch64_call_argument_evidence import (
     _decode_move_wide,
+    _decode_orr_immediate_from_zero,
     _decode_sub_immediate,
     _decode_conditional_branch_target,
     _decode_unconditional_branch_target,
@@ -52,6 +53,13 @@ def sub_w(register, source, immediate, *, shifted=False):
     return (
         0x51000000 | (int(shifted) << 22) | (immediate << 10)
         | (source << 5) | register
+    )
+
+
+def orr_immediate(sf, destination, *, n=0, immr=0, imms=0, source=31):
+    return (
+        (sf << 31) | 0x32000000 | (n << 22) | (immr << 16)
+        | (imms << 10) | (source << 5) | destination
     )
 
 
@@ -209,6 +217,85 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         self.assertIsNone(_decode_sub_immediate(sub_x(1, 31, 1)))
         self.assertEqual(_decode_sub_immediate(sub_x(1, 2, 1)), (1, 2, 1, (1 << 64) - 1))
         self.assertEqual(_decode_sub_immediate(sub_w(1, 2, 1)), (1, 2, 1, (1 << 32) - 1))
+
+    def test_decodes_orr_immediate_zero_replicated_16_bit_mask(self):
+        word = orr_immediate(1, 0, n=0, immr=0, imms=39)
+        self.assertEqual(
+            _decode_orr_immediate_from_zero(word),
+            (0, 0x00FF00FF00FF00FF, (1 << 64) - 1),
+        )
+
+        word = orr_immediate(0, 1, n=0, immr=0, imms=39)
+        self.assertEqual(
+            _decode_orr_immediate_from_zero(word),
+            (1, 0x00FF00FF, (1 << 32) - 1),
+        )
+
+    def test_decodes_orr_immediate_zero_rotated_single_bit(self):
+        word = orr_immediate(1, 2, n=1, immr=1, imms=0)
+        self.assertEqual(
+            _decode_orr_immediate_from_zero(word),
+            (2, 1 << 63, (1 << 64) - 1),
+        )
+
+    def test_rejects_reserved_and_unsupported_orr_immediate_encodings(self):
+        invalid = (
+            orr_immediate(0, 0, n=1, imms=3),
+            orr_immediate(1, 0, n=1, imms=63),
+            orr_immediate(1, 0, n=0, imms=62),
+            orr_immediate(1, 0, n=1, imms=3, source=2),
+        )
+        for word in invalid:
+            with self.subTest(word=hex(word)):
+                self.assertIsNone(_decode_orr_immediate_from_zero(word))
+
+    def test_tracks_orr_immediate_zero_before_allowlisted_call(self):
+        code = words(
+            orr_immediate(1, 1, n=1, immr=0, imms=3),
+            bl(0x1004, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 0xF})
+
+    def test_reports_wide_orr_immediate_only_as_coarse_class(self):
+        code = words(
+            orr_immediate(1, 1, n=0, immr=0, imms=39),
+            bl(0x1004, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes,
+            include_argument_classes=True,
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {})
+        self.assertEqual(
+            result[0]["known_argument_constant_classes"]["x1"],
+            "nonzero_64bit",
+        )
+        self.assertNotIn("00ff00ff00ff00ff", repr(result).lower())
+
+    def test_orr_immediate_to_zero_register_is_a_discarded_noop(self):
+        code = words(
+            movz_x(2, 4),
+            orr_immediate(1, 31, n=1, immr=0, imms=3),
+            bl(0x1008, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x2": 4})
+
+    def test_unsupported_register_source_orr_clears_abstract_state(self):
+        code = words(
+            movz_x(2, 4),
+            orr_immediate(1, 1, n=1, immr=0, imms=3, source=2),
+            bl(0x1008, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result, [])
 
     def test_tracks_movk_and_omits_values_above_public_limit(self):
         code = words(
