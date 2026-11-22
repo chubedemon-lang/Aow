@@ -288,7 +288,7 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
     def test_tracks_orr_immediate_general_register_source(self):
         code = words(
             movz_x(2, 0x10),
-            orr_immediate(1, 2, n=1, immr=0, imms=3, source=2),
+            orr_immediate(1, 1, n=1, immr=0, imms=3, source=2),
             bl(0x1008, self.target),
         )
         result = summarize_small_argument_constants(
@@ -322,7 +322,7 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         code = words(
             movz_x(1, 4),
             movz_x(2, 7),
-            orr_immediate(1, 3, n=1, immr=0, imms=3, source=3),
+            orr_immediate(1, 1, n=1, immr=0, imms=3, source=3),
             bl(0x100C, self.target),
         )
         result = summarize_small_argument_constants(
