@@ -320,6 +320,26 @@ class EvidenceRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "invalid record"):
             EvidenceRegistry().add(record)
 
+    def test_registry_rejects_frozen_record_with_deleted_field_before_acceptance(self):
+        record = Evidence(
+            "transport", self.sha, "offline observation", "synthetic_test"
+        )
+        # Bypass frozen=True by deleting a required dataclass attribute.
+        object.__delattr__(record, "observation")
+
+        with self.assertRaisesRegex(EvidenceError, "invalid record"):
+            EvidenceRegistry().add(record)
+
+    def test_summary_rejects_registry_record_with_deleted_field(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence(
+            "transport", self.sha, "offline observation", "synthetic_test"
+        ))
+        object.__delattr__(registry._records[0], "observation")
+
+        with self.assertRaisesRegex(EvidenceError, "invalid evidence record"):
+            registry.summary()
+
     def test_registry_defensively_copies_records_on_add(self):
         registry = EvidenceRegistry()
         record = Evidence(
