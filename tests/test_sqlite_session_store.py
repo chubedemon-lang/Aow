@@ -649,6 +649,76 @@ class SqliteSessionStoreTests(unittest.TestCase):
             (created_at, expires_at),
         )
 
+    def test_constructor_rejects_disabled_check_constraints_without_schema_changes(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+
+        with self.assertRaisesRegex(ValueError, "CHECK constraints are disabled"):
+            SqliteSessionStore(connection, clock=lambda: self.now)
+
+        self.assertFalse(connection.in_transaction)
+        self.assertEqual(
+            connection.execute("PRAGMA ignore_check_constraints").fetchone(),
+            (1,),
+        )
+        self.assertIsNone(connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='durable_sessions'"
+        ).fetchone())
+
+    def test_constructor_rejects_same_column_schema_missing_check_constraints(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.executescript(
+            """CREATE TABLE durable_sessions (
+                   token_hash BLOB PRIMARY KEY,
+                   account_id INTEGER NOT NULL,
+                   created_at REAL NOT NULL,
+                   expires_at REAL NOT NULL
+               );
+               CREATE INDEX durable_sessions_expiry
+                   ON durable_sessions(expires_at);"""
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "missing required durable session CHECK constraint"
+        ):
+            SqliteSessionStore(connection, clock=lambda: self.now)
+
+        self.assertFalse(connection.in_transaction)
+        self.assertEqual(
+            connection.execute(
+                "SELECT type, name FROM sqlite_master "
+                "WHERE name IN ('durable_sessions', 'durable_sessions_expiry') "
+                "ORDER BY name"
+            ).fetchall(),
+            [
+                ("table", "durable_sessions"),
+                ("index", "durable_sessions_expiry"),
+            ],
+        )
+
+    def test_integrity_audit_rejects_disabled_check_constraints_without_mutation(self):
+        token = self.store.issue(104)
+        digest = hashlib.sha256(token.encode("ascii")).digest()
+        connection = self.db
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+
+        with self.assertRaisesRegex(SessionError, "invalid session store"):
+            self.store.verify_integrity()
+
+        self.assertFalse(connection.in_transaction)
+        self.assertEqual(
+            connection.execute(
+                "SELECT token_hash, account_id FROM durable_sessions "
+                "WHERE token_hash=?",
+                (digest,),
+            ).fetchone(),
+            (digest, 104),
+        )
+        connection.execute("PRAGMA ignore_check_constraints = OFF")
+        self.assertEqual(self.store.resolve(token), 104)
+
     def _make_legacy_session_store(self, connection):
         """Create a store, then replace its schema with a deliberately legacy table."""
         store = SqliteSessionStore(connection, clock=lambda: self.now)
