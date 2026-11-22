@@ -12,6 +12,9 @@ from tools.protocol_fixture_audit import (
     MAX_CANDIDATE_FRAMES,
     MAX_CAPTURE_ELAPSED_NS,
     MAX_JSON_NESTING,
+    MAX_JSON_TOKENS,
+    MAX_CHUNKS_PER_DIRECTION,
+    MAX_IO_EVENTS,
     FixtureAuditError,
     audit_fixture_bytes,
     inspect_fixture_file,
@@ -191,6 +194,69 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         content = (base[:-1] + ', "extra":' + json.dumps(bracket_text) + "}").encode("utf-8")
         with self.assertRaisesRegex(FixtureAuditError, "object shape"):
             self.audit(content)
+
+
+    def test_rejects_excessive_json_token_count_before_object_construction(self):
+        base = fixture_bytes([frame(b"x")]).decode("utf-8")
+        values = ",".join("0" for _ in range(MAX_JSON_TOKENS + 1))
+        content = (base[:-1] + ', "extra":[' + values + "]}").encode("utf-8")
+
+        with patch(
+            "tools.protocol_fixture_audit.json.loads",
+            side_effect=AssertionError("json.loads must not run for over-budget input"),
+        ):
+            with self.assertRaisesRegex(FixtureAuditError, "token count"):
+                self.audit(content)
+
+    def test_json_token_scan_ignores_token_like_text_inside_strings(self):
+        base = fixture_bytes([frame(b"x")]).decode("utf-8")
+        token_like_text = "0," * (MAX_JSON_TOKENS + 1)
+        content = (
+            base[:-1] + ', "extra":' + json.dumps(token_like_text) + "}"
+        ).encode("utf-8")
+
+        with self.assertRaisesRegex(FixtureAuditError, "object shape"):
+            self.audit(content)
+
+    def test_maximum_schema_v4_event_and_chunk_counts_fit_token_budget(self):
+        server_chunks = [b"\\x00"] * MAX_CHUNKS_PER_DIRECTION
+        client_chunks = [b"\\x00"] * MAX_CHUNKS_PER_DIRECTION
+        offsets = {
+            "client_to_server": 0,
+            "server_to_client": 0,
+        }
+        events = []
+        for index in range(MAX_IO_EVENTS):
+            direction = (
+                "client_to_server" if index % 2 == 0 else "server_to_client"
+            )
+            operation = "send" if direction == "client_to_server" else "receive"
+            events.append({
+                "direction": direction,
+                "offset": offsets[direction],
+                "length": 1,
+                "elapsed_ns": index,
+                "operation": operation,
+            })
+            offsets[direction] += 1
+
+        content = fixture_bytes(
+            server_chunks,
+            client_chunks,
+            schema_version=4,
+            io_events=events,
+            observer_role="client",
+        )
+        result = self.audit(content)
+        self.assertEqual(result["exchange_order"]["event_count"], MAX_IO_EVENTS)
+        self.assertEqual(
+            result["server_to_client"]["chunk_count"],
+            MAX_CHUNKS_PER_DIRECTION,
+        )
+        self.assertEqual(
+            result["client_to_server"]["chunk_count"],
+            MAX_CHUNKS_PER_DIRECTION,
+        )
 
     def test_private_file_reader_normalizes_embedded_nul_path(self):
         with self.assertRaisesRegex(FixtureAuditError, "cannot be inspected safely"):
