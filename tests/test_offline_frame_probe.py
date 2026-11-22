@@ -222,6 +222,23 @@ class OfflineFrameProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(FrameDecodeError, "invalid declared frame size"):
             decoder.feed(b"\x03")
 
+    def test_decoder_snapshots_chunk_limit(self):
+        spec = FrameSpec(1, "big", max_payload=8, max_chunk_bytes=2)
+        decoder = LengthFrameDecoder(spec)
+        self.assertEqual(decoder.feed(b"\x01"), [])
+
+        object.__setattr__(spec, "max_chunk_bytes", 3)
+        with self.assertRaisesRegex(FrameDecodeError, "input chunk exceeds maximum"):
+            decoder.feed(b"xyz")
+
+    def test_decoder_snapshots_frame_count_limit(self):
+        spec = FrameSpec(1, "big", max_frames_per_feed=1)
+        decoder = LengthFrameDecoder(spec)
+        object.__setattr__(spec, "max_frames_per_feed", 2)
+
+        with self.assertRaisesRegex(FrameDecodeError, "frame count"):
+            decoder.feed(b"\x00\x00")
+
     def test_decoder_revalidates_mutated_spec_before_use(self):
         spec = FrameSpec(1, "big", max_payload=2)
         object.__setattr__(spec, "max_payload", -1)
