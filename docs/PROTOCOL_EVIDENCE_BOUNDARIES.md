@@ -66,6 +66,17 @@ not sufficient. The registry validates the declared provenance shape; human
 review must still verify that the referenced fixture really has that origin.
 Never commit private packet bytes, credentials, endpoint values, or player data.
 
+## Concurrent registry snapshots
+
+`EvidenceRegistry.add()` and `EvidenceRegistry.summary()` serialize access to the
+in-memory record list with one process-local lock. Each summary captures an
+immutable tuple while holding that lock, then uses only that tuple for both
+artifact-fingerprint selection and per-topic aggregation. A record added after
+the snapshot is therefore visible to the next summary, not midway through the
+current one. This prevents a concurrent update from bypassing the mixed-build
+guard. The lock provides process-local consistency only; it is not a durable
+store, authorization proof, or fixture-authenticity check.
+
 ## Validation
 
 ```sh
