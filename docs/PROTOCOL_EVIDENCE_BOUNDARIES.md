@@ -13,6 +13,9 @@ APK compatibility.
   later `object.__setattr__` mutations cannot alter stored evidence.
 - Gate input must be an exact built-in `list` or `tuple`, containing only
   exact `Evidence` instances, with at most 4,096 records per evaluation.
+- The registry uses the same 4,096-record limit. It rejects additions at
+  capacity and refuses to summarize an over-limit internal state before
+  allocating a snapshot.
 - Gate evaluation revalidates and copies each record before fingerprint,
   digest, or topic aggregation; caller-owned frozen instances are never read
   again after that snapshot is built.
