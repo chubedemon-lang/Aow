@@ -261,5 +261,48 @@ class OfflineFrameProbeTests(unittest.TestCase):
             ExtendedFrameSpec(1, "big")
 
 
+    def test_all_chunk_partitions_preserve_frame_results(self):
+        """Every byte-boundary partition must decode the same synthetic frames."""
+        cases = (
+            (FrameSpec(1, "big"), (b"", b"A", b"BC")),
+            (FrameSpec(2, "little", includes_header=True), (b"", b"A", b"BC")),
+        )
+
+        for spec, payloads in cases:
+            with self.subTest(spec=spec):
+                encoded = b"".join(
+                    (
+                        len(payload)
+                        + (spec.length_bytes if spec.includes_header else 0)
+                    ).to_bytes(spec.length_bytes, spec.byteorder)
+                    + payload
+                    for payload in payloads
+                )
+
+                # Enumerate every possible set of split points between bytes.
+                # The two small streams keep this exhaustive matrix bounded.
+                for mask in range(1 << (len(encoded) - 1)):
+                    chunks = []
+                    start = 0
+                    for boundary in range(len(encoded) - 1):
+                        if mask & (1 << boundary):
+                            chunks.append(encoded[start:boundary + 1])
+                            start = boundary + 1
+                    chunks.append(encoded[start:])
+
+                    decoder = LengthFrameDecoder(spec)
+                    observed = []
+                    for chunk in chunks:
+                        # Empty feeds are valid no-ops and must not alter the
+                        # result or the pending partial header/body.
+                        observed.extend(decoder.feed(b""))
+                        observed.extend(decoder.feed(chunk))
+                    observed.extend(decoder.feed(b""))
+                    decoder.finish()
+
+                    self.assertEqual(observed, list(payloads))
+                    self.assertEqual(decoder.pending_bytes, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
