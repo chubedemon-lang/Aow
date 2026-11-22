@@ -24,8 +24,10 @@ branch or return are not analyzed unless another in-window branch reaches
 them.
 
 The pass propagates the supported MOVZ/MOVN/MOVK, unshifted
-64-bit/32-bit MOV-register alias, ADD (immediate), and unflagged SUB
-(immediate) operations. ADD/SUB forms using register 31 as SP, and SUBS
+64-bit/32-bit MOV-register alias, ORR (immediate) with Rn=ZR, ADD (immediate),
+and unflagged SUB (immediate) operations. The ORR decoder follows the bounded
+logical-immediate bitmask construction: it rejects reserved encodings, invalid
+32-bit N bits and any non-ZR source rather than guessing a register value. ADD/SUB forms using register 31 as SP, and SUBS
 flag-setting forms, are not modeled. W-register arithmetic is masked to 32
 bits (and therefore zero-extends when later observed as an X-register value);
 X-register arithmetic is masked to 64 bits. An unknown source invalidates only
