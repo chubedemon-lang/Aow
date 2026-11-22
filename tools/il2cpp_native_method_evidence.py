@@ -1625,25 +1625,33 @@ def _decode_aarch64_mov_x_register(word):
 
 
 def _decode_aarch64_blr_register(word):
-    """Return the BLR source register, or None for another instruction."""
+    """Return the BLR/BLRA target register, or None for another instruction."""
     if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
         return None
-    if (word & 0xFFFFFC1F) != 0xD63F0000:
-        return None
-    return (word >> 5) & 0x1F
+    if (word & 0xFFFFFC1F) == 0xD63F0000:  # BLR Xn
+        return (word >> 5) & 0x1F
+    if (word & 0xFFFFFC00) in (0xD73F0800, 0xD73F0C00):  # BLRAA/BLRAB Xn, Xm
+        return (word >> 5) & 0x1F
+    if (word & 0xFFFFFC1F) in (0xD63F081F, 0xD63F0C1F):  # BLRAAZ/BLRABZ Xn
+        return (word >> 5) & 0x1F
+    return None
 
 
 def _decode_aarch64_br_register(word):
-    """Return the BR source register, or None for another instruction."""
+    """Return the BR/BRA target register, or None for another instruction."""
     if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
         return None
-    if (word & 0xFFFFFC1F) != 0xD61F0000:
-        return None
-    return (word >> 5) & 0x1F
+    if (word & 0xFFFFFC1F) == 0xD61F0000:  # BR Xn
+        return (word >> 5) & 0x1F
+    if (word & 0xFFFFFC00) in (0xD71F0800, 0xD71F0C00):  # BRAA/BRAB Xn, Xm
+        return (word >> 5) & 0x1F
+    if (word & 0xFFFFFC1F) in (0xD61F081F, 0xD61F0C1F):  # BRAAZ/BRABZ Xn
+        return (word >> 5) & 0x1F
+    return None
 
 
 def _relocated_indirect_call_events(code, start_va, relocations, *, include_offsets=False):
-    """Resolve relocation-backed ADR/ADRP/ADD/LDR/MOV-X/BLR-or-BR chains.
+    """Resolve bounded ADR/ADRP/ADD/LDR/MOV-X chains ending in BLR/PAuth calls or branches.
 
     Any unrecognized instruction clears the small abstract register state.
     This deliberately misses ordinary virtual calls and runtime-computed
@@ -3319,9 +3327,9 @@ def _summarize_aarch64_calls(code, start_va, helper_targets):
                 tail_sequence.append(label)
                 tail_counts[label] += 1
             continue
-        if (word & 0xFFFFFC1F) == 0xD63F0000:
+        if _decode_aarch64_blr_register(word) is not None:
             indirect += 1
-        elif (word & 0xFFFFFC1F) == 0xD61F0000:
+        elif _decode_aarch64_br_register(word) is not None:
             indirect_tail += 1
     return {
         "direct_helper_call_sequence": sequence,
