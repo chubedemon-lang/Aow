@@ -514,8 +514,8 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
             self.assertEqual(
                 objects,
                 [
-                    ("index", "map_position_mutations_character"),
                     ("table", "map_position_mutations"),
+                    ("index", "map_position_mutations_character"),
                     ("table", "map_position_snapshots"),
                 ],
             )
