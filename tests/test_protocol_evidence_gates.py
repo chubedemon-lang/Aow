@@ -1,4 +1,5 @@
 """Readiness gates require authorized local client evidence, not static facts alone."""
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -271,6 +272,75 @@ class EvidenceGateTests(unittest.TestCase):
             evaluate_evidence(
                 [record], approved_evidence_digests=(digest, digest)
             )
+
+    def test_rejects_frozen_record_mutated_before_gate_evaluation(self):
+        record = evidence("transport")
+        object.__setattr__(record, "verified", 1)
+
+        with self.assertRaisesRegex(EvidenceError, "valid exact Evidence"):
+            evaluate_evidence([record])
+
+    def test_gate_uses_validated_record_copies_during_concurrent_mutation(self):
+        records = [evidence(topic) for topic in STAGES[:4]]
+        mutable_candidate = Evidence(
+            "transport",
+            "a" * 64,
+            "second transport observation",
+            "authorized_local_test",
+            True,
+            "tests/test_protocol_evidence_gates.py",
+            "python -m unittest discover -s tests -p test_protocol_evidence_gates.py -v",
+        )
+        records.append(mutable_candidate)
+        approved = tuple(evidence_record_digest(record) for record in records)
+        original_digest = evidence_record_digest
+        digest_ready = threading.Event()
+        resume_evaluation = threading.Event()
+        digest_calls = 0
+        results = []
+        errors = []
+
+        def pause_after_final_digest(record):
+            nonlocal digest_calls
+            digest_calls += 1
+            digest = original_digest(record)
+            if digest_calls == len(records):
+                digest_ready.set()
+                if not resume_evaluation.wait(timeout=2):
+                    raise AssertionError("gate evaluation was not released")
+            return digest
+
+        def evaluate():
+            try:
+                with patch(
+                    "server.protocol_evidence_gates.evidence_record_digest",
+                    side_effect=pause_after_final_digest,
+                ):
+                    results.append(evaluate_evidence(
+                        records,
+                        approved_evidence_digests=approved,
+                    ))
+            except BaseException as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(target=evaluate)
+        worker.start()
+        try:
+            self.assertTrue(digest_ready.wait(timeout=2))
+            # The digest was already computed for a second transport record.
+            # Mutating its caller-owned object must not relabel it as login.
+            object.__setattr__(mutable_candidate, "topic", "login")
+        finally:
+            resume_evaluation.set()
+            worker.join(timeout=2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 1)
+        by_stage = {item.stage: item for item in results[0]}
+        self.assertTrue(by_stage["handshake"].ready)
+        self.assertFalse(by_stage["login"].ready)
+        self.assertEqual(by_stage["login"].missing, ("login",))
 
 
 if __name__ == "__main__":
