@@ -109,7 +109,7 @@ class AowPrimitiveCodecTests(unittest.TestCase):
 
     def test_truncated_reads_raise_eof(self):
         with self.assertRaises(EOFError):
-            AowPrimitiveReader(b"\x01").read_int()
+            AowPrimitiveReader(b"\\x01").read_int()
         with self.assertRaises(EOFError):
             AowPrimitiveReader(bytes.fromhex("0002abcd")).read_string()
 
@@ -208,6 +208,58 @@ class AowPrimitiveCodecTests(unittest.TestCase):
         reader = AowPrimitiveReader(strided_view)
         self.assertEqual(reader.read_int(), 0x01020304)
         reader.require_consumed()
+
+    def test_writer_optional_cap_is_caller_selected_and_default_is_unbounded(self):
+        writer = AowPrimitiveWriter()
+        self.assertIsNone(writer.max_payload_bytes)
+        self.assertIsNone(writer.remaining_capacity)
+        self.assertEqual(writer.size, 0)
+
+        bounded = AowPrimitiveWriter(max_payload_bytes=4)
+        self.assertEqual(bounded.max_payload_bytes, 4)
+        self.assertEqual(bounded.remaining_capacity, 4)
+        bounded.write_int(0x01020304)
+        self.assertEqual(bounded.size, 4)
+        self.assertEqual(bounded.remaining_capacity, 0)
+        self.assertEqual(bounded.to_bytes(), bytes.fromhex("01020304"))
+
+    def test_writer_cap_rejects_each_primitive_without_partial_mutation(self):
+        operations = (
+            lambda writer: writer.write_byte(1),
+            lambda writer: writer.write_boolean(True),
+            lambda writer: writer.write_char(1),
+            lambda writer: writer.write_short(1),
+            lambda writer: writer.write_int(1),
+            lambda writer: writer.write_long(1),
+            lambda writer: writer.write_string(None),
+            lambda writer: writer.write_string("A"),
+        )
+        for operation in operations:
+            with self.subTest(operation=operation):
+                writer = AowPrimitiveWriter(max_payload_bytes=1)
+                writer.write_byte(0xAA)
+                before = writer.to_bytes()
+                with self.assertRaisesRegex(ValueError, "configured byte limit"):
+                    operation(writer)
+                self.assertEqual(writer.to_bytes(), before)
+                self.assertEqual(writer.size, 1)
+                self.assertEqual(writer.remaining_capacity, 0)
+
+    def test_writer_string_cap_is_checked_before_body_encoding(self):
+        writer = AowPrimitiveWriter(max_payload_bytes=3)
+        writer.write_byte(0xAA)
+        before = writer.to_bytes()
+        with self.assertRaisesRegex(ValueError, "configured byte limit"):
+            writer.write_string("😀")
+        self.assertEqual(writer.to_bytes(), before)
+        self.assertEqual(writer.size, 1)
+
+    def test_writer_rejects_invalid_capacity_configuration(self):
+        for value in (True, -1, 1.5, "4"):
+            with self.subTest(value=repr(value)), self.assertRaises(ValueError):
+                AowPrimitiveWriter(max_payload_bytes=value)
+
+        self.assertEqual(AowPrimitiveWriter(max_payload_bytes=0).to_bytes(), b"")
 
 
 if __name__ == "__main__":
