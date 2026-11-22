@@ -1161,16 +1161,87 @@ def _summarize_bucketed_lookup_shape(code):
                 if key_compare[0] == entry_hash_register
                 else key_compare[0]
             )
-            hash_registers = {dividend}
-            for index in range(
-                divide_index - 1, max(-1, divide_index - 33), -1
-            ):
-                if is_scan_barrier(words[index]):
+            # Recover only a contiguous, reachable MOV/NOP suffix immediately
+            # before SDIV. Unknown instructions and control-flow boundaries stop
+            # alias propagation instead of letting a stale earlier copy survive.
+            alias_start = divide_index
+            alias_limit = max(0, divide_index - 32)
+            while alias_start > alias_limit:
+                previous_word = words[alias_start - 1]
+                if (
+                    previous_word == 0xD503201F
+                    or _decode_aarch64_mov_w_register(previous_word) is not None
+                ):
+                    alias_start -= 1
+                else:
                     break
-                move = _decode_aarch64_mov_w_register(words[index])
-                if move is not None and move[1] in hash_registers:
-                    hash_registers.add(move[0])
+
+            hash_registers = {dividend}
+            for index in range(alias_start, divide_index):
+                if index not in reachable:
+                    hash_registers = {dividend}
+                    break
+                previous_word = words[index]
+                if previous_word == 0xD503201F:
+                    continue
+                move = _decode_aarch64_mov_w_register(previous_word)
+                if move is None:
+                    hash_registers = {dividend}
+                    break
+                destination, source = move
+                aliases_before_move = set(hash_registers)
+                if destination == dividend:
+                    if source in aliases_before_move:
+                        # The root register is rewritten from an existing alias;
+                        # the hash value is unchanged.
+                        hash_registers = aliases_before_move
+                    else:
+                        # The SDIV dividend itself now contains a different value.
+                        hash_registers = {dividend}
+                else:
+                    hash_registers.discard(destination)
+                    if source in aliases_before_move:
+                        hash_registers.add(destination)
             if hash_register not in hash_registers:
+                continue
+
+            # The compare must still observe the SDIV hash value. Recognize every
+            # GPR-writing instruction in this narrow interval; an unknown opcode
+            # is a data-flow barrier, not permission to assume the register survives.
+            def gpr_write_destination(instruction_word, instruction_pc):
+                for decoder in (
+                    _decode_aarch64_sdiv_w,
+                    _decode_aarch64_msub_w,
+                    _decode_aarch64_add_x_w_uxtw,
+                    _decode_aarch64_ldr_w_unsigned,
+                    _decode_aarch64_subs_w_immediate,
+                    _decode_aarch64_movz_w_immediate,
+                    _decode_aarch64_umaddl,
+                    _decode_aarch64_ldr_w_register,
+                    _decode_aarch64_mov_w_register,
+                    _decode_aarch64_ldr_x_unsigned,
+                    _decode_aarch64_add_imm64,
+                ):
+                    decoded = decoder(instruction_word)
+                    if decoded is not None:
+                        return decoded[0]
+                if (
+                    instruction_word == 0xD503201F
+                    or _decode_aarch64_cmp_w_register(instruction_word) is not None
+                    or _decode_aarch64_conditional_branch(
+                        instruction_word, instruction_pc
+                    ) is not None
+                ):
+                    return -1
+                return None
+
+            hash_value_survives = True
+            for index in range(divide_index + 1, key_compare_index):
+                destination = gpr_write_destination(words[index], index * 4)
+                if destination is None or destination == hash_register:
+                    hash_value_survives = False
+                    break
+            if not hash_value_survives:
                 continue
 
             entry_index_registers = {entry_index_register}
