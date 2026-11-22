@@ -20,7 +20,8 @@ APK compatibility.
   holding the lock. The returned tuple contains detached copies, never
   registry-owned Evidence objects; bypassing frozen=True on a returned
   copy therefore cannot mutate future summaries. Corrupted stored records
-  fail closed during snapshot creation.
+  fail closed during snapshot creation, including records whose attributes
+  were removed with an explicit frozen-dataclass bypass.
 - Gate evaluation revalidates and copies each record before fingerprint,
   digest, or topic aggregation; caller-owned frozen instances are never read
   again after that snapshot is built.
