@@ -3413,6 +3413,8 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
                 words[index] = 0xD61F0000
             elif kind == "ret":
                 words[index] = 0xD65F03C0
+            elif kind == "unrecognized_branch_register":
+                words[index] = 0xD71F0800
             else:
                 raise AssertionError(kind)
 
@@ -3432,6 +3434,10 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
             ("call in multiply scan", 13, "blr"),
             ("indirect branch in multiply scan", 13, "br"),
             ("return in multiply scan", 13, "ret"),
+            ("unrecognized branch-register family in bucket-base scan", 8,
+             "unrecognized_branch_register"),
+            ("unrecognized branch-register family in multiply scan", 13,
+             "unrecognized_branch_register"),
         )
         for label, index, kind in cases:
             with self.subTest(label=label):
@@ -3556,6 +3562,24 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
             0x14000000 | len(base_words),  # B from index 0 to the final RET index.
         ] + base_words
         summary = _summarize_bucketed_lookup_shape(self._code(unreachable))
+        self.assertEqual(summary["status"], "unresolved")
+        self.assertFalse(summary["managed_method_identity_verified"])
+        self.assertFalse(summary["managed_collection_owner_verified"])
+
+    def test_bucketed_lookup_shape_stops_at_unrecognized_branch_register_family(self):
+        base_words = [
+            0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x540002A2,
+            0x8B254928, 0xB940210A, 0x71000553, 0x54000224,
+            0xF9400EB4, 0x91008294, 0x52800195, 0x6B08027F,
+            0x54000182, 0x9BB57E6D, 0xB86D6A8E, 0x6B0601DF,
+            0x540000E1, 0x9BB55270, 0xB9400A11, 0xD63F0240,
+            0x9BB55276, 0xB94006D7, 0x36FFFEB7, 0xD65F03C0,
+            0xD65F03C0,
+        ]
+        # This unmodeled D6/D7 branch-register-family encoding must terminate
+        # the bounded walk instead of allowing fallthrough into a decoy shape.
+        words = [0xD71F0800] + base_words
+        summary = _summarize_bucketed_lookup_shape(self._code(words))
         self.assertEqual(summary["status"], "unresolved")
         self.assertFalse(summary["managed_method_identity_verified"])
         self.assertFalse(summary["managed_collection_owner_verified"])
