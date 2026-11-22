@@ -1016,3 +1016,30 @@ A synthetic regression test exercises the first byte count above that limit.
 This is input/resource hardening only: it adds no APK observation, does not
 identify a managed collection owner, and does not change framing, message-ID,
 handshake, LoginRequest, or compatibility confidence.
+
+
+## Receiver lookup CFG reachability gate — 2026-11-22
+
+The bounded Receiver integer-lookup candidate now requires its supporting
+instructions to be reachable from the entry of each analyzed method window.
+The NetworkSettings static-fields initialization store, Receiver class-cell
+load, three-load static_fields[0] read chain, both reachable
+`deserializeInt` calls, result copy, key argument move, and lookup call are
+checked against a conservative intraprocedural CFG. The first and second
+deserializer calls must also be connected by a path within the bounded window;
+mere reachability from separate entry branches is insufficient.
+
+Direct in-window `B` edges are followed; conditional branches preserve both
+target and fallthrough; `BL` and `BLR` preserve caller fallthrough. `BR`,
+`RET`, and unrecognized branch-register-family instructions terminate the
+bounded walk. The analyzer does not evaluate predicates or follow callees.
+The report distinguishes reachable deserializer calls from total and
+unreachable callsites.
+
+Synthetic regressions cover direct and conditional reachability, indirect
+branch termination, a skipped deserializer decoy, deserializer calls on
+disjoint branches, an unreachable NetworkSettings initialization chain, and
+an unreachable Receiver class-cell read chain. This is analyzer hardening only:
+it adds no APK observation, managed field attribution, wire message ID,
+compression behavior, framing, handshake, LoginRequest field order, or
+unchanged-APK compatibility finding.
