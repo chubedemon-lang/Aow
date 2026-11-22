@@ -331,9 +331,6 @@ class SqliteMapPositionStore:
 
     @staticmethod
     def _character_id(value):
-
-    @staticmethod
-    def _character_id(value):
         if (type(value) is not str or not value
                 or len(value) > 128 or value != value.strip()):
             raise MapPositionStoreError("invalid character identifier")
