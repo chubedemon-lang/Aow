@@ -3460,6 +3460,77 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
         self.assertFalse(summary["managed_method_identity_verified"])
         self.assertFalse(summary["managed_collection_owner_verified"])
 
+    def test_bucketed_lookup_shape_tracks_live_contiguous_hash_aliases(self):
+        base_words = [
+            0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x540002A2,
+            0x8B254928, 0xB940210A, 0x71000553, 0x54000224,
+            0xF9400EB4, 0x91008294, 0x52800195, 0x6B08027F,
+            0x54000182, 0x9BB57E6D, 0xB86D6A8E, 0x6B0601DF,
+            0x540000E1, 0x9BB55270, 0xB9400A11, 0xD63F0240,
+            0x9BB55276, 0xB94006D7, 0x36FFFEB7, 0xD65F03C0,
+            0xD65F03C0,
+        ]
+
+        # A two-step copy chain is valid when neither destination is overwritten.
+        valid_alias = [
+            self._encode_mov_w(10, 6),
+            self._encode_mov_w(9, 10),
+        ] + base_words
+        compare_index = 2 + 15
+        valid_alias[compare_index] = (
+            (valid_alias[compare_index] & ~(0x1F << 16)) | (9 << 16)
+        )
+        self.assertEqual(
+            _summarize_bucketed_lookup_shape(self._code(valid_alias))["status"],
+            "bucketed_membership_lookup_shape_candidate",
+        )
+
+        # A later write to the alias destination invalidates the earlier copy.
+        overwritten_destination = [
+            self._encode_mov_w(9, 6),
+            self._encode_mov_w(9, 10),
+        ] + base_words
+        compare_index = 2 + 15
+        overwritten_destination[compare_index] = (
+            (overwritten_destination[compare_index] & ~(0x1F << 16)) | (9 << 16)
+        )
+        self.assertEqual(
+            _summarize_bucketed_lookup_shape(
+                self._code(overwritten_destination)
+            )["status"],
+            "unresolved",
+        )
+
+        # Rewriting the SDIV dividend after copying it invalidates the old alias.
+        overwritten_source = [
+            self._encode_mov_w(9, 6),
+            self._encode_mov_w(6, 10),
+        ] + base_words
+        overwritten_source[compare_index] = (
+            (overwritten_source[compare_index] & ~(0x1F << 16)) | (9 << 16)
+        )
+        self.assertEqual(
+            _summarize_bucketed_lookup_shape(self._code(overwritten_source))["status"],
+            "unresolved",
+        )
+
+    def test_bucketed_lookup_shape_rejects_hash_register_clobber_before_compare(self):
+        words = [
+            0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x540002A2,
+            0x8B254928, 0xB940210A, 0x71000553, 0x54000224,
+            0xF9400EB4, 0x91008294, 0x52800195, 0x6B08027F,
+            0x54000182, 0x9BB57E6D, 0xB86D6A8E, 0x6B0601DF,
+            0x540000E1, 0x9BB55270, 0xB9400A11, 0xD63F0240,
+            0x9BB55276, 0xB94006D7, 0x36FFFEB7, 0xD65F03C0,
+            0xD65F03C0,
+        ]
+        # The compare still names W6, but this MOV replaces its value after SDIV.
+        words.insert(15, self._encode_mov_w(6, 10))
+        summary = _summarize_bucketed_lookup_shape(self._code(words))
+        self.assertEqual(summary["status"], "unresolved")
+        self.assertFalse(summary["managed_method_identity_verified"])
+        self.assertFalse(summary["managed_collection_owner_verified"])
+
     def test_bucketed_lookup_shape_only_accepts_reachable_candidate_blocks(self):
         base_words = [
             0x1AC70CC5, 0x1B0798A5, 0x6B0700BF, 0x540002A2,

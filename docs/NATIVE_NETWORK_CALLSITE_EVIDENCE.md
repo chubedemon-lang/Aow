@@ -1043,3 +1043,26 @@ an unreachable Receiver class-cell read chain. This is analyzer hardening only:
 it adds no APK observation, managed field attribution, wire message ID,
 compression behavior, framing, handshake, LoginRequest field order, or
 unchanged-APK compatibility finding.
+
+
+## Receiver hash-register alias and liveness boundaries — 2026-11-22
+
+The bucketed-lookup candidate matcher no longer treats every earlier MOV from
+the SDIV dividend as a surviving alias. It inspects only a bounded contiguous
+MOV/NOP suffix immediately before SDIV, requires those instructions to be
+reachable, and applies destination-overwrite handling in execution order.
+Unknown instructions and control-flow boundaries terminate alias propagation.
+
+The candidate must also preserve the selected hash register from SDIV through
+the stored-hash comparison. The narrow liveness check recognizes the GPR writes
+used by the supported lookup shape; an unrecognized instruction or a write to
+the selected hash register rejects the candidate. This is deliberately
+conservative and may leave patterns involving stack spills or unmodeled
+instructions unresolved.
+
+Synthetic regressions cover a valid two-step alias chain, an overwritten alias
+destination, an overwritten SDIV source, and a post-SDIV hash-register clobber.
+This is analyzer hardening only. The matcher was not re-run against fresh APK
+bytes in this change, and no new native observation, packet schema, message ID,
+framing, compression, handshake, LoginRequest order, or unchanged-APK
+compatibility finding is claimed.
