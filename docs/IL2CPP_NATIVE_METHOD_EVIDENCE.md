@@ -224,3 +224,9 @@ before custom length, lookup, or iteration hooks can run.
 This is analyzer input hardening only. It adds no APK observation, native
 disassembly, packet fixture, call-target attribution, wire semantics, or
 compatibility claim.
+
+## Pointer-authenticated indirect callsites — analyzer coverage
+
+The relocation-backed indirect-call scanner also recognizes AArch64 pointer-authenticated register transfers: `BLRAA`, `BLRAB`, `BLRAAZ`, `BLRABZ` and the tail-branch forms `BRAA`, `BRAB`, `BRAAZ`, `BRABZ`. For these encodings, the scanner follows the branch target register (`Xn`) through the same bounded relocation-backed ADR/ADRP/ADD/LDR/MOV chain used for ordinary `BLR` and `BR` instructions.
+
+The modifier operand used by the authenticated register-modifier forms is not evaluated, and pointer authentication is not emulated. The result is only a static candidate target for an instruction in a bounded entry window; it does not prove that the instruction occurs in the AOW APK, is reachable at runtime, or is executed successfully. Synthetic regressions cover all eight authenticated call/branch forms, reject nearby invalid encodings, and verify that call events clear the abstract register state. This adds analyzer coverage only; it does not establish a new AOW callsite or wire-protocol behavior.
