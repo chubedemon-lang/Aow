@@ -4,7 +4,7 @@ import unittest
 
 from tools.aarch64_call_argument_evidence import (
     _decode_move_wide,
-    _decode_orr_immediate_from_zero,
+    _decode_orr_immediate,
     _decode_sub_immediate,
     _decode_conditional_branch_target,
     _decode_unconditional_branch_target,
@@ -221,21 +221,21 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
     def test_decodes_orr_immediate_zero_replicated_16_bit_mask(self):
         word = orr_immediate(1, 0, n=0, immr=0, imms=39)
         self.assertEqual(
-            _decode_orr_immediate_from_zero(word),
-            (0, 0x00FF00FF00FF00FF, (1 << 64) - 1),
+            _decode_orr_immediate(word),
+            (0, 31, 0x00FF00FF00FF00FF, (1 << 64) - 1),
         )
 
         word = orr_immediate(0, 1, n=0, immr=0, imms=39)
         self.assertEqual(
-            _decode_orr_immediate_from_zero(word),
-            (1, 0x00FF00FF, (1 << 32) - 1),
+            _decode_orr_immediate(word),
+            (1, 31, 0x00FF00FF, (1 << 32) - 1),
         )
 
     def test_decodes_orr_immediate_zero_rotated_single_bit(self):
         word = orr_immediate(1, 2, n=1, immr=1, imms=0)
         self.assertEqual(
-            _decode_orr_immediate_from_zero(word),
-            (2, 1 << 63, (1 << 64) - 1),
+            _decode_orr_immediate(word),
+            (2, 31, 1 << 63, (1 << 64) - 1),
         )
 
     def test_rejects_reserved_and_unsupported_orr_immediate_encodings(self):
@@ -243,11 +243,10 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
             orr_immediate(0, 0, n=1, imms=3),
             orr_immediate(1, 0, n=1, imms=63),
             orr_immediate(1, 0, n=0, imms=62),
-            orr_immediate(1, 0, n=1, imms=3, source=2),
         )
         for word in invalid:
             with self.subTest(word=hex(word)):
-                self.assertIsNone(_decode_orr_immediate_from_zero(word))
+                self.assertIsNone(_decode_orr_immediate(word))
 
     def test_tracks_orr_immediate_zero_before_allowlisted_call(self):
         code = words(
@@ -286,16 +285,50 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(result[0]["known_small_argument_constants"], {"x2": 4})
 
-    def test_unsupported_register_source_orr_clears_abstract_state(self):
+    def test_tracks_orr_immediate_general_register_source(self):
         code = words(
-            movz_x(2, 4),
-            orr_immediate(1, 1, n=1, immr=0, imms=3, source=2),
+            movz_x(2, 0x10),
+            orr_immediate(1, 2, n=1, immr=0, imms=3, source=2),
             bl(0x1008, self.target),
         )
         result = summarize_small_argument_constants(
             code, 0x1000, self.targets, target_prefixes=self.prefixes
         )
-        self.assertEqual(result, [])
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 0x1F})
+
+    def test_tracks_in_place_orr_immediate_source_before_overwriting(self):
+        code = words(
+            movz_x(1, 0x10),
+            orr_immediate(1, 1, n=1, immr=0, imms=3, source=1),
+            bl(0x1008, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 0x1F})
+
+    def test_w_orr_reads_low_32_bits_and_zero_extends_result(self):
+        code = words(
+            movz_x(1, 0x1234, shift=32),
+            orr_immediate(0, 2, n=0, immr=0, imms=3, source=1),
+            bl(0x1008, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x2": 0xF})
+
+    def test_unknown_orr_source_invalidates_only_destination(self):
+        code = words(
+            movz_x(1, 4),
+            movz_x(2, 7),
+            orr_immediate(1, 3, n=1, immr=0, imms=3, source=3),
+            bl(0x100C, self.target),
+        )
+        result = summarize_small_argument_constants(
+            code, 0x1000, self.targets, target_prefixes=self.prefixes
+        )
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x2": 7})
 
     def test_tracks_movk_and_omits_values_above_public_limit(self):
         code = words(
