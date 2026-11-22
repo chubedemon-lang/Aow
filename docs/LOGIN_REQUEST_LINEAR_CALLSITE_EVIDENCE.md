@@ -60,3 +60,64 @@ serializer helper.
 This is input-boundary hardening only. It does not change the recorded APK
 observations, make the linear sequence path-aware, resolve indirect calls, or
 establish serializer field order, framing, handshake, login, or compatibility.
+
+
+## Fresh offline revalidation — 2026-11-23
+
+The unchanged Library APK was re-read in a private workspace. Its SHA-256
+remained
+`c00bd00d30f625b85dfcc0159b3b058ca459c10f9917844a5301163480c7624e`;
+the ZIP contained 7,368 entries and the full CRC pass reported no failing
+member. The metadata member remained 26,021,348 bytes with IL2CPP magic
+`0xfab11baf` and version 31.
+
+A fresh bounded metadata/ELF registration pass reproduced these aggregate
+results:
+
+| Check | Result |
+|---|---:|
+| Metadata images | 165 |
+| Metadata method definitions | 197,631 |
+| Images matched to native codegen modules | 165 |
+| Unmatched / mismatched images | 0 / 0 |
+| Images with non-empty method-pointer tables | 161 |
+| Relocation-backed executable method-pointer targets | 164,023 |
+
+The allowlisted relevant module counts were also rechecked:
+
+| Module | Method-pointer slots | Relocation-backed executable targets |
+|---|---:|---:|
+| `ScriptsAssembly.dll` | 56,481 | 49,971 |
+| `ConvertedAssembly.dll` | 25,442 | 25,264 |
+| `ResourceDispatcher.dll` | 2,970 | 2,217 |
+| `NetworkBase.dll` | 18 | 17 |
+
+The LoginRequest windows were independently disassembled with the local LLVM
+AArch64 disassembler and direct `BL` targets were matched against the
+relocation-backed metadata method-entry map. The previously recorded results
+were reproduced: serializer 38 direct primitive-helper sites (19 Int, 16
+String, 2 Long, 1 Boolean) in a 4,264-byte bounded window; deserializer 33
+sites (14 Int, 16 String, 2 Long, 1 Boolean) in a 7,904-byte window.
+
+The same bounded direct-call pass observed the following additional
+transport-support callsites:
+
+| Method window | Directly resolved calls observed |
+|---|---|
+| `Receiver.Cycle` (9,476 bytes) | 2 `SimpleDeserializer.deserializeInt`; 2 `ClientNetworkStreamBuffer.SetDataAvailable`; 2 `AbstractClientBuffer.Write`; 1 `ClientArrayUtils.ZipDecompress`; 1 `Receiver.GetHttpMessageResponse`; 1 `Receiver.ReadStreamBufferToEnd` |
+| `Sender.Cycle` (7,600 bytes) | 2 `SimpleSerializer.serializeInt`; 1 `AbstractClientBuffer.Read`; 1 `ClientArrayUtils.ZipCompression`; 1 `ClientNetworkStreamBuffer.SetDataAvailable`; 2 `ClientStreamBuffer.Write` |
+
+These are bounded linear direct-call observations, not path-sensitive
+execution traces. In particular, they do not prove that compression is applied
+to every message, that the Sender and Receiver use symmetric framing, or that
+the two integer calls have matching semantics. The field-default record for
+`NetworkSettings.HeaderLength` was present, but its raw metadata type indexes
+were not resolved to a managed value; no effective HeaderLength value is
+claimed.
+
+No new numeric message ID, complete packet schema, handshake sequence,
+LoginRequest field order, endpoint, or unchanged-APK compatibility result was
+established. The real AOW transport adapter remains disabled until an
+authorized, redacted client-to-server byte fixture and end-to-end local test
+confirm the complete contract. The APK, native library, raw instructions,
+addresses, packet bytes, and private symbols remain outside this repository.
