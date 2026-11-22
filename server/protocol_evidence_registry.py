@@ -221,13 +221,33 @@ class EvidenceRegistry:
         self._records = []
         self._lock = threading.Lock()
 
-    def add(self, record):
+    @staticmethod
+    def _validated_record_copy(record):
+        """Revalidate and detach an exact Evidence record before storage."""
         if type(record) is not Evidence:
             raise EvidenceError("invalid record")
+        try:
+            return Evidence(
+                topic=record.topic,
+                artifact_sha256=record.artifact_sha256,
+                observation=record.observation,
+                method=record.method,
+                verified=record.verified,
+                test_reference=record.test_reference,
+                reproduction=record.reproduction,
+            )
+        except EvidenceError as exc:
+            # A frozen dataclass can still be changed with object.__setattr__.
+            # Re-run the constructor's full validation at this trust boundary.
+            raise EvidenceError("invalid record") from exc
+
+    def add(self, record):
+        stored_record = self._validated_record_copy(record)
         with self._lock:
-            if record in self._records:
+            if stored_record in self._records:
                 raise EvidenceError("duplicate evidence")
-            self._records.append(record)
+            # Keep a validated copy, never the caller-owned dataclass instance.
+            self._records.append(stored_record)
 
     def _snapshot_records(self):
         """Return one immutable record snapshot under the registry lock."""
