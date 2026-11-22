@@ -109,7 +109,7 @@ class AowPrimitiveCodecTests(unittest.TestCase):
 
     def test_truncated_reads_raise_eof(self):
         with self.assertRaises(EOFError):
-            AowPrimitiveReader(b"\\x01").read_int()
+            AowPrimitiveReader(b"\x01").read_int()
         with self.assertRaises(EOFError):
             AowPrimitiveReader(bytes.fromhex("0002abcd")).read_string()
 
