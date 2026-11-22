@@ -39,3 +39,15 @@ rejected before the decoder accepts input.
 
 This is generic configuration-integrity hardening for the synthetic decoder.
 It does not add an AOW header, frame size, or compatibility claim.
+
+## Exhaustive fragmentation regression
+
+The focused test suite enumerates every possible byte-boundary partition of
+two small fabricated streams: a one-byte big-endian payload-length format and
+a two-byte little-endian header-inclusive format. It inserts empty feed calls
+between chunks and verifies that the same payload sequence is emitted and EOF
+completes with no pending bytes.
+
+This is an exhaustive fragmentation regression for those finite synthetic
+vectors only. It does not select either layout for AOW, establish sender
+symmetry, or prove any APK wire behavior.
