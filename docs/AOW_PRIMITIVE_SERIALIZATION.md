@@ -51,7 +51,6 @@ limit, boolean semantics, truncation, invalid values and exact payload
 consumption. No APK, native binary, address, raw instruction, endpoint or
 packet capture is committed.
 
-
 ## Input type boundary
 
 The primitive writer accepts only an exact built-in `str` (or `None`) for
@@ -60,7 +59,6 @@ string values. The reader accepts only exact built-in `bytes`, `bytearray`, or
 `encode()` or `__bytes__()` hooks, keeping primitive serialization and input
 snapshotting deterministic. Ordinary mutable bytearrays and memoryviews are
 still copied into an immutable snapshot before decoding.
-
 
 ## Atomic cursor behavior on truncated values
 
@@ -72,7 +70,6 @@ Earlier successfully consumed fields remain consumed. This makes a failed
 parse deterministic for callers that report or discard malformed payloads,
 without changing any encoded bytes or inferring a packet boundary.
 
-
 ## UTF-16 length preflight
 
 The writer counts UTF-16 code units before allocating the encoded body. This
@@ -83,3 +80,18 @@ use UTF-16BE with `surrogatepass`. Regression coverage includes the exact
 32767-unit boundary and the first astral-only value that exceeds it. This is
 a local resource-bound improvement and does not change the observed wire
 representation.
+
+## Optional bounded writer
+
+`AowPrimitiveWriter(max_payload_bytes=...)` can apply a caller-selected
+resource cap to the aggregate bytes emitted by one writer. The cap is
+optional and defaults to `None`; no arbitrary maximum is presented as an AOW
+message-size limit. Every primitive checks its complete encoded size before
+changing the buffer. String writes preflight the full two-byte length plus
+UTF-16 body before encoding, so a configured-cap failure leaves earlier
+payload bytes unchanged. The `size` and `remaining_capacity` properties
+expose only local writer accounting.
+
+This option is generic resource control for future callers. It is not connected
+to a socket or packet handler and does not establish a framing or payload
+schema.
