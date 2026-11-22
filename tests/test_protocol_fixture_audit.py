@@ -219,8 +219,8 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
             self.audit(content)
 
     def test_maximum_schema_v4_event_and_chunk_counts_fit_token_budget(self):
-        server_chunks = [b"\\x00"] * MAX_CHUNKS_PER_DIRECTION
-        client_chunks = [b"\\x00"] * MAX_CHUNKS_PER_DIRECTION
+        server_chunks = [b"\x00"] * MAX_CHUNKS_PER_DIRECTION
+        client_chunks = [b"\x00"] * MAX_CHUNKS_PER_DIRECTION
         offsets = {
             "client_to_server": 0,
             "server_to_client": 0,
