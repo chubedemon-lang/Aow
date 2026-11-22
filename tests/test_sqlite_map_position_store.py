@@ -88,6 +88,27 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
         self.store = SqliteMapPositionStore(self.db)
         self.addCleanup(self.db.close)
 
+    def test_snapshot_check_rejects_partially_null_coordinates(self):
+        invalid_rows = (
+            ("partial-unplaced-x", None, 0, None, 0),
+            ("partial-unplaced-y", None, None, 0, 0),
+            ("partial-placed-x", 0, None, 0, 0),
+            ("partial-placed-y", 0, 0, None, 0),
+        )
+        for row in invalid_rows:
+            with self.subTest(row=row), self.assertRaises(sqlite3.IntegrityError):
+                self.db.execute(
+                    "INSERT INTO map_position_snapshots "
+                    "(character_id, map_id, x, y, revision) VALUES (?, ?, ?, ?, ?)",
+                    row,
+                )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_snapshots"
+            ).fetchone()[0],
+            0,
+        )
+
     def test_create_and_read_unplaced_snapshot(self):
         snapshot = self.store.create("hero")
         self.assertEqual(snapshot, MapPosition())
