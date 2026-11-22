@@ -3376,6 +3376,11 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "aligned AArch64 bytes"):
             _summarize_bucketed_lookup_shape(b"\x00\x00\x00")
 
+    def test_bucketed_lookup_shape_rejects_windows_over_entrypoint_limit(self):
+        code = b"\x1f\x20\x03\xd5" * (MAX_ENTRYPOINT_WINDOW_BYTES // 4 + 1)
+        with self.assertRaisesRegex(ValueError, "bounded method window"):
+            _summarize_bucketed_lookup_shape(code)
+
     def test_hash_bucket_opcode_families_are_not_reported_as_a_shape(self):
         words = [0x1ACA0C09, 0x1B0A8129, 0xB9401908, 0x6B0A013F, 0x54000561]
         self.assertTrue(_contains_hash_bucket_opcode_families(self._code(words)))
