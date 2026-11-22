@@ -3413,6 +3413,8 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
                 words[index] = 0xD61F0000
             elif kind == "ret":
                 words[index] = 0xD65F03C0
+            elif kind == "unrecognized_branch_register":
+                words[index] = 0xD71F0800
             else:
                 raise AssertionError(kind)
 
@@ -3432,6 +3434,10 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
             ("call in multiply scan", 13, "blr"),
             ("indirect branch in multiply scan", 13, "br"),
             ("return in multiply scan", 13, "ret"),
+            ("unrecognized branch-register family in bucket-base scan", 8,
+             "unrecognized_branch_register"),
+            ("unrecognized branch-register family in multiply scan", 13,
+             "unrecognized_branch_register"),
         )
         for label, index, kind in cases:
             with self.subTest(label=label):
