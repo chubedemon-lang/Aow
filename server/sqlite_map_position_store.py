@@ -123,7 +123,8 @@ class SqliteMapPositionStore:
                     CHECK(
                         (map_id IS NULL AND x IS NULL AND y IS NULL)
                         OR
-                        (map_id BETWEEN 0 AND 2147483647
+                        (map_id IS NOT NULL AND x IS NOT NULL AND y IS NOT NULL
+                         AND map_id BETWEEN 0 AND 2147483647
                          AND x BETWEEN -2147483648 AND 2147483647
                          AND y BETWEEN -2147483648 AND 2147483647)
                     )
@@ -229,6 +230,100 @@ class SqliteMapPositionStore:
         )
         if indexed_columns != ("character_id", "result_revision"):
             raise MapPositionStoreError("incompatible map-position mutation index")
+        self._validate_persisted_constraints()
+
+    def _validate_persisted_constraints(self):
+        """Require the store's CHECK constraints to be active and side-effect free."""
+        check_setting = self.db.execute(
+            "PRAGMA ignore_check_constraints"
+        ).fetchone()
+        if check_setting != (0,):
+            raise MapPositionStoreError("SQLite CHECK constraints are disabled")
+
+        definitions = dict(self.db.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='table' "
+            "AND name IN (?, ?)",
+            ("map_position_snapshots", "map_position_mutations"),
+        ).fetchall())
+        if set(definitions) != {
+            "map_position_snapshots", "map_position_mutations"
+        } or any(type(sql) is not str for sql in definitions.values()):
+            raise MapPositionStoreError("incompatible map-position table definitions")
+
+        probe = sqlite3.connect(":memory:", isolation_level=None)
+        try:
+            probe.execute("PRAGMA foreign_keys = ON")
+            try:
+                probe.execute(definitions["map_position_snapshots"])
+                probe.execute(definitions["map_position_mutations"])
+                probe.execute(
+                    "INSERT INTO map_position_snapshots "
+                    "(character_id, map_id, x, y, revision) "
+                    "VALUES (?, NULL, NULL, NULL, 0)",
+                    ("constraint-probe-owner",),
+                )
+            except sqlite3.Error as exc:
+                raise MapPositionStoreError(
+                    "map-position table definitions cannot be probed"
+                ) from exc
+
+            def require_check_rejection(statement, parameters):
+                probe.execute("SAVEPOINT map_position_check_probe")
+                try:
+                    probe.execute(statement, parameters)
+                except sqlite3.IntegrityError:
+                    probe.execute("ROLLBACK TO map_position_check_probe")
+                    probe.execute("RELEASE map_position_check_probe")
+                    return
+                except sqlite3.Error as exc:
+                    probe.execute("ROLLBACK TO map_position_check_probe")
+                    probe.execute("RELEASE map_position_check_probe")
+                    raise MapPositionStoreError(
+                        "map-position CHECK constraint probe failed"
+                    ) from exc
+                probe.execute("ROLLBACK TO map_position_check_probe")
+                probe.execute("RELEASE map_position_check_probe")
+                raise MapPositionStoreError(
+                    "missing required map-position CHECK constraint"
+                )
+
+            snapshot_insert = (
+                "INSERT INTO map_position_snapshots "
+                "(character_id, map_id, x, y, revision) VALUES (?, ?, ?, ?, ?)"
+            )
+            snapshot_cases = (
+                ("", None, None, None, 0),
+                ("x" * 129, None, None, None, 0),
+                ("negative-revision", None, None, None, -1),
+                ("partial-unplaced-x", None, 0, None, 0),
+                ("partial-unplaced-y", None, None, 0, 0),
+                ("partial-placed-x", 0, None, 0, 0),
+                ("partial-placed-y", 0, 0, None, 0),
+                ("negative-map", -1, 0, 0, 0),
+                ("oversized-map", 2**31, 0, 0, 0),
+                ("negative-x", 0, -(2**31) - 1, 0, 0),
+                ("oversized-x", 0, 2**31, 0, 0),
+                ("negative-y", 0, 0, -(2**31) - 1, 0),
+                ("oversized-y", 0, 0, 2**31, 0),
+            )
+            for parameters in snapshot_cases:
+                require_check_rejection(snapshot_insert, parameters)
+
+            mutation_insert = (
+                "INSERT INTO map_position_mutations "
+                "(request_id, character_id, expected_revision, payload_json, "
+                "result_json, result_revision) VALUES (?, ?, ?, ?, ?, ?)"
+            )
+            mutation_cases = (
+                ("", "constraint-probe-owner", 0, "{}", "{}", 1),
+                ("x" * 129, "constraint-probe-owner", 0, "{}", "{}", 1),
+                ("negative-expected", "constraint-probe-owner", -1, "{}", "{}", 1),
+                ("zero-result", "constraint-probe-owner", 0, "{}", "{}", 0),
+            )
+            for parameters in mutation_cases:
+                require_check_rejection(mutation_insert, parameters)
+        finally:
+            probe.close()
 
     @staticmethod
     def _character_id(value):

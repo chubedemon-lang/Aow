@@ -88,6 +88,27 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
         self.store = SqliteMapPositionStore(self.db)
         self.addCleanup(self.db.close)
 
+    def test_snapshot_check_rejects_partially_null_coordinates(self):
+        invalid_rows = (
+            ("partial-unplaced-x", None, 0, None, 0),
+            ("partial-unplaced-y", None, None, 0, 0),
+            ("partial-placed-x", 0, None, 0, 0),
+            ("partial-placed-y", 0, 0, None, 0),
+        )
+        for row in invalid_rows:
+            with self.subTest(row=row), self.assertRaises(sqlite3.IntegrityError):
+                self.db.execute(
+                    "INSERT INTO map_position_snapshots "
+                    "(character_id, map_id, x, y, revision) VALUES (?, ?, ?, ?, ?)",
+                    row,
+                )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_snapshots"
+            ).fetchone()[0],
+            0,
+        )
+
     def test_create_and_read_unplaced_snapshot(self):
         snapshot = self.store.create("hero")
         self.assertEqual(snapshot, MapPosition())
@@ -454,6 +475,76 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
                     "PRAGMA index_info(map_position_mutations_character)"
                 ).fetchall()),
                 ("result_revision", "character_id"),
+            )
+        finally:
+            connection.close()
+
+    def test_constructor_rejects_map_tables_missing_check_constraints(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        try:
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.executescript(
+                """CREATE TABLE map_position_snapshots (
+                       character_id TEXT PRIMARY KEY,
+                       map_id INTEGER, x INTEGER, y INTEGER,
+                       revision INTEGER NOT NULL
+                   );
+                   CREATE TABLE map_position_mutations (
+                       request_id TEXT PRIMARY KEY,
+                       character_id TEXT NOT NULL,
+                       expected_revision INTEGER NOT NULL,
+                       payload_json TEXT NOT NULL,
+                       result_json TEXT NOT NULL,
+                       result_revision INTEGER NOT NULL,
+                       FOREIGN KEY(character_id)
+                           REFERENCES map_position_snapshots(character_id)
+                           ON DELETE CASCADE
+                   );
+                   CREATE INDEX map_position_mutations_character
+                       ON map_position_mutations(character_id, result_revision);"""
+            )
+            with self.assertRaisesRegex(
+                MapPositionStoreError, "missing required map-position CHECK"
+            ):
+                SqliteMapPositionStore(connection)
+            objects = connection.execute(
+                "SELECT type, name FROM sqlite_master "
+                "WHERE name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()
+            self.assertEqual(
+                objects,
+                [
+                    ("table", "map_position_mutations"),
+                    ("index", "map_position_mutations_character"),
+                    ("table", "map_position_snapshots"),
+                ],
+            )
+            self.assertFalse(connection.in_transaction)
+        finally:
+            connection.close()
+
+    def test_constructor_rejects_disabled_sqlite_check_constraints(self):
+        connection = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None
+        )
+        try:
+            connection.execute("PRAGMA ignore_check_constraints = ON")
+            self.assertEqual(
+                connection.execute(
+                    "PRAGMA ignore_check_constraints"
+                ).fetchone(),
+                (1,),
+            )
+            with self.assertRaisesRegex(
+                MapPositionStoreError, "CHECK constraints are disabled"
+            ):
+                SqliteMapPositionStore(connection)
+            self.assertFalse(connection.in_transaction)
+            self.assertEqual(
+                connection.execute(
+                    "PRAGMA ignore_check_constraints"
+                ).fetchone(),
+                (1,),
             )
         finally:
             connection.close()

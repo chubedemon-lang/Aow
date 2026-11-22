@@ -65,3 +65,11 @@ This store does not establish AOW map identifiers, coordinate units, spawn rules
 The integrity audit iterates the snapshot and mutation query cursors directly. It does not call `fetchall()` on either potentially large map-position table, avoiding a second in-memory copy of the full serialized receipt history. Both scans remain inside the same deferred read transaction. The audit still retains per-character state required to replay revision chains, so memory usage grows with the number of characters rather than with the complete receipt payload history.
 
 A regression test uses a SQLite connection/cursor guard that raises if either map-position table query is materialized with `fetchall()`. All data in that test is synthetic and does not establish AOW wire compatibility.
+
+
+## Persisted constraint enforcement
+
+Construction fails closed if SQLite has disabled CHECK enforcement on the supplied connection or if the persisted table definitions do not reject representative invalid rows. The store replays the two stored CREATE TABLE definitions in an isolated in-memory database and probes character/request identifier bounds, revision bounds, map/coordinate bounds, and the all-null-or-fully-placed snapshot invariant. The probe never writes to the application database. This protects the synthetic persistence contract from a same-column schema that silently omitted CHECK constraints; it does not establish AOW map semantics or protocol compatibility.
+
+
+The placed-state CHECK explicitly requires map_id, x, and y to be non-NULL before applying numeric bounds. SQLite treats a CHECK expression that evaluates to NULL as passing, so range comparisons alone do not reject partially NULL coordinate tuples. The in-memory schema probe includes each partial-NULL shape as a negative case.
