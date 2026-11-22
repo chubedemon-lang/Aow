@@ -231,9 +231,10 @@ def _validated_evidence_copy(record):
             test_reference=record.test_reference,
             reproduction=record.reproduction,
         )
-    except EvidenceError as exc:
-        # A frozen dataclass can still be changed with object.__setattr__.
-        # Re-run the constructor's full validation at each trust boundary.
+    except (EvidenceError, AttributeError) as exc:
+        # A frozen dataclass can still be changed with object.__setattr__ or
+        # object.__delattr__. Re-run the constructor's full validation at each
+        # trust boundary and normalize missing fields to the same safe error.
         raise EvidenceError("invalid record") from exc
 
 
