@@ -212,7 +212,7 @@ class OfflineFrameProbeTests(unittest.TestCase):
         object.__setattr__(spec, "max_chunk_bytes", 8)
 
         with self.assertRaisesRegex(FrameDecodeError, "invalid declared frame size"):
-            decoder.feed(b"\\x03")
+            decoder.feed(b"\x03")
 
     def test_decoder_spec_property_returns_detached_copy(self):
         decoder = LengthFrameDecoder(FrameSpec(1, "big", max_payload=2))
@@ -220,7 +220,7 @@ class OfflineFrameProbeTests(unittest.TestCase):
         object.__setattr__(exposed, "max_payload", 8)
 
         with self.assertRaisesRegex(FrameDecodeError, "invalid declared frame size"):
-            decoder.feed(b"\\x03")
+            decoder.feed(b"\x03")
 
     def test_decoder_revalidates_mutated_spec_before_use(self):
         spec = FrameSpec(1, "big", max_payload=2)
