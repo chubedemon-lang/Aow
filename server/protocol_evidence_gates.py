@@ -9,7 +9,11 @@ import hashlib
 import json
 import re
 
-from server.protocol_evidence_registry import Evidence, EvidenceError
+from server.protocol_evidence_registry import (
+    Evidence,
+    EvidenceError,
+    _validated_evidence_copy,
+)
 
 
 STAGES = (
@@ -40,8 +44,7 @@ def evidence_record_digest(record: Evidence) -> str:
     This stable digest binds approval to one exact record. It is not a
     signature and cannot authenticate the referenced fixture's origin.
     """
-    if type(record) is not Evidence:
-        raise EvidenceError("record must be an exact Evidence instance")
+    record = _validated_evidence_copy(record)
     payload = {
         "artifact_sha256": record.artifact_sha256,
         "method": record.method,
@@ -97,6 +100,14 @@ def evaluate_evidence(
         )
     if any(type(record) is not Evidence for record in record_snapshot):
         raise EvidenceError("all records must be exact Evidence instances")
+    try:
+        record_snapshot = tuple(
+            _validated_evidence_copy(record) for record in record_snapshot
+        )
+    except EvidenceError as exc:
+        raise EvidenceError(
+            "all records must be valid exact Evidence instances"
+        ) from exc
     if type(approved_evidence_digests) not in (list, tuple, frozenset):
         raise EvidenceError(
             "approved_evidence_digests must be a built-in list, tuple, or frozenset"
