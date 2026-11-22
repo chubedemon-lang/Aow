@@ -123,7 +123,8 @@ class SqliteMapPositionStore:
                     CHECK(
                         (map_id IS NULL AND x IS NULL AND y IS NULL)
                         OR
-                        (map_id BETWEEN 0 AND 2147483647
+                        (map_id IS NOT NULL AND x IS NOT NULL AND y IS NOT NULL
+                         AND map_id BETWEEN 0 AND 2147483647
                          AND x BETWEEN -2147483648 AND 2147483647
                          AND y BETWEEN -2147483648 AND 2147483647)
                     )
@@ -302,7 +303,10 @@ class SqliteMapPositionStore:
                 ("", None, None, None, 0),
                 ("x" * 129, None, None, None, 0),
                 ("negative-revision", None, None, None, -1),
-                ("partial-unplaced", None, 0, None, 0),
+                ("partial-unplaced-x", None, 0, None, 0),
+                ("partial-unplaced-y", None, None, 0, 0),
+                ("partial-placed-x", 0, None, 0, 0),
+                ("partial-placed-y", 0, 0, None, 0),
                 ("negative-map", -1, 0, 0, 0),
                 ("oversized-map", 2**31, 0, 0, 0),
                 ("negative-x", 0, -(2**31) - 1, 0, 0),
