@@ -140,7 +140,6 @@ def _decode_sub_immediate(word):
     return destination, source, immediate, width_mask
 
 
-
 def _decode_orr_immediate_from_zero(word):
     """Decode ORR (immediate) with Rn=ZR into a bounded constant."""
     if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
