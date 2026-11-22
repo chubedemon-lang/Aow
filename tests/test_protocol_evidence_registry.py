@@ -309,6 +309,48 @@ class EvidenceRegistryTests(unittest.TestCase):
             EvidenceRegistry().add(record)
 
 
+    def test_registry_revalidates_mutated_frozen_record_before_acceptance(self):
+        record = Evidence(
+            "transport", self.sha, "offline observation", "synthetic_test"
+        )
+        # frozen=True prevents normal assignment, but object.__setattr__ can
+        # bypass it. The registry must re-run Evidence validation on insertion.
+        object.__setattr__(record, "verified", 1)
+
+        with self.assertRaisesRegex(EvidenceError, "invalid record"):
+            EvidenceRegistry().add(record)
+
+    def test_registry_defensively_copies_records_on_add(self):
+        registry = EvidenceRegistry()
+        record = Evidence(
+            "transport", self.sha, "offline observation", "synthetic_test"
+        )
+        registry.add(record)
+
+        other_sha = EvidenceRegistry.digest(b"mutated caller-owned record")
+        object.__setattr__(record, "topic", "login")
+        object.__setattr__(record, "artifact_sha256", other_sha)
+        object.__setattr__(record, "method", "authorized_local_test")
+        object.__setattr__(record, "verified", True)
+        object.__setattr__(
+            record, "test_reference", "tests/test_protocol_evidence_registry.py"
+        )
+        object.__setattr__(
+            record,
+            "reproduction",
+            "python -m unittest discover -s tests -p test_protocol_evidence_registry.py -v",
+        )
+
+        summary = registry.summary()
+        self.assertEqual(
+            summary["transport"], {"observations": 1, "verified": 0}
+        )
+        self.assertEqual(
+            summary["login"], {"observations": 0, "verified": 0}
+        )
+        with self.assertRaisesRegex(EvidenceError, "no evidence records"):
+            registry.summary(artifact_sha256=other_sha)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,9 @@ APK compatibility.
 
 - Registry records must be exact instances of `Evidence`; subclasses are
   rejected before any record fields are read.
+- On insertion, every field is revalidated and copied into a fresh exact
+  `Evidence` instance. The registry never retains the caller-owned object, so
+  later `object.__setattr__` mutations cannot alter stored evidence.
 - Gate input must be an exact built-in `list` or `tuple`, containing only
   exact `Evidence` instances, with at most 4,096 records per evaluation.
 - The approved-digest allowlist must be an exact built-in `list`, `tuple`, or
