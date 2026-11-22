@@ -458,5 +458,48 @@ class SqliteAuthRateLimiterTests(unittest.TestCase):
         self.assertFalse(trigger_connection.in_transaction)
 
 
+    def test_future_dated_failure_window_fails_closed_without_mutation(self):
+        digest = self.limiter._principal_digest("future-window")
+        stored = (1_001.0, 1, None)
+        self.db.execute(
+            """INSERT INTO auth_attempt_limits
+               (principal_digest, window_started_at, attempt_count, blocked_until)
+               VALUES (?, ?, ?, ?)""",
+            (digest, *stored),
+        )
+
+        for operation in (self.limiter.check_allowed, self.limiter.record_failure):
+            with self.subTest(operation=operation.__name__):
+                with self.assertRaisesRegex(RuntimeError, "state is corrupt"):
+                    operation("future-window")
+                self.assertFalse(self.db.in_transaction)
+                row = self.db.execute(
+                    """SELECT window_started_at, attempt_count, blocked_until
+                       FROM auth_attempt_limits WHERE principal_digest=?""",
+                    (digest,),
+                ).fetchone()
+                self.assertEqual(row, stored)
+
+    def test_lockout_deadline_before_window_start_fails_closed(self):
+        digest = self.limiter._principal_digest("inverted-lockout")
+        stored = (999.0, 3, 998.0)
+        self.db.execute(
+            """INSERT INTO auth_attempt_limits
+               (principal_digest, window_started_at, attempt_count, blocked_until)
+               VALUES (?, ?, ?, ?)""",
+            (digest, *stored),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "state is corrupt"):
+            self.limiter.check_allowed("inverted-lockout")
+        self.assertFalse(self.db.in_transaction)
+        row = self.db.execute(
+            """SELECT window_started_at, attempt_count, blocked_until
+               FROM auth_attempt_limits WHERE principal_digest=?""",
+            (digest,),
+        ).fetchone()
+        self.assertEqual(row, stored)
+
+
 if __name__ == "__main__":
     unittest.main()

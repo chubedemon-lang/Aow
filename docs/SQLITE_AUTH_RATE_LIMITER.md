@@ -45,3 +45,14 @@ and the fact that only keyed digests are persisted.
 A passing suite proves only the synthetic SQLite component. It does not
 establish AOW credentials, session-restore semantics, handshake order, packet
 framing, or unchanged-APK compatibility.
+
+
+## Stored failure-window invariants
+
+A persisted failure window must not start in the future relative to the
+operation's transaction-time clock sample. When a lockout deadline is present,
+it must be at or after the failure-window start. These states cannot be emitted
+by the limiter's write paths; if found, reads fail closed instead of extending
+or accepting an inconsistent lockout. Expired rows may still be pruned by the
+bounded cleanup path. This remains a synthetic local rate-limit invariant, not
+an AOW login or transport contract.
