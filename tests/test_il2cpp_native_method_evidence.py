@@ -13,7 +13,7 @@ from tools.il2cpp_native_method_evidence import (
     _decode_aarch64_adr, _decode_aarch64_adrp, _decode_aarch64_add_imm64,
     _decode_aarch64_ldr_x_unsigned, _decode_aarch64_mov_x_register,
     _decode_aarch64_str_x_unsigned, _decode_aarch64_mov_w_register,
-    _decode_aarch64_bl_target,
+    _decode_aarch64_bl_target, _reachable_aarch64_instruction_indices,
     _networksettings_first_non_default_field, _summarize_receiver_integer_lookup,
     _contains_hash_bucket_opcode_families,
     _summarize_bucketed_lookup_shape,
@@ -2909,6 +2909,123 @@ class ReceiverIntegerLookupEvidenceTests(unittest.TestCase):
         rendered = json.dumps(summary)
         self.assertNotIn("0x", rendered)
         self.assertNotIn(hex(lookup_target), rendered)
+
+    def test_cfg_reachability_follows_direct_branch_and_both_conditional_edges(self):
+        direct = self._code([
+            0x14000002,  # B to instruction 2; instruction 1 is unreachable.
+            0xD65F03C0,
+            0xD503201F,
+            0xD65F03C0,
+        ])
+        self.assertEqual(
+            _reachable_aarch64_instruction_indices(direct, 0x1000),
+            {0, 2, 3},
+        )
+
+        conditional = self._code([
+            0x54000060,  # B.eq to instruction 3; fallthrough remains possible.
+            0xD503201F,
+            0xD65F03C0,
+            0xD65F03C0,
+        ])
+        self.assertEqual(
+            _reachable_aarch64_instruction_indices(conditional, 0x1000),
+            {0, 1, 2, 3},
+        )
+
+    def test_cfg_reachability_stops_at_indirect_branch(self):
+        code = self._code([0xD61F0000, 0xD503201F, 0xD65F03C0])
+        self.assertEqual(
+            _reachable_aarch64_instruction_indices(code, 0x1000),
+            {0},
+        )
+
+    def test_receiver_lookup_counts_only_reachable_deserializer_calls(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows()
+        words = [
+            struct.unpack_from("<I", receiver, offset)[0]
+            for offset in range(0, len(receiver), 4)
+        ]
+        words[0] = 0x14000003  # Skip the first call and enter at the second.
+        summary, target = _summarize_receiver_integer_lookup(
+            self._code(words), start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_deserialize_call_count")
+        self.assertEqual(summary["deserialize_int_call_count"], 1)
+        self.assertEqual(summary["total_deserialize_int_call_count"], 2)
+        self.assertEqual(summary["unreachable_deserialize_int_call_count"], 1)
+        self.assertIsNone(target)
+
+    def test_receiver_lookup_rejects_deserializer_calls_on_disjoint_branches(self):
+        start, cctor, _receiver, deserialize_target, _lookup_target = self._synthetic_windows()
+        class_cell = 0x2970
+        words = [
+            0x540000A0,  # B.eq to the second call; fallthrough reaches the first.
+            self._encode_adrp(28, start + 4, class_cell),
+            self._encode_ldr_x(28, 28, class_cell - (start & ~0xFFF)),
+            self._encode_bl(start + 12, deserialize_target),
+            0x14000003,  # First-call path exits to RET, not to the second call.
+            self._encode_bl(start + 20, deserialize_target),
+            self._encode_mov_w(20, 0),
+            0xD65F03C0,
+        ]
+        summary, target = _summarize_receiver_integer_lookup(
+            self._code(words), start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_deserialize_call_path")
+        self.assertEqual(summary["deserialize_int_call_count"], 2)
+        self.assertEqual(summary["unreachable_deserialize_int_call_count"], 0)
+        self.assertIsNone(target)
+
+    def test_networksettings_static_store_must_be_reachable_from_cctor_entry(self):
+        start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows()
+        cctor_words = [
+            0x14000008,  # Skip the static initialization chain and return.
+            0xD503201F,
+            self._encode_adrp(20, start + 8, 0x2970),
+            0xD503201F,
+            self._encode_ldr_x(20, 20, 0x1970),
+            self._encode_ldr_x(8, 20, 0),
+            self._encode_ldr_x(8, 8, 0xB8),
+            self._encode_str_x(19, 8, 0),
+            0xD65F03C0,
+        ]
+        summary, target = _summarize_receiver_integer_lookup(
+            receiver, start, self._code(cctor_words), start,
+            {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_networksettings_static_slot")
+        self.assertIsNone(target)
+
+    def test_receiver_lookup_rejects_unreachable_static_slot_read_decoy(self):
+        start, cctor, _receiver, deserialize_target, lookup_target = self._synthetic_windows()
+        class_cell = 0x2970
+        words = [
+            0x14000004,  # Skip the class-cell ADRP/LDR pair; both calls remain reachable.
+            0xD503201F,
+            self._encode_adrp(28, start + 8, class_cell),
+            self._encode_ldr_x(28, 28, class_cell - (start & ~0xFFF)),
+            self._encode_bl(start + 16, deserialize_target),
+            self._encode_bl(start + 20, deserialize_target),
+            self._encode_mov_w(20, 0),
+            self._encode_ldr_x(0, 28, 0),
+            self._encode_ldr_x(8, 0, 0xB8),
+            self._encode_ldr_x(0, 8, 0),
+            self._encode_mov_w(1, 20),
+            self._encode_bl(start + 44, lookup_target),
+            0xD65F03C0,
+        ]
+        summary, target = _summarize_receiver_integer_lookup(
+            self._code(words), start, cctor, start, {deserialize_target}, set(),
+            {"name": "m_zippetMessageTypes", "leading_default_backed_field_count": 20},
+        )
+        self.assertEqual(summary["status"], "unresolved_networksettings_static_slot_read")
+        self.assertEqual(summary["deserialize_int_call_count"], 2)
+        self.assertEqual(summary["unreachable_deserialize_int_call_count"], 0)
+        self.assertIsNone(target)
 
     def test_truncated_receiver_or_cctor_window_never_produces_lookup_candidate(self):
         start, cctor, receiver, deserialize_target, _lookup_target = self._synthetic_windows()

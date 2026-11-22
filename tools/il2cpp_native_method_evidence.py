@@ -530,71 +530,184 @@ def _aarch64_global_cell_loads(code, start_va):
         loads.append({
             "cell": page + load[2],
             "register": register,
+            "adrp_index": index,
             "load_index": following,
         })
     return loads
 
+def _reachable_aarch64_instruction_indices(code, start_va):
+    """Return conservative bounded CFG reachability from one entry instruction.
+
+    Conditional branches retain both outcomes. Direct B follows only an
+    in-window target; BL/BLR retain caller fallthrough. BR/RET and unrecognized
+    branch-register-family instructions terminate the local walk rather than
+    guessing a destination.
+    """
+    if type(code) is not bytes or len(code) % 4:
+        raise ValueError("AArch64 code window must be aligned built-in bytes")
+    if len(code) > MAX_ENTRYPOINT_WINDOW_BYTES:
+        raise ValueError("AArch64 code window exceeds the bounded method window")
+    if (
+        type(start_va) is not int
+        or not 0 <= start_va <= 0xFFFFFFFFFFFFFFFF
+        or start_va % 4
+    ):
+        raise ValueError("AArch64 code window start must be an aligned address")
+    if code and start_va > 0xFFFFFFFFFFFFFFFF - (len(code) - 4):
+        raise ValueError("AArch64 code window exceeds the unsigned address space")
+
+    words = [
+        struct.unpack_from("<I", code, offset)[0]
+        for offset in range(0, len(code), 4)
+    ]
+    reachable = set()
+    pending = [0] if words else []
+    while pending:
+        index = pending.pop()
+        if index in reachable or not 0 <= index < len(words):
+            continue
+        reachable.add(index)
+        word = words[index]
+        pc = start_va + index * 4
+
+        direct_branch = _decode_aarch64_b_target(word, pc)
+        if direct_branch is not None:
+            target_offset = direct_branch - start_va
+            if 0 <= target_offset < len(code) and target_offset % 4 == 0:
+                pending.append(target_offset // 4)
+            continue
+
+        conditional = _decode_aarch64_conditional_branch(word, pc)
+        if conditional is not None:
+            target_offset = conditional[1] - start_va
+            if 0 <= target_offset < len(code) and target_offset % 4 == 0:
+                pending.append(target_offset // 4)
+            if index + 1 < len(words):
+                pending.append(index + 1)
+            continue
+
+        if (
+            _decode_aarch64_bl_target(word, pc) is not None
+            or _decode_aarch64_blr_register(word) is not None
+        ):
+            if index + 1 < len(words):
+                pending.append(index + 1)
+            continue
+
+        if (
+            _decode_aarch64_br_register(word) is not None
+            or _is_aarch64_return(word)
+            or (word & 0xFE000000) in (0xD6000000, 0xD7000000)
+        ):
+            continue
+
+        if index + 1 < len(words):
+            pending.append(index + 1)
+
+    return reachable
+
+
+def _aarch64_instruction_reaches(code, start_va, source_index, target_index):
+    """Return whether target_index is reachable from source_index in this window."""
+    if type(code) is not bytes or len(code) % 4:
+        raise ValueError("AArch64 code window must be aligned built-in bytes")
+    if len(code) > MAX_ENTRYPOINT_WINDOW_BYTES:
+        raise ValueError("AArch64 code window exceeds the bounded method window")
+    if (
+        type(start_va) is not int
+        or not 0 <= start_va <= 0xFFFFFFFFFFFFFFFF
+        or start_va % 4
+    ):
+        raise ValueError("AArch64 code window start must be an aligned address")
+    instruction_count = len(code) // 4
+    if (
+        type(source_index) is not int or type(target_index) is not int
+        or not 0 <= source_index < instruction_count
+        or not source_index <= target_index < instruction_count
+    ):
+        raise ValueError("instruction indexes must be ordered and inside the window")
+    start_offset = source_index * 4
+    end_offset = (target_index + 1) * 4
+    bounded = code[start_offset:end_offset]
+    reachable = _reachable_aarch64_instruction_indices(
+        bounded, start_va + start_offset
+    )
+    return target_index - source_index in reachable
+
+
 def _networksettings_static_first_slot_store_cells(code, start_va):
-    """Find cctor class cells with a contiguous static_fields[0] store chain."""
+    """Find only reachable cctor class cells with a static_fields[0] store chain."""
     if type(code) is not bytes or len(code) % 4:
         raise ValueError("NetworkSettings cctor code must be aligned AArch64 bytes")
+    reachable = _reachable_aarch64_instruction_indices(code, start_va)
     words = [
         (start_va + offset, struct.unpack_from("<I", code, offset)[0])
         for offset in range(0, len(code), 4)
     ]
     cells = set()
     for load in _aarch64_global_cell_loads(code, start_va):
+        if (
+            load["adrp_index"] not in reachable
+            or load["load_index"] not in reachable
+        ):
+            continue
         class_register = load["register"]
         first_index = _skip_aarch64_nops(words, load["load_index"] + 1)
-        if first_index >= len(words):
+        if first_index >= len(words) or first_index not in reachable:
             continue
         first = _decode_aarch64_ldr_x_unsigned(words[first_index][1])
         if first is None or first[1] != class_register or first[2] != 0:
             continue
         object_register = first[0]
         second_index = _skip_aarch64_nops(words, first_index + 1)
-        if second_index >= len(words):
+        if second_index >= len(words) or second_index not in reachable:
             continue
         second = _decode_aarch64_ldr_x_unsigned(words[second_index][1])
         if second is None or second[1] != object_register or second[2] != 0xB8:
             continue
         static_fields_register = second[0]
         store_index = _skip_aarch64_nops(words, second_index + 1)
-        if store_index >= len(words):
+        if store_index >= len(words) or store_index not in reachable:
             continue
         store = _decode_aarch64_str_x_unsigned(words[store_index][1])
         if store is not None and store[1] == static_fields_register and store[2] == 0:
             cells.add(load["cell"])
     return cells
 
-
 def _networksettings_static_first_slot_read_sequences(code, start_va, expected_cell):
-    """Find exact three-load static_fields[0] reads after a validated class-cell load."""
+    """Find reachable three-load static_fields[0] reads after a class-cell load."""
     if type(code) is not bytes or len(code) % 4:
         raise ValueError("AArch64 code window must be aligned bytes")
+    reachable = _reachable_aarch64_instruction_indices(code, start_va)
     words = [
         (start_va + offset, struct.unpack_from("<I", code, offset)[0])
         for offset in range(0, len(code), 4)
     ]
     sequences = []
     for load in _aarch64_global_cell_loads(code, start_va):
-        if load["cell"] != expected_cell:
+        if (
+            load["cell"] != expected_cell
+            or load["adrp_index"] not in reachable
+            or load["load_index"] not in reachable
+        ):
             continue
         class_register = load["register"]
         for first_index in range(load["load_index"] + 1, min(load["load_index"] + 513, len(words))):
+            if first_index not in reachable:
+                continue
             first = _decode_aarch64_ldr_x_unsigned(words[first_index][1])
             if first is None or first[1] != class_register or first[2] != 0:
                 continue
             object_register = first[0]
             second_index = _skip_aarch64_nops(words, first_index + 1)
-            if second_index >= len(words):
+            if second_index >= len(words) or second_index not in reachable:
                 continue
             second = _decode_aarch64_ldr_x_unsigned(words[second_index][1])
             if second is None or second[1] != object_register or second[2] != 0xB8:
                 continue
             static_fields_register = second[0]
             read_index = _skip_aarch64_nops(words, second_index + 1)
-            if read_index >= len(words):
+            if read_index >= len(words) or read_index not in reachable:
                 continue
             third = _decode_aarch64_ldr_x_unsigned(words[read_index][1])
             if (
@@ -604,6 +717,7 @@ def _networksettings_static_first_slot_read_sequences(code, start_va, expected_c
                 sequences.append({
                     "load_index": load["load_index"],
                     "first_index": first_index,
+                    "second_index": second_index,
                     "read_index": read_index,
                     "class_register": class_register,
                     "object_register": object_register,
@@ -611,6 +725,7 @@ def _networksettings_static_first_slot_read_sequences(code, start_va, expected_c
                     "value_register": third[0],
                 })
     return sequences
+
 def _networksettings_first_non_default_field(metadata):
     """Return a metadata-order candidate, not a proven static-field map."""
     string_off, string_size, _ = _table(metadata, 0x18, 1, "string heap")
@@ -1205,7 +1320,7 @@ def _summarize_receiver_integer_lookup(
     receiver_window_truncated=False,
     networksettings_cctor_window_truncated=False,
 ):
-    """Trace a receive-key lookup only when both bounded entry windows are complete."""
+    """Trace a receive-key lookup only through reachable bounded CFG paths."""
     if type(receiver_code) is not bytes or len(receiver_code) % 4:
         raise ValueError("receiver code must be aligned AArch64 bytes")
     if type(networksettings_cctor_code) is not bytes or len(networksettings_cctor_code) % 4:
@@ -1260,28 +1375,54 @@ def _summarize_receiver_integer_lookup(
         (receiver_start_va + offset, struct.unpack_from("<I", receiver_code, offset)[0])
         for offset in range(0, len(receiver_code), 4)
     ]
-    deserialize_calls = [
+    reachable = _reachable_aarch64_instruction_indices(
+        receiver_code, receiver_start_va
+    )
+    all_deserialize_calls = [
         index for index, (pc, word) in enumerate(words)
         if _decode_aarch64_bl_target(word, pc) in deserialize_int_targets
     ]
+    deserialize_calls = [
+        index for index in all_deserialize_calls if index in reachable
+    ]
+    call_counts = {
+        "deserialize_int_call_count": len(deserialize_calls),
+        "total_deserialize_int_call_count": len(all_deserialize_calls),
+        "unreachable_deserialize_int_call_count": (
+            len(all_deserialize_calls) - len(deserialize_calls)
+        ),
+    }
     if len(deserialize_calls) != 2:
         return {
             "status": "unresolved_deserialize_call_count",
-            "deserialize_int_call_count": len(deserialize_calls),
+            **call_counts,
         }, None
 
-    second_call = deserialize_calls[1]
+    first_call, second_call = deserialize_calls
+    if not _aarch64_instruction_reaches(
+        receiver_code, receiver_start_va, first_call, second_call
+    ):
+        return {
+            "status": "unresolved_deserialize_call_path",
+            **call_counts,
+        }, None
+
     copy_index = _skip_aarch64_nops(words, second_call + 1)
-    if copy_index >= len(words):
+    if (
+        copy_index >= len(words) or copy_index not in reachable
+        or not _aarch64_instruction_reaches(
+            receiver_code, receiver_start_va, second_call, copy_index
+        )
+    ):
         return {
             "status": "unresolved_second_result_copy",
-            "deserialize_int_call_count": len(deserialize_calls),
+            **call_counts,
         }, None
     copy = _decode_aarch64_mov_w_register(words[copy_index][1])
     if copy is None or copy[1] != 0 or copy[0] == 0:
         return {
             "status": "unresolved_second_result_copy",
-            "deserialize_int_call_count": len(deserialize_calls),
+            **call_counts,
         }, None
     key_register = copy[0]
 
@@ -1290,13 +1431,20 @@ def _summarize_receiver_integer_lookup(
     )
     ordered_sequences = [
         sequence for sequence in sequences
-        if _skip_aarch64_nops(words, sequence["load_index"] + 1) == deserialize_calls[0]
+        if sequence["load_index"] in reachable
+        and sequence["first_index"] in reachable
+        and sequence["second_index"] in reachable
+        and sequence["read_index"] in reachable
+        and _skip_aarch64_nops(words, sequence["load_index"] + 1) == first_call
         and sequence["first_index"] == _skip_aarch64_nops(words, copy_index + 1)
+        and _aarch64_instruction_reaches(
+            receiver_code, receiver_start_va, copy_index, sequence["first_index"]
+        )
     ]
     if not ordered_sequences:
         return {
             "status": "unresolved_networksettings_static_slot_read",
-            "deserialize_int_call_count": len(deserialize_calls),
+            **call_counts,
         }, None
 
     candidates = []
@@ -1312,7 +1460,12 @@ def _summarize_receiver_integer_lookup(
             continue
 
         argument_index = _skip_aarch64_nops(words, sequence["read_index"] + 1)
-        if argument_index >= len(words):
+        if (
+            argument_index >= len(words) or argument_index not in reachable
+            or not _aarch64_instruction_reaches(
+                receiver_code, receiver_start_va, sequence["read_index"], argument_index
+            )
+        ):
             continue
         argument = _decode_aarch64_mov_w_register(words[argument_index][1])
         if argument is None or argument[0] != 1 or argument[1] != key_register:
@@ -1320,7 +1473,12 @@ def _summarize_receiver_integer_lookup(
         saw_key_argument = True
 
         call_index = _skip_aarch64_nops(words, argument_index + 1)
-        if call_index >= len(words):
+        if (
+            call_index >= len(words) or call_index not in reachable
+            or not _aarch64_instruction_reaches(
+                receiver_code, receiver_start_va, argument_index, call_index
+            )
+        ):
             continue
         lookup_target = _decode_aarch64_bl_target(
             words[call_index][1], words[call_index][0]
@@ -1338,7 +1496,7 @@ def _summarize_receiver_integer_lookup(
             status = "unresolved_lookup_call"
         return {
             "status": status,
-            "deserialize_int_call_count": len(deserialize_calls),
+            **call_counts,
             "candidate_count": len(candidates),
         }, None
 
@@ -1349,7 +1507,7 @@ def _summarize_receiver_integer_lookup(
     )
     summary = {
         "status": "static_key_lookup_candidate",
-        "deserialize_int_call_count": 2,
+        **call_counts,
         "source_call_ordinal": 2,
         "second_result_copied_from_w0": True,
         "key_forwarded_to_w1": True,
@@ -1378,6 +1536,7 @@ def _summarize_receiver_integer_lookup(
         "apk_compatible": False,
     }
     return summary, target
+
 def _bounded_fde_code_for_target(elf, sections, target):
     """Return a private exact-FDE-entry window, or None when it cannot be bounded."""
     try:
