@@ -185,6 +185,7 @@ def _decode_orr_immediate_from_zero(word):
     width_mask = (1 << width) - 1
     return word & 0x1F, value & width_mask, width_mask
 
+
 def _decode_bl_target(word, pc):
     if (word & 0xFC000000) != 0x94000000:
         return None
