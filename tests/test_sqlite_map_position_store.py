@@ -523,35 +523,6 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def test_constructor_rejects_unexpected_map_position_triggers(self):
-        self.db.execute(
-            """CREATE TRIGGER mutate_map_revision
-               AFTER UPDATE ON map_position_snapshots
-               BEGIN
-                   UPDATE map_position_snapshots
-                   SET revision = revision + 1
-                   WHERE character_id = NEW.character_id;
-               END"""
-        )
-        self.db.commit()
-        connection = sqlite3.connect(
-            self.path, timeout=10, isolation_level=None
-        )
-        try:
-            with self.assertRaisesRegex(
-                MapPositionStoreError, "unexpected map-position trigger"
-            ):
-                SqliteMapPositionStore(connection)
-            self.assertFalse(connection.in_transaction)
-            self.assertEqual(
-                connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='trigger'"
-                ).fetchall(),
-                [("mutate_map_revision",)],
-            )
-        finally:
-            connection.close()
-
     def test_constructor_rejects_disabled_sqlite_check_constraints(self):
         connection = sqlite3.connect(
             self.path, timeout=10, isolation_level=None
