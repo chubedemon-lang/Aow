@@ -1066,3 +1066,22 @@ This is analyzer hardening only. The matcher was not re-run against fresh APK
 bytes in this change, and no new native observation, packet schema, message ID,
 framing, compression, handshake, LoginRequest order, or unchanged-APK
 compatibility finding is claimed.
+
+
+## Shared CFG termination for bucketed lookup — 2026-11-22
+
+The bucketed-lookup matcher now uses the same bounded reachability walker as
+the Receiver integer-lookup analyzer. This keeps its branch handling aligned:
+conditional branches retain both possible outcomes, direct in-window branches
+follow their target, calls retain caller fallthrough, and BR/RET plus
+unrecognized D6/D7 branch-register-family encodings terminate the local walk.
+
+A synthetic regression places an unmodeled branch-register-family encoding at
+the method-window entry before an otherwise valid lookup-shaped decoy. The
+matcher must leave the candidate unresolved rather than treating the decoy as
+reachable by ordinary fallthrough.
+
+This is analyzer consistency hardening only. It does not resolve the branch
+target, identify a managed collection owner, establish a wire message ID, or
+prove framing, handshake, LoginRequest field order, or unchanged-APK
+compatibility.
