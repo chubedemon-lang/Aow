@@ -216,33 +216,33 @@ class Evidence:
                 )
 
 
+def _validated_evidence_copy(record):
+    """Return a freshly validated exact Evidence copy, rejecting frozen bypasses."""
+    if type(record) is not Evidence:
+        raise EvidenceError("invalid record")
+    try:
+        return Evidence(
+            topic=record.topic,
+            artifact_sha256=record.artifact_sha256,
+            observation=record.observation,
+            method=record.method,
+            verified=record.verified,
+            test_reference=record.test_reference,
+            reproduction=record.reproduction,
+        )
+    except EvidenceError as exc:
+        # A frozen dataclass can still be changed with object.__setattr__.
+        # Re-run the constructor's full validation at each trust boundary.
+        raise EvidenceError("invalid record") from exc
+
+
 class EvidenceRegistry:
     def __init__(self):
         self._records = []
         self._lock = threading.Lock()
 
-    @staticmethod
-    def _validated_record_copy(record):
-        """Revalidate and detach an exact Evidence record before storage."""
-        if type(record) is not Evidence:
-            raise EvidenceError("invalid record")
-        try:
-            return Evidence(
-                topic=record.topic,
-                artifact_sha256=record.artifact_sha256,
-                observation=record.observation,
-                method=record.method,
-                verified=record.verified,
-                test_reference=record.test_reference,
-                reproduction=record.reproduction,
-            )
-        except EvidenceError as exc:
-            # A frozen dataclass can still be changed with object.__setattr__.
-            # Re-run the constructor's full validation at this trust boundary.
-            raise EvidenceError("invalid record") from exc
-
     def add(self, record):
-        stored_record = self._validated_record_copy(record)
+        stored_record = _validated_evidence_copy(record)
         with self._lock:
             if stored_record in self._records:
                 raise EvidenceError("duplicate evidence")
