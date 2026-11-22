@@ -13,6 +13,7 @@ from tools.il2cpp_native_method_evidence import (
     _decode_aarch64_adr, _decode_aarch64_adrp, _decode_aarch64_add_imm64,
     _decode_aarch64_ldr_x_unsigned, _decode_aarch64_mov_x_register,
     _decode_aarch64_str_x_unsigned, _decode_aarch64_mov_w_register,
+    _decode_aarch64_blr_register, _decode_aarch64_br_register,
     _decode_aarch64_bl_target, _reachable_aarch64_instruction_indices,
     _networksettings_first_non_default_field, _summarize_receiver_integer_lookup,
     _contains_hash_bucket_opcode_families,
@@ -567,6 +568,38 @@ class NativeMethodEvidenceTests(unittest.TestCase):
     def _encode_blr(rn):
         return 0xD63F0000 | (rn << 5)
 
+    @staticmethod
+    def _encode_blraa(rn, rm):
+        return 0xD73F0800 | (rn << 5) | rm
+
+    @staticmethod
+    def _encode_blrab(rn, rm):
+        return 0xD73F0C00 | (rn << 5) | rm
+
+    @staticmethod
+    def _encode_blraaz(rn):
+        return 0xD63F081F | (rn << 5)
+
+    @staticmethod
+    def _encode_blrabz(rn):
+        return 0xD63F0C1F | (rn << 5)
+
+    @staticmethod
+    def _encode_braa(rn, rm):
+        return 0xD71F0800 | (rn << 5) | rm
+
+    @staticmethod
+    def _encode_brab(rn, rm):
+        return 0xD71F0C00 | (rn << 5) | rm
+
+    @staticmethod
+    def _encode_braaz(rn):
+        return 0xD61F081F | (rn << 5)
+
+    @staticmethod
+    def _encode_brabz(rn):
+        return 0xD61F0C1F | (rn << 5)
+
     def test_aarch64_adr_decoder_handles_forward_backward_and_rejects_invalid(self):
         self.assertEqual(
             _decode_aarch64_adr(self._encode_adr(0x1000, 0x1804, 8), 0x1000),
@@ -579,6 +612,134 @@ class NativeMethodEvidenceTests(unittest.TestCase):
         self.assertIsNone(_decode_aarch64_adr(0x90000008, 0x1000))
         self.assertIsNone(_decode_aarch64_adr(self._encode_adr(0x1000, 0x1004, 31), 0x1000))
         self.assertIsNone(_decode_aarch64_adr(0x10000008, 0x1002))
+
+    def test_pointer_authenticated_indirect_decoders_return_target_register(self):
+        call_words = (
+            self._encode_blraa(9, 1),
+            self._encode_blrab(10, 2),
+            self._encode_blraaz(11),
+            self._encode_blrabz(12),
+        )
+        tail_words = (
+            self._encode_braa(13, 3),
+            self._encode_brab(14, 4),
+            self._encode_braaz(15),
+            self._encode_brabz(16),
+        )
+        for word, expected in zip(call_words, (9, 10, 11, 12)):
+            with self.subTest(kind="call", word=hex(word)):
+                self.assertEqual(_decode_aarch64_blr_register(word), expected)
+        for word, expected in zip(tail_words, (13, 14, 15, 16)):
+            with self.subTest(kind="tail", word=hex(word)):
+                self.assertEqual(_decode_aarch64_br_register(word), expected)
+
+        invalid_calls = (0xD73F1801, 0xD63F081E)
+        invalid_tails = (0xD71F1801, 0xD61F081E)
+        for word in invalid_calls:
+            with self.subTest(kind="invalid_call", word=hex(word)):
+                self.assertIsNone(_decode_aarch64_blr_register(word))
+        for word in invalid_tails:
+            with self.subTest(kind="invalid_tail", word=hex(word)):
+                self.assertIsNone(_decode_aarch64_br_register(word))
+
+    def test_relocated_indirect_call_resolves_pointer_authenticated_forms(self):
+        start = 0x5000
+        encoders = (
+            self._encode_blraa,
+            self._encode_blrab,
+            lambda rn, _modifier: self._encode_blraaz(rn),
+            lambda rn, _modifier: self._encode_blrabz(rn),
+        )
+        words = []
+        for index, encode in enumerate(encoders):
+            pc = start + len(words) * 4
+            words.extend((
+                self._encode_adr(pc, 0x3000, 8),
+                self._encode_ldr_x(9, 8),
+                encode(9, index + 1),
+            ))
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_relocated_indirect_calls(
+            code, start, {0x3000: (R_AARCH64_RELATIVE, 0x5010)},
+            {0x5010: ["Receiver::Cycle"]},
+        )
+        self.assertEqual(
+            summary["resolved_indirect_method_call_counts"],
+            {"Receiver::Cycle": 4},
+        )
+        self.assertEqual(
+            summary["resolved_indirect_method_call_sequence"],
+            ["Receiver::Cycle"] * 4,
+        )
+        self.assertEqual(summary["unresolved_indirect_call_count"], 0)
+
+    def test_relocated_indirect_tail_resolves_pointer_authenticated_forms(self):
+        start = 0x5000
+        encoders = (
+            self._encode_braa,
+            self._encode_brab,
+            lambda rn, _modifier: self._encode_braaz(rn),
+            lambda rn, _modifier: self._encode_brabz(rn),
+        )
+        words = []
+        for index, encode in enumerate(encoders):
+            pc = start + len(words) * 4
+            words.extend((
+                self._encode_adr(pc, 0x3000, 8),
+                self._encode_ldr_x(9, 8),
+                encode(9, index + 1),
+            ))
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_relocated_indirect_calls(
+            code, start, {0x3000: (R_AARCH64_RELATIVE, 0x5010)},
+            {0x5010: ["Receiver::Cycle"]},
+        )
+        self.assertEqual(
+            summary["resolved_indirect_tail_method_call_counts"],
+            {"Receiver::Cycle": 4},
+        )
+        self.assertEqual(
+            summary["resolved_indirect_tail_method_call_sequence"],
+            ["Receiver::Cycle"] * 4,
+        )
+        self.assertEqual(summary["unresolved_indirect_tail_call_count"], 0)
+
+    def test_pointer_authenticated_call_clears_relocated_register_state(self):
+        start = 0x5000
+        code = b"".join(struct.pack("<I", word) for word in (
+            self._encode_adr(start, 0x3000, 8),
+            self._encode_ldr_x(9, 8),
+            self._encode_blraa(9, 1),
+            self._encode_blr(9),
+        ))
+        summary = _summarize_relocated_indirect_calls(
+            code, start, {0x3000: (R_AARCH64_RELATIVE, 0x5010)},
+            {0x5010: ["Receiver::Cycle"]},
+        )
+        self.assertEqual(
+            summary["resolved_indirect_method_call_counts"],
+            {"Receiver::Cycle": 1},
+        )
+        self.assertEqual(summary["unresolved_indirect_call_count"], 1)
+
+    def test_linear_call_summary_counts_pointer_authenticated_forms(self):
+        start = 0x6000
+        words = (
+            self._encode_blr(9),
+            self._encode_blraa(9, 1),
+            self._encode_blrab(9, 2),
+            self._encode_blraaz(9),
+            self._encode_blrabz(9),
+            0xD61F0000 | (9 << 5),
+            self._encode_braa(9, 1),
+            self._encode_brab(9, 2),
+            self._encode_braaz(9),
+            self._encode_brabz(9),
+        )
+        code = b"".join(struct.pack("<I", word) for word in words)
+        summary = _summarize_aarch64_calls(code, start, {})
+        self.assertEqual(summary["indirect_call_count"], 5)
+        self.assertEqual(summary["indirect_tail_call_count"], 5)
 
     def test_relocated_indirect_call_resolves_adr_ldr_blr_chain(self):
         start = 0x5000
