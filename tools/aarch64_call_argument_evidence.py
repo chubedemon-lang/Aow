@@ -140,6 +140,51 @@ def _decode_sub_immediate(word):
     return destination, source, immediate, width_mask
 
 
+
+def _decode_orr_immediate_from_zero(word):
+    """Decode ORR (immediate) with Rn=ZR into a bounded constant."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    # ORR (immediate): sf opc=01 100100 N immr imms Rn Rd.
+    # Only the ZR-source alias is modeled; general register ORR is unknown.
+    if (word & 0x7F800000) != 0x32000000:
+        return None
+    is_64 = bool(word & 0x80000000)
+    n = (word >> 22) & 1
+    if (not is_64 and n) or ((word >> 5) & 0x1F) != 31:
+        return None
+
+    immr = (word >> 16) & 0x3F
+    imms = (word >> 10) & 0x3F
+    length_encoding = (n << 6) | ((~imms) & 0x3F)
+    length = length_encoding.bit_length() - 1
+    if length < 1:
+        return None
+
+    element_size = 1 << length
+    width = 64 if is_64 else 32
+    if element_size > width:
+        return None
+    levels = (1 << length) - 1
+    s = imms & levels
+    r = immr & levels
+    # S == levels is reserved for logical-immediate encodings.
+    if s == levels:
+        return None
+
+    element_mask = (1 << element_size) - 1
+    element = (1 << (s + 1)) - 1
+    if r:
+        element = (
+            (element >> r) | (element << (element_size - r))
+        ) & element_mask
+
+    value = 0
+    for shift in range(0, width, element_size):
+        value |= element << shift
+    width_mask = (1 << width) - 1
+    return word & 0x1F, value & width_mask, width_mask
+
 def _decode_bl_target(word, pc):
     if (word & 0xFC000000) != 0x94000000:
         return None
@@ -318,8 +363,10 @@ def summarize_small_argument_constants(
     joins and backedges start with unknown register state. Unknown instructions
     clear the abstract state. BL/BLR calls clobber caller-saved registers.
 
-    Only MOVZ/MOVN/MOVK, the unshifted MOV-register alias and ADD-immediate
-    are modeled. Writes to WZR/XZR are treated as discarded no-ops. Exact
+    MOVZ/MOVN/MOVK, the unshifted MOV-register alias, ORR-immediate with
+    Rn=ZR, ADD-immediate and unflagged SUB-immediate are modeled. Logical
+    immediates with a general-register source remain unknown. Writes to
+    WZR/XZR are treated as discarded no-ops. Exact
     values above 0xffff are omitted. When
     include_argument_classes=True, x0-x7 values also receive a coarse size
     class (zero, small 16-bit, nonzero 32-bit, or nonzero 64-bit); no wide
@@ -424,6 +471,13 @@ def summarize_small_argument_constants(
                         registers[destination] = registers[source] & width_mask
                     else:
                         registers.pop(destination, None)
+                continue
+
+            logical_immediate = _decode_orr_immediate_from_zero(word)
+            if logical_immediate is not None:
+                destination, value, width_mask = logical_immediate
+                if destination != 31:  # XZR/WZR destination discards the result.
+                    registers[destination] = value & width_mask
                 continue
 
             add = _decode_add_immediate(word)
