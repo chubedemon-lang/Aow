@@ -954,6 +954,7 @@ def _summarize_bucketed_lookup_shape(code):
             or _decode_aarch64_blr_register(word) is not None
             or _decode_aarch64_br_register(word) is not None
             or _is_aarch64_return(word)
+            or (word & 0xFE000000) in (0xD6000000, 0xD7000000)
         )
 
     def find_after(start, decoder, predicate, limit=128):
