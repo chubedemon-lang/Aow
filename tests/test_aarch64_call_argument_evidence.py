@@ -294,7 +294,7 @@ class Aarch64CallArgumentEvidenceTests(unittest.TestCase):
         result = summarize_small_argument_constants(
             code, 0x1000, self.targets, target_prefixes=self.prefixes
         )
-        self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 0x1F})
+        self.assertEqual(result[0]["known_small_argument_constants"], {"x1": 0x1F, "x2": 0x10})
 
     def test_tracks_in_place_orr_immediate_source_before_overwriting(self):
         code = words(
