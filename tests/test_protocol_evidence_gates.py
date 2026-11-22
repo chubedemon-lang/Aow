@@ -1,5 +1,6 @@
 """Readiness gates require authorized local client evidence, not static facts alone."""
 import unittest
+from unittest.mock import patch
 
 from server.protocol_evidence_registry import Evidence, EvidenceError
 from server.protocol_evidence_gates import (
@@ -199,6 +200,39 @@ class EvidenceGateTests(unittest.TestCase):
                 [evidence("transport")], artifact_sha256=Digest("a" * 64)
             )
 
+
+    def test_record_collection_is_snapshotted_before_topic_aggregation(self):
+        records = [evidence(topic) for topic in STAGES[:5]]
+        approved = tuple(evidence_record_digest(record) for record in records)
+        original_digest = evidence_record_digest
+        calls = 0
+
+        def digest_and_mutate_records(record):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                # Simulate another caller changing its list after fingerprint
+                # selection but while the gate is aggregating approved records.
+                records.clear()
+            return original_digest(record)
+
+        with patch(
+            "server.protocol_evidence_gates.evidence_record_digest",
+            side_effect=digest_and_mutate_records,
+        ):
+            result = evaluate_evidence(
+                records,
+                approved_evidence_digests=approved,
+            )
+
+        self.assertEqual(records, [])
+        by_stage = {item.stage: item for item in result}
+        self.assertTrue(by_stage["transport"].ready)
+        self.assertTrue(by_stage["framing"].ready)
+        self.assertTrue(by_stage["serialization"].ready)
+        self.assertTrue(by_stage["handshake"].ready)
+        self.assertTrue(by_stage["login"].ready)
+        self.assertFalse(by_stage["session"].ready)
 
     def test_default_gate_requires_explicit_digest_approval(self):
         record = evidence("transport")

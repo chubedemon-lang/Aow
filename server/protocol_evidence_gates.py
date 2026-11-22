@@ -87,30 +87,35 @@ def evaluate_evidence(
     """
     if type(records) not in (list, tuple):
         raise EvidenceError("records must be a built-in list or tuple")
-    if len(records) > MAX_EVIDENCE_RECORDS:
+    # Snapshot exact built-in collections once. Re-reading a caller-owned list
+    # across validation, fingerprint selection and topic aggregation would let
+    # concurrent mutation change which evidence is actually evaluated.
+    record_snapshot = tuple(records)
+    if len(record_snapshot) > MAX_EVIDENCE_RECORDS:
         raise EvidenceError(
             f"records must contain at most {MAX_EVIDENCE_RECORDS} entries"
         )
-    if any(type(record) is not Evidence for record in records):
+    if any(type(record) is not Evidence for record in record_snapshot):
         raise EvidenceError("all records must be exact Evidence instances")
     if type(approved_evidence_digests) not in (list, tuple, frozenset):
         raise EvidenceError(
             "approved_evidence_digests must be a built-in list, tuple, or frozenset"
         )
-    if len(approved_evidence_digests) > MAX_APPROVED_EVIDENCE_DIGESTS:
+    approval_snapshot = tuple(approved_evidence_digests)
+    if len(approval_snapshot) > MAX_APPROVED_EVIDENCE_DIGESTS:
         raise EvidenceError(
             "approved_evidence_digests must contain at most "
             f"{MAX_APPROVED_EVIDENCE_DIGESTS} entries"
         )
     approved = set()
-    for digest in approved_evidence_digests:
+    for digest in approval_snapshot:
         if type(digest) is not str or not _SHA256.fullmatch(digest):
             raise EvidenceError("approved evidence digests must be lowercase SHA-256")
         if digest in approved:
             raise EvidenceError("duplicate approved evidence digest")
         approved.add(digest)
 
-    fingerprints = {record.artifact_sha256 for record in records}
+    fingerprints = {record.artifact_sha256 for record in record_snapshot}
     if artifact_sha256 is None:
         if len(fingerprints) > 1:
             raise EvidenceError(
@@ -125,7 +130,7 @@ def evaluate_evidence(
         selected_fingerprint = artifact_sha256
 
     selected_records = (
-        record for record in records
+        record for record in record_snapshot
         if selected_fingerprint is not None
         and record.artifact_sha256 == selected_fingerprint
     )
