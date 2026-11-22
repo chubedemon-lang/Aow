@@ -7,6 +7,7 @@ and a reproducible command; synthetic-only tests never unlock protocol gates.
 from dataclasses import dataclass
 import hashlib
 import re
+import threading
 from urllib.parse import unquote
 
 
@@ -218,13 +219,20 @@ class Evidence:
 class EvidenceRegistry:
     def __init__(self):
         self._records = []
+        self._lock = threading.Lock()
 
     def add(self, record):
         if type(record) is not Evidence:
             raise EvidenceError("invalid record")
-        if record in self._records:
-            raise EvidenceError("duplicate evidence")
-        self._records.append(record)
+        with self._lock:
+            if record in self._records:
+                raise EvidenceError("duplicate evidence")
+            self._records.append(record)
+
+    def _snapshot_records(self):
+        """Return one immutable record snapshot under the registry lock."""
+        with self._lock:
+            return tuple(self._records)
 
     def summary(self, artifact_sha256=None):
         """Summarize one APK fingerprint; never silently combine builds.
@@ -232,23 +240,29 @@ class EvidenceRegistry:
         A registry may retain evidence for multiple APK versions. In that case
         callers must select one fingerprint explicitly, matching the readiness
         gates in protocol_evidence_gates. The summary is bookkeeping only.
+
+        One immutable snapshot is used for fingerprint selection and every
+        topic count. Records added after that snapshot are visible only to a
+        later summary, so concurrent additions cannot mix APK builds midway
+        through one result.
         """
-        fingerprints = {record.artifact_sha256 for record in self._records}
+        record_snapshot = self._snapshot_records()
+        fingerprints = {record.artifact_sha256 for record in record_snapshot}
         if artifact_sha256 is None:
             if len(fingerprints) > 1:
                 raise EvidenceError(
                     "records span multiple artifacts; select artifact_sha256 explicitly"
                 )
-            selected_records = self._records
+            selected_records = record_snapshot
         else:
             if type(artifact_sha256) is not str or not _SHA.fullmatch(artifact_sha256):
                 raise EvidenceError("artifact_sha256 must be lowercase SHA-256")
             if artifact_sha256 not in fingerprints:
                 raise EvidenceError("no evidence records match artifact_sha256")
-            selected_records = [
-                record for record in self._records
+            selected_records = tuple(
+                record for record in record_snapshot
                 if record.artifact_sha256 == artifact_sha256
-            ]
+            )
 
         return {
             topic: {
