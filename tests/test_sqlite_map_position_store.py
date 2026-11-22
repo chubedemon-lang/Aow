@@ -458,6 +458,105 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_constructor_rejects_map_tables_missing_check_constraints(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        try:
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.executescript(
+                """CREATE TABLE map_position_snapshots (
+                       character_id TEXT PRIMARY KEY,
+                       map_id INTEGER, x INTEGER, y INTEGER,
+                       revision INTEGER NOT NULL
+                   );
+                   CREATE TABLE map_position_mutations (
+                       request_id TEXT PRIMARY KEY,
+                       character_id TEXT NOT NULL,
+                       expected_revision INTEGER NOT NULL,
+                       payload_json TEXT NOT NULL,
+                       result_json TEXT NOT NULL,
+                       result_revision INTEGER NOT NULL,
+                       FOREIGN KEY(character_id)
+                           REFERENCES map_position_snapshots(character_id)
+                           ON DELETE CASCADE
+                   );
+                   CREATE INDEX map_position_mutations_character
+                       ON map_position_mutations(character_id, result_revision);"""
+            )
+            with self.assertRaisesRegex(
+                MapPositionStoreError, "missing required map-position CHECK"
+            ):
+                SqliteMapPositionStore(connection)
+            objects = connection.execute(
+                "SELECT type, name FROM sqlite_master "
+                "WHERE name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()
+            self.assertEqual(
+                objects,
+                [
+                    ("index", "map_position_mutations_character"),
+                    ("table", "map_position_mutations"),
+                    ("table", "map_position_snapshots"),
+                ],
+            )
+            self.assertFalse(connection.in_transaction)
+        finally:
+            connection.close()
+
+    def test_constructor_rejects_unexpected_map_position_triggers(self):
+        self.db.execute(
+            """CREATE TRIGGER mutate_map_revision
+               AFTER UPDATE ON map_position_snapshots
+               BEGIN
+                   UPDATE map_position_snapshots
+                   SET revision = revision + 1
+                   WHERE character_id = NEW.character_id;
+               END"""
+        )
+        self.db.commit()
+        connection = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None
+        )
+        try:
+            with self.assertRaisesRegex(
+                MapPositionStoreError, "unexpected map-position trigger"
+            ):
+                SqliteMapPositionStore(connection)
+            self.assertFalse(connection.in_transaction)
+            self.assertEqual(
+                connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='trigger'"
+                ).fetchall(),
+                [("mutate_map_revision",)],
+            )
+        finally:
+            connection.close()
+
+    def test_constructor_rejects_disabled_sqlite_check_constraints(self):
+        connection = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None
+        )
+        try:
+            connection.execute("PRAGMA ignore_check_constraints = ON")
+            self.assertEqual(
+                connection.execute(
+                    "PRAGMA ignore_check_constraints"
+                ).fetchone(),
+                (1,),
+            )
+            with self.assertRaisesRegex(
+                MapPositionStoreError, "CHECK constraints are disabled"
+            ):
+                SqliteMapPositionStore(connection)
+            self.assertFalse(connection.in_transaction)
+            self.assertEqual(
+                connection.execute(
+                    "PRAGMA ignore_check_constraints"
+                ).fetchone(),
+                (1,),
+            )
+        finally:
+            connection.close()
+
     def test_integrity_audit_streams_snapshot_and_mutation_rows(self):
         self.store.create("hero")
         self.store.enter("hero", "enter-stream", 0, 2, 10, -4)
