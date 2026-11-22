@@ -817,6 +817,8 @@ def _summarize_bucketed_lookup_shape(code):
     """
     if type(code) is not bytes or len(code) % 4:
         raise ValueError("bucketed lookup code must be aligned AArch64 bytes")
+    if len(code) > MAX_ENTRYPOINT_WINDOW_BYTES:
+        raise ValueError("bucketed lookup code exceeds the bounded method window")
     words = [
         struct.unpack_from("<I", code, offset)[0]
         for offset in range(0, len(code), 4)
