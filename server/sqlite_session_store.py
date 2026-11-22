@@ -77,7 +77,10 @@ class SqliteSessionStore:
             raise
 
     def _validate_schema(self, *, create_missing_index=True):
-        """Reject an incompatible pre-existing session table or expiry index."""
+        """Reject an incompatible table, disabled CHECKs, or expiry index."""
+        if self.db.execute("PRAGMA ignore_check_constraints").fetchone() != (0,):
+            raise ValueError("SQLite CHECK constraints are disabled")
+
         table = self.db.execute(
             "SELECT type FROM sqlite_master WHERE name='durable_sessions'"
         ).fetchone()
@@ -136,7 +139,71 @@ class SqliteSessionStore:
         )
         if indexed_columns != ("expires_at",):
             raise ValueError("incompatible durable session expiry index")
+        self._validate_persisted_constraints()
         return True
+
+    def _validate_persisted_constraints(self):
+        """Probe the persisted table DDL without writing to the application DB."""
+        definition = self.db.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type='table' AND name='durable_sessions'"
+        ).fetchone()
+        if definition is None or type(definition[0]) is not str:
+            raise ValueError("incompatible durable session table definition")
+
+        probe = sqlite3.connect(":memory:", isolation_level=None)
+        try:
+            try:
+                probe.execute(definition[0])
+                probe.execute(
+                    "INSERT INTO durable_sessions "
+                    "(token_hash, account_id, created_at, expires_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (b"p" * 32, 1, 1000.0, 1060.0),
+                )
+            except sqlite3.Error as exc:
+                raise ValueError(
+                    "durable session table definition cannot be probed"
+                ) from exc
+
+            insert = (
+                "INSERT INTO durable_sessions "
+                "(token_hash, account_id, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?)"
+            )
+
+            def require_check_rejection(parameters):
+                probe.execute("SAVEPOINT durable_session_check_probe")
+                try:
+                    probe.execute(insert, parameters)
+                except sqlite3.IntegrityError:
+                    probe.execute("ROLLBACK TO durable_session_check_probe")
+                    probe.execute("RELEASE durable_session_check_probe")
+                    return
+                except sqlite3.Error as exc:
+                    probe.execute("ROLLBACK TO durable_session_check_probe")
+                    probe.execute("RELEASE durable_session_check_probe")
+                    raise ValueError(
+                        "durable session CHECK constraint probe failed"
+                    ) from exc
+
+                probe.execute("ROLLBACK TO durable_session_check_probe")
+                probe.execute("RELEASE durable_session_check_probe")
+                raise ValueError(
+                    "missing required durable session CHECK constraint"
+                )
+
+            invalid_rows = (
+                ("x" * 32, 2, 1000.0, 1060.0),
+                (b"x" * 31, 3, 1000.0, 1060.0),
+                (b"a" * 32, 0, 1000.0, 1060.0),
+                (b"b" * 32, 4, 1000.0, 1000.0),
+                (b"c" * 32, 5, 1001.0, 1000.0),
+            )
+            for parameters in invalid_rows:
+                require_check_rejection(parameters)
+        finally:
+            probe.close()
 
     @staticmethod
     def _validate_ttl(ttl_seconds):
@@ -417,6 +484,10 @@ class SqliteSessionStore:
             self.db.execute(
                 "SELECT name FROM sqlite_master LIMIT 1"
             ).fetchone()
+            if self.db.execute(
+                "PRAGMA ignore_check_constraints"
+            ).fetchone() != (0,):
+                raise SessionError("invalid session store")
             if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
                 raise SessionError("invalid session store")
 
