@@ -56,10 +56,44 @@ class LengthFrameDecoder:
     def __init__(self, spec: FrameSpec):
         if type(spec) is not FrameSpec:
             raise TypeError("spec must be the exact FrameSpec type")
-        self.spec = spec
+        # frozen=True prevents ordinary assignment, but callers can still
+        # bypass it with object.__setattr__. Reconstruct the exact config so
+        # mutated or damaged specs are revalidated before any bytes are read.
+        try:
+            snapshot = FrameSpec(
+                spec.length_bytes,
+                spec.byteorder,
+                spec.includes_header,
+                spec.max_payload,
+                spec.max_chunk_bytes,
+                spec.max_frames_per_feed,
+            )
+        except AttributeError as exc:
+            raise TypeError("spec must be an intact FrameSpec") from exc
+        # Keep scalar copies internally. The public spec property below
+        # returns a detached value object, so mutating either the caller's
+        # original or a returned view cannot expand this decoder's limits.
+        self._length_bytes = snapshot.length_bytes
+        self._byteorder = snapshot.byteorder
+        self._includes_header = snapshot.includes_header
+        self._max_payload = snapshot.max_payload
+        self._max_chunk_bytes = snapshot.max_chunk_bytes
+        self._max_frames_per_feed = snapshot.max_frames_per_feed
         self._pending = bytearray()
         self._failed = False
         self._finished = False
+
+    @property
+    def spec(self):
+        """Return a detached copy of the validated configuration."""
+        return FrameSpec(
+            self._length_bytes,
+            self._byteorder,
+            self._includes_header,
+            self._max_payload,
+            self._max_chunk_bytes,
+            self._max_frames_per_feed,
+        )
 
     @property
     def pending_bytes(self):
@@ -74,32 +108,32 @@ class LengthFrameDecoder:
             raise TypeError("chunk must be the exact built-in bytes type")
         # Bound the amount copied into the decoder on any one call. A frame
         # larger than this limit may still arrive over multiple feed calls.
-        if len(chunk) > self.spec.max_chunk_bytes:
+        if len(chunk) > self._max_chunk_bytes:
             self._pending.clear()
             self._failed = True
             raise FrameDecodeError("input chunk exceeds maximum")
         # A complete frame may be followed by another frame in one feed.
         self._pending.extend(chunk)
         frames = []
-        header = self.spec.length_bytes
+        header = self._length_bytes
         while len(self._pending) >= header:
-            declared = int.from_bytes(self._pending[:header], self.spec.byteorder)
-            payload_size = declared - header if self.spec.includes_header else declared
-            if payload_size < 0 or payload_size > self.spec.max_payload:
+            declared = int.from_bytes(self._pending[:header], self._byteorder)
+            payload_size = declared - header if self._includes_header else declared
+            if payload_size < 0 or payload_size > self._max_payload:
                 self._pending.clear()
                 self._failed = True
                 raise FrameDecodeError("invalid declared frame size")
             total = header + payload_size
             if len(self._pending) < total:
                 break
-            if len(frames) >= self.spec.max_frames_per_feed:
+            if len(frames) >= self._max_frames_per_feed:
                 self._pending.clear()
                 self._failed = True
                 raise FrameDecodeError("frame count exceeds per-feed maximum")
             frames.append(bytes(self._pending[header:total]))
             del self._pending[:total]
         # A partial frame cannot exceed its validated maximum, plus header.
-        if len(self._pending) > self.spec.max_payload + header:
+        if len(self._pending) > self._max_payload + header:
             self._pending.clear()
             self._failed = True
             raise FrameDecodeError("buffer exceeded maximum")

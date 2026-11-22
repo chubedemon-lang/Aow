@@ -25,3 +25,17 @@ The decoder accepts only an exact `FrameSpec`, an exact built-in `str` for `byte
 ## End-of-stream semantics
 
 `finish()` is terminal. After a clean EOF, later `feed()` calls are rejected so bytes cannot be appended to a closed stream. If EOF arrives with a partial header or body, the decoder clears the pending bytes, poisons itself and rejects subsequent input. Construct a new decoder for a new connection. These are generic stream-lifecycle rules only; they do not describe the AOW client's transport.
+
+
+## Decoder configuration snapshot
+
+`LengthFrameDecoder` revalidates and copies the exact `FrameSpec` when it
+is constructed. Its parsing loop uses scalar values from that validated
+snapshot; the `spec` property returns a detached copy for inspection.
+Consequently, bypassing `frozen=True` with `object.__setattr__` on the
+original configuration or on a returned inspection copy cannot enlarge the
+decoder's payload, chunk, or frame-count limits. A damaged configuration is
+rejected before the decoder accepts input.
+
+This is generic configuration-integrity hardening for the synthetic decoder.
+It does not add an AOW header, frame size, or compatibility claim.
