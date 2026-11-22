@@ -66,17 +66,146 @@ class SqliteAuthRateLimiter:
         self.max_buckets = max_buckets
         self.clock = clock if clock is not None else time.time
         self.db.execute("PRAGMA busy_timeout = 10000")
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS auth_attempt_limits (
-                principal_digest BLOB PRIMARY KEY
-                    CHECK(typeof(principal_digest) = 'blob' AND length(principal_digest) = 32),
-                window_started_at REAL NOT NULL CHECK(window_started_at >= 0),
-                attempt_count INTEGER NOT NULL CHECK(attempt_count >= 0),
-                blocked_until REAL
-                    CHECK(blocked_until IS NULL OR blocked_until >= 0)
-            )"""
+        existing = self.db.execute(
+            "SELECT type FROM sqlite_master WHERE name='auth_attempt_limits'"
+        ).fetchone()
+        if existing == ("table",):
+            # Keep the common initialized path read-only. Schema validation
+            # uses a private in-memory probe and does not take the main DB's
+            # writer reservation.
+            self._validate_schema()
+            return
+        if existing is not None:
+            raise ValueError("incompatible authentication rate-limit table")
+
+        # Create a missing schema atomically and re-check after obtaining the
+        # write reservation in case another process initialized it meanwhile.
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.db.execute(
+                """CREATE TABLE IF NOT EXISTS auth_attempt_limits (
+                    principal_digest BLOB PRIMARY KEY
+                        CHECK(typeof(principal_digest) = 'blob' AND length(principal_digest) = 32),
+                    window_started_at REAL NOT NULL CHECK(window_started_at >= 0),
+                    attempt_count INTEGER NOT NULL CHECK(attempt_count >= 0),
+                    blocked_until REAL
+                        CHECK(blocked_until IS NULL OR blocked_until >= 0)
+                )"""
+            )
+            self._validate_schema()
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
+
+    def _validate_schema(self) -> None:
+        """Fail closed on incompatible columns, indexes, triggers, or CHECKs."""
+        table = self.db.execute(
+            "SELECT type, sql FROM sqlite_master WHERE name='auth_attempt_limits'"
+        ).fetchone()
+        if table is None or table[0] != "table" or type(table[1]) is not str:
+            raise ValueError("incompatible authentication rate-limit table")
+
+        expected_columns = [
+            ("principal_digest", "BLOB", 0, None, 1, 0),
+            ("window_started_at", "REAL", 1, None, 0, 0),
+            ("attempt_count", "INTEGER", 1, None, 0, 0),
+            ("blocked_until", "REAL", 0, None, 0, 0),
+        ]
+        rows = self.db.execute(
+            "PRAGMA table_xinfo(auth_attempt_limits)"
+        ).fetchall()
+        actual_columns = [
+            (
+                row[1],
+                str(row[2]).strip().upper(),
+                int(row[3]),
+                row[4],
+                int(row[5]),
+                int(row[6]),
+            )
+            for row in rows
+        ]
+        if actual_columns != expected_columns:
+            raise ValueError("incompatible authentication rate-limit schema")
+
+        indexes = self.db.execute(
+            "PRAGMA index_list(auth_attempt_limits)"
+        ).fetchall()
+        if (
+            len(indexes) != 1
+            or int(indexes[0][2]) != 1
+            or indexes[0][3] != "pk"
+            or int(indexes[0][4]) != 0
+        ):
+            raise ValueError("incompatible authentication rate-limit primary key")
+        indexed_columns = tuple(
+            row[2]
+            for row in self.db.execute(
+                "PRAGMA index_info(" + indexes[0][1] + ")"
+            ).fetchall()
         )
-        self.db.commit()
+        if indexed_columns != ("principal_digest",):
+            raise ValueError("incompatible authentication rate-limit primary key")
+
+        trigger = self.db.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='trigger' AND tbl_name='auth_attempt_limits' LIMIT 1"
+        ).fetchone()
+        if trigger is not None:
+            raise ValueError("incompatible authentication rate-limit triggers")
+
+        self._validate_schema_constraints(table[1])
+
+    @staticmethod
+    def _validate_schema_constraints(create_sql: str) -> None:
+        """Exercise required CHECK/NOT NULL/PRIMARY KEY rules on a private clone."""
+        probe = sqlite3.connect(":memory:")
+        try:
+            probe.execute(create_sql)
+            insert_sql = (
+                "INSERT INTO auth_attempt_limits "
+                "(principal_digest, window_started_at, attempt_count, blocked_until) "
+                "VALUES (?, ?, ?, ?)"
+            )
+            valid_digest = bytes(range(32))
+            probe.execute(insert_sql, (valid_digest, 0.0, 0, None))
+
+            invalid_rows = (
+                (None, 0.0, 0, None),
+                (b"x", 0.0, 0, None),
+                ("x" * 32, 0.0, 0, None),
+                (bytes([1]) * 32, -1.0, 0, None),
+                (bytes([2]) * 32, 0.0, -1, None),
+                (bytes([3]) * 32, 0.0, 0, -1.0),
+                (bytes([4]) * 32, None, 0, None),
+                (bytes([5]) * 32, 0.0, None, None),
+            )
+            for row in invalid_rows:
+                try:
+                    probe.execute(insert_sql, row)
+                except sqlite3.IntegrityError:
+                    continue
+                raise ValueError(
+                    "incompatible authentication rate-limit CHECK constraints"
+                )
+
+            try:
+                probe.execute(insert_sql, (valid_digest, 1.0, 0, None))
+            except sqlite3.IntegrityError:
+                pass
+            else:
+                raise ValueError(
+                    "incompatible authentication rate-limit primary key"
+                )
+        except ValueError:
+            raise
+        except sqlite3.DatabaseError:
+            raise ValueError(
+                "incompatible authentication rate-limit schema"
+            ) from None
+        finally:
+            probe.close()
 
     def _now(self) -> float:
         try:
