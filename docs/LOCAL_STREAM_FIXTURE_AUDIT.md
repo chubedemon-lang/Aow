@@ -108,9 +108,12 @@ The file reader rejects symlinks and non-regular files, uses a no-follow
 descriptor opened in non-blocking mode, checks that the file did not change
 while being read, and applies a bounded input size. Non-blocking mode is
 ignored for regular files but prevents a regular-file-to-FIFO path-swap race
-from hanging the CLI before the descriptor type check can reject the FIFO. The JSON parser rejects duplicate keys, unexpected
-fields, non-finite constants, and nesting deeper than 64 containers before
-constructing the decoded object graph. Invalid filesystem path values are
+from hanging the CLI before the descriptor type check can reject the FIFO. A lightweight lexical pre-scan rejects duplicate keys, unexpected
+fields, non-finite constants, nesting deeper than 64 containers, and more than
+100,000 JSON tokens before constructing the decoded object graph. The token
+budget accommodates the schema's maximum 4,096 chunks per direction and 8,192
+ordered I/O events while rejecting shallow, oversized arrays before `json.loads`
+can allocate their Python object graph. Invalid filesystem path values are
 normalized to a redacted fixture error rather than leaking an operating-system
 exception. Both stream directions are summarized under one aggregate 8 MiB
 resource budget. The remaining budget is enforced incrementally before each
