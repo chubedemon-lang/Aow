@@ -248,7 +248,7 @@ class OfflineFrameProbeTests(unittest.TestCase):
 
     def test_decoder_rejects_spec_with_deleted_configuration(self):
         spec = FrameSpec(1, "big")
-        object.__delattr__(spec, "max_chunk_bytes")
+        object.__delattr__(spec, "length_bytes")
 
         with self.assertRaisesRegex(TypeError, "intact FrameSpec"):
             LengthFrameDecoder(spec)
