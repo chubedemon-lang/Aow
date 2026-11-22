@@ -1,3 +1,4 @@
+import threading
 import unittest
 
 from server.protocol_evidence_registry import Evidence, EvidenceError, EvidenceRegistry
@@ -210,6 +211,59 @@ class EvidenceRegistryTests(unittest.TestCase):
         self.assertEqual(first["framing"], {"observations": 0, "verified": 0})
         self.assertEqual(second["transport"], {"observations": 0, "verified": 0})
         self.assertEqual(second["framing"], {"observations": 1, "verified": 1})
+
+    def test_summary_uses_one_snapshot_during_concurrent_registry_updates(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence(
+            "transport", self.sha, "first build observation", "il2cpp_offline"
+        ))
+        other_sha = EvidenceRegistry.digest(b"concurrent second APK build")
+        second_build = Evidence(
+            "framing", other_sha, "second build observation", "il2cpp_offline"
+        )
+
+        snapshot_ready = threading.Event()
+        resume_summary = threading.Event()
+        original_snapshot = registry._snapshot_records
+
+        def paused_snapshot():
+            snapshot = original_snapshot()
+            snapshot_ready.set()
+            if not resume_summary.wait(timeout=2):
+                raise AssertionError("summary snapshot was not released")
+            return snapshot
+
+        registry._snapshot_records = paused_snapshot
+        results = []
+        errors = []
+
+        def summarize():
+            try:
+                results.append(registry.summary())
+            except BaseException as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(target=summarize)
+        worker.start()
+        try:
+            self.assertTrue(snapshot_ready.wait(timeout=2))
+            registry.add(second_build)
+        finally:
+            resume_summary.set()
+            worker.join(timeout=2)
+            registry._snapshot_records = original_snapshot
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(
+            results[0]["transport"], {"observations": 1, "verified": 0}
+        )
+        self.assertEqual(
+            results[0]["framing"], {"observations": 0, "verified": 0}
+        )
+        with self.assertRaisesRegex(EvidenceError, "multiple artifacts"):
+            registry.summary()
 
     def test_summary_validates_explicit_artifact_selector(self):
         registry = EvidenceRegistry()
