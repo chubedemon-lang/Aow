@@ -995,3 +995,11 @@ than joining the instructions that follow. This tightens static candidate
 provenance only: it does not add APK observations, identify a managed method or
 collection owner, establish a wire message ID, or verify framing, compression,
 handshake, login, or unchanged-APK compatibility.
+
+
+## Receiver lookup reachability gate — 2026-11-22
+
+- The bucketed-lookup candidate matcher now starts only at instruction indexes reachable from the bounded method-window entry.
+- Direct in-window `B` edges are followed; conditional branches retain both target and fallthrough; `BL`/`BLR` retain local fallthrough; `BR` and `RET` terminate the local walk.
+- This is conservative bounded reachability, not predicate evaluation or symbolic execution. It does not identify a managed method, collection owner, wire message ID, or runtime-selected branch.
+- Synthetic regressions verify that a candidate block reached by a direct branch remains analyzable and an identical decoy skipped by the entry branch is rejected.
