@@ -70,3 +70,6 @@ A regression test uses a SQLite connection/cursor guard that raises if either ma
 ## Persisted constraint enforcement
 
 Construction fails closed if SQLite has disabled CHECK enforcement on the supplied connection, if either owned table has an attached trigger, or if the persisted table definitions do not reject representative invalid rows. The store replays the two stored CREATE TABLE definitions in an isolated in-memory database and probes character/request identifier bounds, revision bounds, map/coordinate bounds, and the all-null-or-fully-placed snapshot invariant. The probe never writes to the application database. This protects the synthetic persistence contract from a same-column schema that silently omitted CHECK constraints or added trigger side effects; it does not establish AOW map semantics or protocol compatibility.
+
+
+The placed-state CHECK explicitly requires map_id, x, and y to be non-NULL before applying numeric bounds. SQLite treats a CHECK expression that evaluates to NULL as passing, so range comparisons alone do not reject partially NULL coordinate tuples. The in-memory schema probe includes each partial-NULL shape as a negative case.
