@@ -377,5 +377,86 @@ class SqliteAuthRateLimiterTests(unittest.TestCase):
             sqlite3.Connection.close(connection)
 
 
+    def test_existing_valid_schema_is_checked_without_a_database_write(self):
+        before_changes = self.db.total_changes
+        before_schema = self.db.execute(
+            "SELECT sql FROM sqlite_master WHERE name='auth_attempt_limits'"
+        ).fetchone()[0]
+
+        SqliteAuthRateLimiter(self.db, self.secret)
+
+        after_schema = self.db.execute(
+            "SELECT sql FROM sqlite_master WHERE name='auth_attempt_limits'"
+        ).fetchone()[0]
+        self.assertEqual(after_schema, before_schema)
+        self.assertEqual(self.db.total_changes, before_changes)
+        self.assertFalse(self.db.in_transaction)
+
+    def test_constructor_rejects_existing_schema_missing_required_constraints(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.execute(
+            """CREATE TABLE auth_attempt_limits (
+                principal_digest BLOB PRIMARY KEY,
+                window_started_at REAL NOT NULL,
+                attempt_count INTEGER NOT NULL,
+                blocked_until REAL
+            )"""
+        )
+        before_schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name='auth_attempt_limits'"
+        ).fetchone()[0]
+
+        with self.assertRaisesRegex(
+            ValueError, "incompatible authentication rate-limit"
+        ):
+            SqliteAuthRateLimiter(connection, self.secret)
+
+        after_schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name='auth_attempt_limits'"
+        ).fetchone()[0]
+        self.assertEqual(after_schema, before_schema)
+        self.assertEqual(
+            connection.execute(
+                "SELECT count(*) FROM auth_attempt_limits"
+            ).fetchone()[0],
+            0,
+        )
+        self.assertFalse(connection.in_transaction)
+
+    def test_constructor_rejects_views_and_triggers_using_the_table_name(self):
+        view_connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(view_connection.close)
+        view_connection.execute(
+            "CREATE VIEW auth_attempt_limits AS SELECT 1 AS placeholder"
+        )
+        with self.assertRaisesRegex(ValueError, "incompatible authentication rate-limit"):
+            SqliteAuthRateLimiter(view_connection, self.secret)
+        self.assertFalse(view_connection.in_transaction)
+
+        trigger_connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(trigger_connection.close)
+        SqliteAuthRateLimiter(trigger_connection, self.secret)
+        trigger_connection.execute(
+            "CREATE TABLE auth_attempt_audit (event TEXT NOT NULL)"
+        )
+        trigger_connection.execute(
+            """CREATE TRIGGER auth_attempt_limits_side_effect
+               AFTER INSERT ON auth_attempt_limits
+               BEGIN
+                   INSERT INTO auth_attempt_audit(event) VALUES ('insert');
+               END"""
+        )
+        with self.assertRaisesRegex(ValueError, "incompatible authentication rate-limit triggers"):
+            SqliteAuthRateLimiter(trigger_connection, self.secret)
+        self.assertEqual(
+            trigger_connection.execute(
+                "SELECT count(*) FROM auth_attempt_audit"
+            ).fetchone()[0],
+            0,
+        )
+        self.assertFalse(trigger_connection.in_transaction)
+
+
 if __name__ == "__main__":
     unittest.main()
