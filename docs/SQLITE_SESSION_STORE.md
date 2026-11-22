@@ -143,3 +143,18 @@ the outer transaction.
 
 Rotation is a generic synthetic session-store capability. It does not define
 an AOW reconnect, refresh, session-restore packet, or APK login behavior.
+
+
+## Persisted CHECK-constraint enforcement
+
+Construction rejects a connection when `PRAGMA ignore_check_constraints` is
+enabled. It also replays the persisted `durable_sessions` CREATE TABLE
+statement in a separate in-memory SQLite database and verifies that the
+required token-digest type/length, positive account ID, and expiry-order
+constraints reject representative invalid rows. The probe never inserts into
+the application database. The read-only integrity audit rechecks the
+connection-level pragma so a caller cannot silently disable CHECK enforcement
+after constructing the store and still receive a clean audit result.
+
+This is a synthetic persistence invariant. It does not validate an AOW login
+message, session-restore packet, or original-client compatibility.
