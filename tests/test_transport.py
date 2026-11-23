@@ -390,5 +390,62 @@ class EvidenceGatedTransportTests(unittest.TestCase):
             adapter.receive(bytearray(b"ping"))
 
 
+    def test_adapter_uses_detached_evidence_objects_after_gate_evaluation(self):
+        records = [
+            authorized_evidence(stage)
+            for stage in ("transport", "framing", "serialization")
+        ]
+        approvals = list(approved_digests(records))
+        original_evaluate = transport_module.evaluate_evidence
+
+        def evaluate_then_mutate(record_snapshot, **kwargs):
+            result = original_evaluate(record_snapshot, **kwargs)
+            # Mutate the caller-owned frozen record after the gate has
+            # evaluated its own detached copies but before adapter retention.
+            object.__setattr__(records[0], "topic", "login")
+            object.__setattr__(records[0], "verified", False)
+            return result
+
+        with patch(
+            "server.transport.evaluate_evidence",
+            side_effect=evaluate_then_mutate,
+        ):
+            adapter = EvidenceGatedTransportAdapter(
+                records=records,
+                artifact_sha256="a" * 64,
+                approved_evidence_digests=approvals,
+                decode=lambda raw: raw,
+                encode=lambda message: message,
+            )
+
+        self.assertEqual(
+            tuple(record.topic for record in adapter.evidence_records),
+            ("transport", "framing", "serialization"),
+        )
+        self.assertEqual(
+            tuple(evidence_record_digest(record) for record in adapter.evidence_records),
+            tuple(approvals),
+        )
+        self.assertTrue(all(result.ready for result in adapter.gate_results))
+        self.assertEqual(records[0].topic, "login")
+
+    def test_adapter_evidence_and_gate_properties_return_detached_values(self):
+        records = [
+            authorized_evidence(stage)
+            for stage in ("transport", "framing", "serialization")
+        ]
+        adapter = self.make_adapter(records)
+
+        evidence_view = adapter.evidence_records
+        object.__setattr__(evidence_view[0], "topic", "login")
+        object.__setattr__(evidence_view[0], "verified", False)
+        gate_view = adapter.gate_results
+        object.__setattr__(gate_view[0], "ready", False)
+
+        self.assertEqual(adapter.evidence_records[0].topic, "transport")
+        self.assertTrue(adapter.evidence_records[0].verified)
+        self.assertTrue(adapter.gate_results[0].ready)
+
+
 if __name__ == "__main__":
     unittest.main()
