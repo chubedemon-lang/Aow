@@ -27,6 +27,9 @@ result. Only occurrences whose status is
 The bounded intraprocedural pass recognizes:
 
 - ADR and ADRP address formation.
+- MOVZ and MOVN exact immediate construction, plus MOVK replacement of one
+  16-bit lane only when the prior destination value is already tracked. W-form
+  writes are zero-extended; an untracked MOVK base never creates an address.
 - 64-bit ADD/SUB immediate address adjustment.
 - Unshifted 64-bit MOV-register copies that preserve the full value.
 - CSEL preserves FieldInfo provenance only when both possible source registers
