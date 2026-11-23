@@ -54,7 +54,7 @@ outcomes are considered. State crosses only a unique forward predecessor;
 joins and backedges start unknown. Calls clobber caller-saved registers.
 Unknown instructions and unsupported transformations clear tracked state.
 A CSEL with differing, missing, or mixed FieldRef coordinates drops the
-ambiguous result and increments dedicated merge-drop counters; a same-coordinate
+ambiguous result and increments dedicated source-unmerge counters; a same-coordinate
 selection is retained, but W-form results remain truncated. Ambiguous
 direct-call targets are not attributed. When an unsupported instruction conservatively clears tracked state, the report counts the drop event and the exact/truncated FieldInfo registers discarded. This distinguishes unsupported data-flow from a path where no FieldInfo provenance was present.
 
@@ -126,7 +126,7 @@ The analyzer also models the CSEL alias conservatively: both source operands
 must carry the same FieldRef coordinate before that coordinate is retained.
 A W-form selection or any selection involving already-truncated input remains
 truncated. If the two source coordinates differ or one source lacks provenance,
-the destination is cleared and the discarded exact/truncated source-register
+the destination is cleared and the unmerged exact/truncated source-register
 counts are reported separately. CSEL conditions are decoded only as instruction
 structure; their runtime predicates are not evaluated.
 
