@@ -105,6 +105,49 @@ class SqliteMapCapacityStoreTests(unittest.TestCase):
             self.capacity.verify_integrity()
         self.assertEqual(self.capacity.members(12), frozenset({"alpha"}))
 
+    def test_constructor_rejects_non_enforcing_check_constraints(self):
+        for weak_table in ("map_capacity_limits", "map_capacity_members"):
+            with self.subTest(weak_table=weak_table):
+                self.db.execute("DROP TABLE map_capacity_members")
+                self.db.execute("DROP TABLE map_capacity_limits")
+
+                weak = weak_table == "map_capacity_limits"
+                map_id_check = "CHECK(1)" if weak else (
+                    "CHECK(map_id BETWEEN 0 AND 2147483647)"
+                )
+                capacity_check = "CHECK(1)" if weak else (
+                    "CHECK(capacity BETWEEN 1 AND 100000)"
+                )
+                self.db.execute(
+                    "CREATE TABLE map_capacity_limits ("
+                    "map_id INTEGER PRIMARY KEY " + map_id_check + ", "
+                    "capacity INTEGER NOT NULL " + capacity_check + ")"
+                )
+
+                weak = weak_table == "map_capacity_members"
+                character_check = "CHECK(1)" if weak else (
+                    "CHECK(length(character_id) BETWEEN 1 AND 128)"
+                )
+                member_map_check = "CHECK(1)" if weak else (
+                    "CHECK(map_id BETWEEN 0 AND 2147483647)"
+                )
+                self.db.execute(
+                    "CREATE TABLE map_capacity_members ("
+                    "character_id TEXT PRIMARY KEY " + character_check + ", "
+                    "map_id INTEGER NOT NULL " + member_map_check + ", "
+                    "FOREIGN KEY(character_id) "
+                    "REFERENCES map_position_snapshots(character_id) "
+                    "ON DELETE CASCADE)"
+                )
+                self.db.execute(
+                    "CREATE INDEX map_capacity_members_map "
+                    "ON map_capacity_members(map_id, character_id)"
+                )
+
+                with self.assertRaises(MapCapacityStoreError):
+                    SqliteMapCapacityStore(self.db)
+                self.assertFalse(self.db.in_transaction)
+
     def test_two_connections_enforce_one_slot_across_writers(self):
         self.capacity.configure_map(11, 1)
         barrier = threading.Barrier(2)
