@@ -325,6 +325,13 @@ class SqliteMapPositionStore:
         finally:
             probe.close()
 
+    def _validate_runtime_constraints(self):
+        """Fail closed if SQLite constraint enforcement changed after bootstrap."""
+        if self.db.execute("PRAGMA foreign_keys").fetchone() != (1,):
+            raise MapPositionStoreError("SQLite foreign keys are disabled")
+        if self.db.execute("PRAGMA ignore_check_constraints").fetchone() != (0,):
+            raise MapPositionStoreError("SQLite CHECK constraints are disabled")
+
     @staticmethod
     def _character_id(value):
         if (type(value) is not str or not value
@@ -425,6 +432,7 @@ class SqliteMapPositionStore:
             raise ValueError("connection must not have an active transaction")
         self.db.execute("BEGIN")
         try:
+            self._validate_runtime_constraints()
             return self._verify_integrity_snapshot()
         finally:
             if self.db.in_transaction:
@@ -558,6 +566,7 @@ class SqliteMapPositionStore:
                 raise ValueError("invalid map-position savepoint")
             self.db.execute(f"SAVEPOINT {savepoint_name}")
         try:
+            self._validate_runtime_constraints()
             yield
             if owns_transaction:
                 self.db.commit()
