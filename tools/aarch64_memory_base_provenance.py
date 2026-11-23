@@ -114,17 +114,22 @@ def _decode_sub_immediate(word):
 
 
 def _validate_relocation_targets(relocation_targets):
+    """Validate and detach the caller-owned relocation map for one analysis pass."""
     if relocation_targets is None:
         return {}
     if type(relocation_targets) is not dict:
         raise ValueError("relocation_targets must be an exact dict")
-    if len(relocation_targets) > _MAX_RELOCATION_TARGETS:
+    # Snapshot the exact built-in dict before validation. Retaining the caller's
+    # mapping would let later mutation change which pointer a literal load is
+    # attributed to while an analysis is in progress.
+    snapshot = relocation_targets.copy()
+    if len(snapshot) > _MAX_RELOCATION_TARGETS:
         raise ValueError("relocation target map exceeds the analysis limit")
-    for slot, target in relocation_targets.items():
+    for slot, target in snapshot.items():
         if (type(slot) is not int or not 0 <= slot <= _U64_MAX
                 or type(target) is not int or not 0 <= target <= _U64_MAX):
             raise ValueError("relocation targets must map unsigned 64-bit integers")
-    return relocation_targets
+    return snapshot
 
 
 def _validate_known_static_cells(known_static_cells):
