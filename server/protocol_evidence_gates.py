@@ -43,7 +43,7 @@ def evidence_record_digest(record: Evidence) -> str:
     This stable digest binds approval to one exact record. It is not a
     signature and cannot authenticate the referenced fixture's origin.
     """
-    record = _validated_evidence_copy(record)
+    record = snapshot_evidence_records((record,))[0]
     payload = {
         "artifact_sha256": record.artifact_sha256,
         "method": record.method,
