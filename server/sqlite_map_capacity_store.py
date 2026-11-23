@@ -322,25 +322,27 @@ class SqliteMapCapacityStore:
 
     def capacity(self, map_id: int):
         map_id = self._map_id(map_id)
-        row = self.db.execute(
-            "SELECT capacity FROM map_capacity_limits WHERE map_id=?",
-            (map_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        if type(row[0]) is not int or not 1 <= row[0] <= _MAX_CAPACITY:
-            raise MapCapacityStoreError("invalid stored map capacity")
-        return row[0]
+        with self._lock:
+            row = self.db.execute(
+                "SELECT capacity FROM map_capacity_limits WHERE map_id=?",
+                (map_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            if type(row[0]) is not int or not 1 <= row[0] <= _MAX_CAPACITY:
+                raise MapCapacityStoreError("invalid stored map capacity")
+            return row[0]
 
     def members(self, map_id: int):
         map_id = self._map_id(map_id)
-        return frozenset(
-            self._character_id(row[0]) for row in self.db.execute(
-                "SELECT character_id FROM map_capacity_members "
-                "WHERE map_id=? ORDER BY character_id",
-                (map_id,),
-            ).fetchall()
-        )
+        with self._lock:
+            return frozenset(
+                self._character_id(row[0]) for row in self.db.execute(
+                    "SELECT character_id FROM map_capacity_members "
+                    "WHERE map_id=? ORDER BY character_id",
+                    (map_id,),
+                ).fetchall()
+            )
 
     def verify_integrity(self):
         """Check SQLite integrity and agreement with the position projection.
@@ -348,46 +350,47 @@ class SqliteMapCapacityStore:
         The connection must be idle. This is diagnostic only; it never repairs
         rows and it does not authenticate ownership or infer AOW map semantics.
         """
-        if self.db.in_transaction:
-            raise ValueError("connection must not have an active transaction")
-        self.db.execute("BEGIN")
-        try:
-            if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
-                raise MapCapacityStoreError("SQLite quick_check failed")
-            if self.db.execute("PRAGMA foreign_key_check").fetchall():
-                raise MapCapacityStoreError("map-capacity foreign key check failed")
-            mismatched = self.db.execute(
-                """SELECT count(*) FROM map_capacity_members m
-                   LEFT JOIN map_position_snapshots p
-                     ON p.character_id=m.character_id
-                   WHERE p.character_id IS NULL OR p.map_id IS NULL
-                      OR p.map_id<>m.map_id"""
-            ).fetchone()[0]
-            missing = self.db.execute(
-                """SELECT count(*) FROM map_position_snapshots p
-                   JOIN map_capacity_limits l ON l.map_id=p.map_id
-                   LEFT JOIN map_capacity_members m
-                     ON m.character_id=p.character_id AND m.map_id=p.map_id
-                   WHERE p.map_id IS NOT NULL AND m.character_id IS NULL"""
-            ).fetchone()[0]
-            over_capacity = self.db.execute(
-                """SELECT count(*) FROM (
-                       SELECT m.map_id, count(*) AS occupants, l.capacity
-                       FROM map_capacity_members m
-                       JOIN map_capacity_limits l ON l.map_id=m.map_id
-                       GROUP BY m.map_id
-                       HAVING occupants>l.capacity
-                   )"""
-            ).fetchone()[0]
-            if mismatched or missing or over_capacity:
-                raise MapCapacityStoreError("map-capacity projection is inconsistent")
-            members = self.db.execute(
-                "SELECT count(*) FROM map_capacity_members"
-            ).fetchone()[0]
-            maps = self.db.execute(
-                "SELECT count(*) FROM map_capacity_limits"
-            ).fetchone()[0]
-            return {"members": members, "configured_maps": maps}
-        finally:
+        with self._lock:
             if self.db.in_transaction:
-                self.db.rollback()
+                raise ValueError("connection must not have an active transaction")
+            self.db.execute("BEGIN")
+            try:
+                if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                    raise MapCapacityStoreError("SQLite quick_check failed")
+                if self.db.execute("PRAGMA foreign_key_check").fetchall():
+                    raise MapCapacityStoreError("map-capacity foreign key check failed")
+                mismatched = self.db.execute(
+                    """SELECT count(*) FROM map_capacity_members m
+                       LEFT JOIN map_position_snapshots p
+                         ON p.character_id=m.character_id
+                       WHERE p.character_id IS NULL OR p.map_id IS NULL
+                          OR p.map_id<>m.map_id"""
+                ).fetchone()[0]
+                missing = self.db.execute(
+                    """SELECT count(*) FROM map_position_snapshots p
+                       JOIN map_capacity_limits l ON l.map_id=p.map_id
+                       LEFT JOIN map_capacity_members m
+                         ON m.character_id=p.character_id AND m.map_id=p.map_id
+                       WHERE p.map_id IS NOT NULL AND m.character_id IS NULL"""
+                ).fetchone()[0]
+                over_capacity = self.db.execute(
+                    """SELECT count(*) FROM (
+                           SELECT m.map_id, count(*) AS occupants, l.capacity
+                           FROM map_capacity_members m
+                           JOIN map_capacity_limits l ON l.map_id=m.map_id
+                           GROUP BY m.map_id
+                           HAVING occupants>l.capacity
+                       )"""
+                ).fetchone()[0]
+                if mismatched or missing or over_capacity:
+                    raise MapCapacityStoreError("map-capacity projection is inconsistent")
+                members = self.db.execute(
+                    "SELECT count(*) FROM map_capacity_members"
+                ).fetchone()[0]
+                maps = self.db.execute(
+                    "SELECT count(*) FROM map_capacity_limits"
+                ).fetchone()[0]
+                return {"members": members, "configured_maps": maps}
+            finally:
+                if self.db.in_transaction:
+                    self.db.rollback()
