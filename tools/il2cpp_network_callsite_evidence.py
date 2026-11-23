@@ -39,6 +39,9 @@ from tools.aarch64_memory_access_evidence import (
 from tools.aarch64_memory_base_provenance import (
     summarize_control_flow_memory_base_provenance,
 )
+from tools.aarch64_field_info_call_arguments import (
+    summarize_field_info_call_arguments,
+)
 from tools.aarch64_delegate_target_evidence import (
     summarize_delegate_constructor_argument_shape,
     summarize_delegate_method_pointer_arguments,
@@ -258,6 +261,21 @@ def inspect_bytes(
         )
         if field_info_tokens else None
     )
+    # Keep cell addresses private to this offline pass. Occurrence order matches
+    # the sorted static FieldInfo usage cells used to build field_info_tokens.
+    field_info_cell_references = {}
+    if field_info_correlation is not None:
+        for address, reference in zip(
+            sorted(static_field_info_values),
+            field_info_correlation["references"],
+        ):
+            if reference["status"] == "field_ref_coordinate_resolved":
+                field_info_cell_references[address] = (
+                    reference["position"],
+                    reference["field_ref_index"],
+                    reference["type_index"],
+                    reference["field_index_within_type"],
+                )
     encoded_values = set(static_memory_values.values())
     image_starts = {
         image["name"]: image["method_start"]
@@ -370,6 +388,15 @@ def inspect_bytes(
                     argument_registers=(2,),
                     static_memory_values=static_memory_values,
                     encoded_method_usage_targets=encoded_method_usage_targets,
+                )
+            ),
+            "field_info_call_argument_provenance": (
+                summarize_field_info_call_arguments(
+                    code,
+                    target,
+                    method_targets,
+                    field_info_cell_references,
+                    relocation_targets=relative_relocation_targets,
                 )
             ),
         }

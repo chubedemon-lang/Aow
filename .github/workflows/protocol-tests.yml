@@ -27,6 +27,9 @@ on:
       - 'tests/test_aarch64_memory_access_evidence.py'
       - 'tools/aarch64_memory_base_provenance.py'
       - 'tests/test_aarch64_memory_base_provenance.py'
+      - 'tools/aarch64_field_info_call_arguments.py'
+      - 'tests/test_aarch64_field_info_call_arguments.py'
+      - 'docs/AARCH64_FIELD_INFO_CALL_ARGUMENTS.md'
       - 'tools/il2cpp_network_callsite_evidence.py'
       - 'docs/AARCH64_MEMORY_ACCESS_EVIDENCE.md'
       - 'docs/AARCH64_MEMORY_BASE_PROVENANCE.md'
@@ -187,6 +190,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_aarch64_memory_access_evidence.py' -v
       - name: AArch64 memory base provenance tests (synthetic code only)
         run: python -m unittest discover -s tests -p 'test_aarch64_memory_base_provenance.py' -v
+      - name: AArch64 FieldInfo call argument provenance tests (synthetic code only)
+        run: python -m unittest discover -s tests -p 'test_aarch64_field_info_call_arguments.py' -v
       - name: AArch64 delegate method-pointer tests (synthetic code only)
         run: python -m unittest discover -s tests -p 'test_aarch64_delegate_target_evidence.py' -v
       - name: Compile offline analysis and evidence tools
@@ -204,6 +209,7 @@ jobs:
             tools/aarch64_call_return_evidence.py \
             tools/aarch64_memory_access_evidence.py \
             tools/aarch64_memory_base_provenance.py \
+            tools/aarch64_field_info_call_arguments.py \
             tools/aarch64_delegate_target_evidence.py \
             tools/aarch64_eh_frame_index.py \
             server/aow_primitive_codec.py \

@@ -1,0 +1,380 @@
+"""Trace resolved static FieldInfo cells into direct-call argument registers.
+
+This bounded offline AArch64 analysis correlates only exact 64-bit loads from
+operator-supplied, relocation-backed FieldInfo usage cells with x0-x7 at a
+uniquely resolved direct BL. It emits FieldRef coordinates, never addresses,
+tokens, instructions, APK bytes, or packet data.
+
+It is structural static evidence only. Both conditional outcomes are assumed;
+joins, backedges, unknown instructions, calls, and unsupported transformations
+drop provenance. It does not prove runtime execution, managed field identity,
+packet-field identity, or wire semantics.
+"""
+import struct
+
+from tools.aarch64_call_argument_evidence import (
+    _CALLER_SAVED_REGISTERS,
+    _build_control_flow_blocks,
+    _decode_add_immediate,
+    _decode_bl_target,
+    _decode_conditional_branch_target,
+    _decode_move_register,
+    _decode_unconditional_branch_target,
+    _is_indirect_branch,
+    _is_indirect_call,
+    _method_name_from_label,
+    _ordered_method_labels,
+)
+from tools.aarch64_memory_access_evidence import decode_integer_memory_access
+from tools.aarch64_memory_base_provenance import (
+    _U64_MAX,
+    _decode_adr,
+    _decode_adrp,
+    _decode_ldr_literal,
+    _decode_sub_immediate,
+    _validate_relocation_targets,
+)
+
+_MAX_CODE_WINDOW_BYTES = 64 * 1024
+_MAX_FIELD_INFO_CELLS = 200_000
+_MAX_METHOD_TARGETS = 200_000
+_MAX_REPORTED_CALLS = 512
+_NOP = 0xD503201F
+
+
+def _validate_field_info_cell_references(value):
+    """Validate address -> (occurrence, FieldRef index, TypeIndex, local index)."""
+    if type(value) is not dict:
+        raise ValueError("field_info_cell_references must be an exact dict")
+    if len(value) > _MAX_FIELD_INFO_CELLS:
+        raise ValueError("FieldInfo cell map exceeds the analysis limit")
+    result = {}
+    for address, reference in value.items():
+        if type(address) is not int or not 0 <= address <= _U64_MAX - 7:
+            raise ValueError("FieldInfo cell addresses must be unsigned 64-bit ranges")
+        if type(reference) is not tuple or len(reference) != 4:
+            raise ValueError("FieldInfo cell references must be exact four-integer tuples")
+        if any(
+            type(item) is not int or item < 0 or item > 0x7FFFFFFF
+            for item in reference
+        ):
+            raise ValueError("FieldInfo reference coordinates must be non-negative 31-bit integers")
+        result[address] = reference
+    return result
+
+
+def _validate_method_targets(value):
+    if type(value) is not dict:
+        raise ValueError("method_targets must be an exact dict")
+    if len(value) > _MAX_METHOD_TARGETS:
+        raise ValueError("method target map exceeds the analysis limit")
+    for address, labels in value.items():
+        if (
+            type(address) is not int
+            or not 0 <= address <= _U64_MAX
+            or address % 4
+        ):
+            raise ValueError("method target addresses must be aligned unsigned 64-bit integers")
+        if type(labels) not in (list, tuple) or not labels:
+            raise ValueError("method target labels must be non-empty built-in lists or tuples")
+        if any(_method_name_from_label(label) is None for label in labels):
+            raise ValueError("method target labels must use canonical metadata /pN suffixes")
+    return value
+
+
+def _reference_report(reference):
+    position, field_ref_index, type_index, local_field_index = reference
+    return {
+        "usage_occurrence_position": position,
+        "field_ref_index": field_ref_index,
+        "type_index": type_index,
+        "field_index_within_type": local_field_index,
+    }
+
+
+def summarize_field_info_call_arguments(
+    code,
+    start_va,
+    method_targets,
+    field_info_cell_references,
+    *,
+    relocation_targets=None,
+    max_observations=128,
+):
+    """Report FieldInfo-derived values present in x0-x7 at resolved direct BLs.
+
+    A value is tracked only after an exact 64-bit load from a supplied static
+    FieldInfo usage cell. It may then cross an unshifted 32/64-bit MOV-register
+    alias. Address formation is limited to ADR/ADRP, 64-bit ADD/SUB immediate,
+    MOV-register, and relocation-backed LDR-literal. No arithmetic is applied
+    to FieldInfo values. State crosses only a unique forward CFG predecessor.
+    """
+    if type(code) is not bytes or len(code) % 4:
+        raise ValueError("AArch64 code window must be exact bytes and word aligned")
+    if len(code) > _MAX_CODE_WINDOW_BYTES:
+        raise ValueError("AArch64 code window exceeds the 64 KiB analysis limit")
+    if (
+        type(start_va) is not int
+        or not 0 <= start_va <= _U64_MAX
+        or start_va % 4
+    ):
+        raise ValueError("start_va must be an aligned unsigned 64-bit address")
+    if code and start_va > _U64_MAX - (len(code) - 4):
+        raise ValueError("AArch64 code window exceeds the unsigned 64-bit address space")
+    if (
+        type(max_observations) is not int
+        or not 1 <= max_observations <= _MAX_REPORTED_CALLS
+    ):
+        raise ValueError("max_observations must be an integer in range 1..512")
+
+    targets = _validate_method_targets(method_targets)
+    cells = _validate_field_info_cell_references(field_info_cell_references)
+    relocations = _validate_relocation_targets(relocation_targets)
+
+    instruction_count = len(code) // 4
+    words = list(struct.unpack("<" + "I" * instruction_count, code)) if code else []
+    blocks, successors = _build_control_flow_blocks(words, start_va)
+
+    reachable = set()
+    pending = [0] if blocks else []
+    while pending:
+        block_index = pending.pop()
+        if block_index in reachable:
+            continue
+        reachable.add(block_index)
+        pending.extend(successors[block_index] - reachable)
+
+    predecessors = [set() for _ in blocks]
+    for source in reachable:
+        for destination in successors[source]:
+            if destination in reachable:
+                predecessors[destination].add(source)
+
+    call_ordinals = {}
+    total_direct_calls = 0
+    for index, word in enumerate(words):
+        if _decode_bl_target(word, start_va + index * 4) is not None:
+            call_ordinals[index] = total_direct_calls
+            total_direct_calls += 1
+
+    outgoing_addresses = {}
+    outgoing_field_refs = {}
+    observations = []
+    observation_count = 0
+    reachable_direct_calls = 0
+
+    for block_index, (block_start, block_end) in enumerate(blocks):
+        if block_index not in reachable:
+            continue
+        incoming = predecessors[block_index]
+        if block_index == 0 or len(incoming) != 1:
+            addresses = {}
+            field_refs = {}
+        else:
+            predecessor = next(iter(incoming))
+            if (
+                blocks[predecessor][0] < block_start
+                and predecessor in outgoing_addresses
+            ):
+                addresses = dict(outgoing_addresses[predecessor])
+                field_refs = dict(outgoing_field_refs[predecessor])
+            else:
+                addresses = {}
+                field_refs = {}
+
+        for instruction_index in range(block_start, block_end):
+            word = words[instruction_index]
+            pc = start_va + instruction_index * 4
+
+            adr = _decode_adr(word, pc)
+            if adr is not None:
+                destination, address = adr
+                if destination != 31:
+                    addresses[destination] = (address, instruction_index)
+                    field_refs.pop(destination, None)
+                continue
+
+            adrp = _decode_adrp(word, pc)
+            if adrp is not None:
+                destination, address = adrp
+                if destination != 31:
+                    addresses[destination] = (address, instruction_index)
+                    field_refs.pop(destination, None)
+                continue
+
+            add = _decode_add_immediate(word)
+            if add is not None:
+                destination, source, immediate, width_mask = add
+                if destination != 31:
+                    source_state = addresses.get(source) if width_mask == _U64_MAX else None
+                    if source_state is None:
+                        addresses.pop(destination, None)
+                    else:
+                        address = source_state[0] + immediate
+                        if address <= _U64_MAX:
+                            addresses[destination] = (address, instruction_index)
+                        else:
+                            addresses.pop(destination, None)
+                    field_refs.pop(destination, None)
+                continue
+
+            sub = _decode_sub_immediate(word)
+            if sub is not None:
+                destination, source, immediate = sub
+                if destination != 31:
+                    source_state = addresses.get(source) if source != 31 else None
+                    if source_state is None or source_state[0] < immediate:
+                        addresses.pop(destination, None)
+                    else:
+                        addresses[destination] = (
+                            source_state[0] - immediate,
+                            instruction_index,
+                        )
+                    field_refs.pop(destination, None)
+                continue
+
+            move = _decode_move_register(word)
+            if move is not None:
+                destination, source, width_mask = move
+                if destination != 31:
+                    if width_mask == _U64_MAX and source in addresses:
+                        addresses[destination] = (
+                            addresses[source][0],
+                            addresses[source][1],
+                        )
+                    else:
+                        addresses.pop(destination, None)
+                    if source in field_refs and width_mask in (_U64_MAX, 0xFFFFFFFF):
+                        field_refs[destination] = field_refs[source]
+                    else:
+                        field_refs.pop(destination, None)
+                continue
+
+            literal_load = _decode_ldr_literal(word, pc)
+            if literal_load is not None:
+                destination, literal_slot = literal_load
+                if destination != 31:
+                    relocation_target = relocations.get(literal_slot)
+                    if relocation_target is None:
+                        addresses.pop(destination, None)
+                    else:
+                        addresses[destination] = (
+                            relocation_target,
+                            instruction_index,
+                        )
+                    field_refs.pop(destination, None)
+                continue
+
+            access = decode_integer_memory_access(word)
+            if access is not None:
+                base_register = (word >> 5) & 0x1F
+                base_state = (
+                    addresses.get(base_register)
+                    if base_register != 31 else None
+                )
+                if access["operation"] == "load":
+                    element_bytes = access.get(
+                        "element_bytes", access["access_bytes"]
+                    )
+                    load_targets = [(word & 0x1F, 0)]
+                    if access.get("access_count") == 2:
+                        load_targets.append(((word >> 10) & 0x1F, element_bytes))
+                    for destination, displacement in load_targets:
+                        if destination == 31:
+                            continue
+                        addresses.pop(destination, None)
+                        field_refs.pop(destination, None)
+                        byte_offset = access.get("byte_offset")
+                        if (
+                            element_bytes == 8
+                            and type(byte_offset) is int
+                            and base_state is not None
+                        ):
+                            effective_address = (
+                                base_state[0] + byte_offset + displacement
+                            )
+                            if (
+                                0 <= effective_address <= _U64_MAX - 7
+                                and effective_address in cells
+                            ):
+                                field_refs[destination] = cells[effective_address]
+                writeback = access.get("base_update_bytes", 0)
+                if writeback and base_register != 31:
+                    if base_state is None:
+                        addresses.pop(base_register, None)
+                    else:
+                        updated = base_state[0] + writeback
+                        if 0 <= updated <= _U64_MAX:
+                            addresses[base_register] = (updated, instruction_index)
+                        else:
+                            addresses.pop(base_register, None)
+                continue
+
+            direct_target = _decode_bl_target(word, pc)
+            if direct_target is not None:
+                reachable_direct_calls += 1
+                labels = _ordered_method_labels(targets.get(direct_target, ()))
+                if len(labels) == 1:
+                    method_name = _method_name_from_label(labels[0])
+                    arguments = {
+                        f"x{register}": _reference_report(field_refs[register])
+                        for register in range(8)
+                        if register in field_refs
+                    }
+                    if arguments:
+                        observation_count += 1
+                        if len(observations) < max_observations:
+                            observations.append({
+                                "linear_window_call_ordinal": call_ordinals[instruction_index],
+                                "control_flow_block_index": block_index,
+                                "instruction_index": instruction_index,
+                                "target_method": method_name,
+                                "field_info_arguments": arguments,
+                            })
+                for register in _CALLER_SAVED_REGISTERS:
+                    addresses.pop(register, None)
+                    field_refs.pop(register, None)
+                continue
+
+            if _is_indirect_call(word):
+                for register in _CALLER_SAVED_REGISTERS:
+                    addresses.pop(register, None)
+                    field_refs.pop(register, None)
+                continue
+
+            if (
+                _decode_conditional_branch_target(word, pc) is not None
+                or _decode_unconditional_branch_target(word, pc) is not None
+                or _is_indirect_branch(word)
+                or word == _NOP
+            ):
+                continue
+
+            # Unknown instructions may overwrite any tracked register.
+            addresses.clear()
+            field_refs.clear()
+
+        outgoing_addresses[block_index] = addresses
+        outgoing_field_refs[block_index] = field_refs
+
+    return {
+        "analysis_kind": "bounded_cfg_field_info_call_argument_provenance",
+        "field_info_cell_count": len(cells),
+        "direct_call_instruction_count": total_direct_calls,
+        "statically_reachable_direct_call_count": reachable_direct_calls,
+        "callsite_count": observation_count,
+        "callsite_observations": observations,
+        "callsite_observations_truncated": observation_count > len(observations),
+        "absolute_addresses_emitted": False,
+        "raw_instructions_emitted": False,
+        "interpretation": (
+            "A FieldRef coordinate is reported only when a value was loaded by "
+            "an exact 64-bit integer load from a caller-supplied FieldInfo usage "
+            "cell and remained in x0-x7 through supported MOV-register copies "
+            "until a uniquely resolved direct BL. This is static register "
+            "provenance, not runtime execution, managed owner/name resolution, "
+            "packet-field attribution, serializer order, or wire semantics. "
+            "Both conditional outcomes are assumed; joins, backedges, unknown "
+            "instructions, calls, and unsupported transformations drop state."
+        ),
+    }
