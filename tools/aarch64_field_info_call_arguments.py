@@ -7,8 +7,9 @@ tokens, instructions, APK bytes, or packet data.
 
 It is structural static evidence only. Both conditional outcomes are assumed;
 joins, backedges, unknown instructions, calls, and unsupported transformations
-drop provenance. It does not prove runtime execution, managed field identity,
-packet-field identity, or wire semantics.
+drop provenance. CSEL retains a FieldRef coordinate only when both possible
+inputs carry the same coordinate. It does not prove runtime execution, managed
+field identity, packet-field identity, or wire semantics.
 """
 import struct
 
@@ -686,9 +687,13 @@ def summarize_field_info_call_arguments(
             "A FieldRef coordinate is reported only when a value was loaded by "
             "an exact 64-bit integer load from a caller-supplied FieldInfo usage "
             "cell and remained in x0-x7 through value-preserving 64-bit MOV-register "
-            "copies and same-coordinate CSEL selections until a uniquely resolved direct BL. "
-            "tracked separately in field_info_truncated_argument_direct_call_count; W-form "
-            "CSEL preserves a coordinate only when both selected inputs carry the same "
+            "copies or a same-coordinate X-form CSEL until a uniquely resolved direct "
+            "BL or BLR-family target. A CSEL coordinate is retained only when both "
+            "possible inputs carry the same FieldRef coordinate; otherwise the "
+            "destination is cleared and the discarded source registers are counted. "
+            "32-bit MOV results, W-form CSEL results, and CSEL results with an already "
+            "truncated input are tracked separately in the truncated-argument counters "
+            "and are never emitted as exact FieldInfo provenance. Recognized BLR, "
             "BLRAA/BLRAB and zero-modifier authenticated indirect calls exclude "
             "their target and authentication-modifier registers from ABI arguments. "
             "An indirect target is resolved only when its tracked address maps to "
