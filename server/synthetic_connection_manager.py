@@ -25,8 +25,21 @@ class SyntheticConnectionManager:
             if connection_id in self._connections:
                 raise SessionError("connection already open")
             gate = ConnectionGate()
+            gate._bind_close_callback(
+                lambda closed_gate, key=connection_id: self._on_gate_closed(
+                    key, closed_gate
+                )
+            )
             self._connections[connection_id] = gate
             return gate
+
+    def _on_gate_closed(self, connection_id: str, gate: ConnectionGate) -> None:
+        """Remove only the gate that still owns this key, then release its lease."""
+        with self._lock:
+            if self._connections.get(connection_id) is not gate:
+                return
+            del self._connections[connection_id]
+            self.leases.release(connection_id)
 
     def select_player(self, connection_id: str, player_id: str) -> None:
         with self._lock:
@@ -51,13 +64,13 @@ class SyntheticConnectionManager:
     def close(self, connection_id: str) -> bool:
         with self._lock:
             self.leases._identifier(connection_id)
-            gate = self._connections.pop(connection_id, None)
+            gate = self._connections.get(connection_id)
             if gate is None:
                 return False
-            try:
-                gate.close()
-            finally:
-                self.leases.release(connection_id)
+            # ConnectionGate invokes _on_gate_closed exactly once. The callback
+            # removes the mapping and releases any player lease, whether close
+            # originated here or from a retained gate handle.
+            gate.close()
             return True
 
     @property
