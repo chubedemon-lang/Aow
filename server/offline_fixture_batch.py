@@ -26,14 +26,34 @@ def validate_fixture_batch(
         raise FixtureValidationError("invalid max_records")
     if type(max_total_bytes) is not int or not 1 <= max_total_bytes <= 16777216:
         raise FixtureValidationError("invalid max_total_bytes")
-    if type(records) not in (list, tuple) or not 1 <= len(records) <= max_records:
+    if type(records) not in (list, tuple):
         raise FixtureValidationError("invalid fixture count")
-    if (type(expected_source_sha256s) not in (set, frozenset, list, tuple)
-            or not 1 <= len(expected_source_sha256s) <= 1024):
+    record_items = tuple(records)
+    if not 1 <= len(record_items) <= max_records:
+        raise FixtureValidationError("invalid fixture count")
+    if type(expected_source_sha256s) not in (set, frozenset, list, tuple):
+        raise FixtureValidationError("invalid expected source digest set")
+    try:
+        expected_items = tuple(expected_source_sha256s)
+    except RuntimeError:
+        raise FixtureValidationError("invalid expected source digest set") from None
+    if not 1 <= len(expected_items) <= 1024:
         raise FixtureValidationError("invalid expected source digest set")
 
+    # Detach every record before decoding the first payload. The validator
+    # must not observe a mixture of caller mutations across a batch.
+    record_snapshot = []
+    for record in record_items:
+        if type(record) is not dict:
+            raise FixtureValidationError("invalid fixture fields")
+        snapshot = dict.copy(record)
+        if any(type(key) is not str for key in snapshot):
+            raise FixtureValidationError("invalid fixture fields")
+        record_snapshot.append(snapshot)
+    record_snapshot = tuple(record_snapshot)
+
     expected_sources = set()
-    for digest in expected_source_sha256s:
+    for digest in expected_items:
         if type(digest) is not str or not _SHA256.fullmatch(digest):
             raise FixtureValidationError("invalid expected source SHA-256")
         expected_sources.add(digest)
@@ -41,9 +61,7 @@ def validate_fixture_batch(
     seen = set()
     total = 0
     digests = []
-    for record in records:
-        if type(record) is not dict or any(type(key) is not str for key in record):
-            raise FixtureValidationError("invalid fixture fields")
+    for record in record_snapshot:
         source_digest = record.get("source_sha256")
         if (type(source_digest) is not str
                 or not _SHA256.fullmatch(source_digest)
