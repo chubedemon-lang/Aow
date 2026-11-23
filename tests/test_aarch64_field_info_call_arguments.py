@@ -77,6 +77,22 @@ def mov_w(destination, source):
     return 0x2A0003E0 | (source << 16) | destination
 
 
+def movz_x(destination, immediate, shift=0):
+    return 0xD2800000 | ((shift // 16) << 21) | (immediate << 5) | destination
+
+
+def movn_x(destination, immediate, shift=0):
+    return 0x92800000 | ((shift // 16) << 21) | (immediate << 5) | destination
+
+
+def movk_x(destination, immediate, shift=0):
+    return 0xF2800000 | ((shift // 16) << 21) | (immediate << 5) | destination
+
+
+def movk_w(destination, immediate, shift=0):
+    return 0x72800000 | ((shift // 16) << 21) | (immediate << 5) | destination
+
+
 def csel_x(destination, source_n, source_m, condition=0):
     return (
         0x9A800000
@@ -707,6 +723,69 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
         self.assertEqual(result["field_info_argument_resolved_indirect_call_count"], 1)
         self.assertEqual(result["indirect_call_observations"][0]["target_method"],
                          "Example.LoginRequest::GetField")
+
+    def test_traces_field_info_cell_address_materialized_by_movz_and_movk(self):
+        cell = 0x123456789ABC2A18
+        code = words(
+            movz_x(1, 0x2A18),
+            movk_x(1, 0x9ABC, 16),
+            movk_x(1, 0x5678, 32),
+            movk_x(1, 0x1234, 48),
+            ldr_x(0, 1),
+            bl(self.start + 20, self.target),
+        )
+        result = summarize_field_info_call_arguments(
+            code, self.start, self.targets, {cell: (9, 21, 4, 3)}
+        )
+        self.assertEqual(result["callsite_count"], 1)
+        self.assertEqual(
+            result["callsite_observations"][0]["field_info_arguments"]["x0"]["field_ref_index"],
+            21,
+        )
+
+    def test_traces_field_info_cell_address_materialized_by_movn(self):
+        cell = 0xFFFFFFFFFFFF2A18
+        code = words(
+            movn_x(1, 0xD5E7),
+            ldr_x(0, 1),
+            bl(self.start + 8, self.target),
+        )
+        result = summarize_field_info_call_arguments(
+            code, self.start, self.targets, {cell: (10, 22, 5, 4)}
+        )
+        self.assertEqual(result["callsite_count"], 1)
+        self.assertEqual(
+            result["callsite_observations"][0]["field_info_arguments"]["x0"]["field_ref_index"],
+            22,
+        )
+
+    def test_movk_without_a_known_base_does_not_invent_an_address(self):
+        code = words(
+            movk_x(1, 0x2000),
+            ldr_x(0, 1),
+            bl(self.start + 8, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["callsite_count"], 0)
+        self.assertEqual(result["field_info_argument_direct_call_count"], 0)
+        self.assertEqual(result["unknown_instruction_field_info_drop_count"], 0)
+
+    def test_movk_w_zero_extends_the_materialized_address(self):
+        cell = 0x2A18
+        code = words(
+            movz_x(1, 0x1234),
+            movk_w(1, 0x2A18),
+            ldr_x(0, 1),
+            bl(self.start + 12, self.target),
+        )
+        result = summarize_field_info_call_arguments(
+            code, self.start, self.targets, {cell: (11, 23, 6, 5)}
+        )
+        self.assertEqual(result["callsite_count"], 1)
+        self.assertEqual(
+            result["callsite_observations"][0]["field_info_arguments"]["x0"]["field_ref_index"],
+            23,
+        )
 
     def test_32_bit_load_does_not_match_eight_byte_usage_cell(self):
         code = words(
