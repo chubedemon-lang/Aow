@@ -51,7 +51,10 @@ capped at 128 by default and accepts at most 512. The code window is capped at
 
 Absolute addresses, raw instruction words, APK bytes and packet bytes are not
 emitted. The caller-supplied relocation map is derived from the private ELF
-analysis pass and must remain in memory only.
+analysis pass and must remain in memory only. The optional known-static-cell
+input accepts an exact built-in list or tuple; a mutable list is copied to one
+immutable tuple before size, value, duplicate and ordering checks, so every
+validation pass uses the same cell set.
 
 ## Interpretation limits
 

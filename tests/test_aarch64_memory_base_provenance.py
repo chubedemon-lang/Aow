@@ -1,12 +1,15 @@
 """Synthetic AArch64 memory-base provenance tests; no APK bytes are used."""
+import builtins
 import json
 import struct
 import unittest
+from unittest.mock import patch
 
 from tools.aarch64_memory_base_provenance import (
     _decode_adr,
     _decode_adrp,
     _decode_ldr_literal,
+    _validate_known_static_cells,
     _validate_relocation_targets,
     summarize_control_flow_memory_base_provenance,
 )
@@ -920,6 +923,25 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
             [item["matches_known_static_cell"] for item in result["memory_accesses"]],
             [False, False],
         )
+
+    def test_known_static_cell_list_is_snapshotted_before_validation(self):
+        supplied = [0x1000, 0x1008]
+
+        def mutate_caller_list(values):
+            supplied.append(0x1010)
+            return builtins.set(values)
+
+        # Simulate a concurrent caller mutation between the element and
+        # duplicate checks. Every validation pass must use the same snapshot.
+        with patch(
+            "tools.aarch64_memory_base_provenance.set",
+            side_effect=mutate_caller_list,
+            create=True,
+        ):
+            snapshot = _validate_known_static_cells(supplied)
+
+        self.assertEqual(snapshot, (0x1000, 0x1008))
+        self.assertEqual(supplied, [0x1000, 0x1008, 0x1010])
 
     def test_rejects_invalid_known_static_cell_lists(self):
         invalid = (
