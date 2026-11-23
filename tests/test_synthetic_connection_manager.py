@@ -1,7 +1,10 @@
 """Regression tests for synthetic-only lease/session coordination."""
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 from server.synthetic_connection_manager import SyntheticConnectionManager
+from server.synthetic_handshake import HandshakeError
 from server.synthetic_player_lease import PlayerLeaseError
 from server.synthetic_session import SessionError
 
@@ -78,6 +81,70 @@ class ConnectionManagerTests(unittest.TestCase):
         self.assertEqual(manager.leases.active_count, 1)
         manager.close("one")
         manager.select_player("two", "p2")
+
+    def test_direct_gate_close_unregisters_and_releases_player_lease(self):
+        gate = self.authenticated("first")
+        self.manager.select_player("first", "player")
+
+        gate.close()
+
+        self.assertEqual(gate.session.phase.name, "CLOSED")
+        self.assertEqual(self.manager.active_connections, 0)
+        self.assertEqual(self.manager.leases.active_count, 0)
+        self.assertIsNone(self.manager.leases.owner_of("player"))
+        self.assertFalse(self.manager.close("first"))
+        with self.assertRaises(SessionError):
+            self.manager.select_player("first", "other")
+
+    def test_stale_gate_close_cannot_remove_reopened_connection(self):
+        old_gate = self.authenticated("reused")
+        self.manager.select_player("reused", "old-player")
+        old_gate.close()
+
+        new_gate = self.authenticated("reused")
+        old_gate.close()
+
+        self.assertEqual(self.manager.active_connections, 1)
+        self.assertEqual(self.manager.leases.active_count, 0)
+        self.manager.select_player("reused", "new-player")
+        self.assertEqual(new_gate.session.player_id, "new-player")
+        self.assertEqual(self.manager.leases.owner_of("new-player"), "reused")
+
+    def test_fail_closed_handshake_error_releases_manager_resources(self):
+        gate = self.authenticated("first")
+        self.manager.select_player("first", "player")
+
+        # A repeated acknowledgement is out of order in this synthetic
+        # state machine and therefore closes the gate fail-closed.
+        with self.assertRaises(HandshakeError):
+            gate.acknowledge(b"nonce-123456")
+
+        self.assertEqual(self.manager.active_connections, 0)
+        self.assertEqual(self.manager.leases.active_count, 0)
+        self.assertIsNone(self.manager.leases.owner_of("player"))
+
+    def test_concurrent_direct_and_managed_close_release_exactly_once(self):
+        gate = self.authenticated("first")
+        self.manager.select_player("first", "player")
+        barrier = Barrier(2)
+
+        def close_gate():
+            barrier.wait(timeout=5)
+            gate.close()
+
+        def close_manager():
+            barrier.wait(timeout=5)
+            return self.manager.close("first")
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            direct = pool.submit(close_gate)
+            managed = pool.submit(close_manager)
+            direct.result(timeout=5)
+            managed.result(timeout=5)
+
+        self.assertEqual(self.manager.active_connections, 0)
+        self.assertEqual(self.manager.leases.active_count, 0)
+        self.assertIsNone(self.manager.leases.owner_of("player"))
 
 
 if __name__ == "__main__":

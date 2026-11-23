@@ -3,6 +3,7 @@
 NOT an AOW wire adapter, packet decoder, or claim of APK compatibility.
 """
 from dataclasses import dataclass
+from threading import RLock
 
 from server.synthetic_handshake import (
     HandshakeError,
@@ -36,58 +37,86 @@ class ConnectionGate:
     The mutable session and handshake objects stay private. Public properties
     return detached frozen snapshots; all state transitions go through this
     gate so a caller cannot close or advance only one half of the lifecycle.
+
+    A manager may bind one close callback before publishing the gate. Closing
+    the gate then notifies that owner exactly once, after releasing the gate
+    lock, so related player leases and connection indexes can be cleaned up
+    without lock inversion.
     """
 
-    __slots__ = ("_handshake", "_session")
+    __slots__ = ("_handshake", "_session", "_lock", "_close_callback")
 
     def __init__(self):
         self._handshake = SyntheticHandshake()
         self._session = SyntheticSession()
+        self._lock = RLock()
+        self._close_callback = None
+
+    def _bind_close_callback(self, callback) -> None:
+        """Bind one lifecycle owner before the gate is exposed to callers."""
+        if not callable(callback):
+            raise TypeError("close callback must be callable")
+        with self._lock:
+            if (self._close_callback is not None
+                    or self._session.phase is SessionPhase.CLOSED
+                    or self._handshake.phase is HandshakePhase.CLOSED):
+                raise SessionError("connection close owner cannot be changed")
+            self._close_callback = callback
 
     @property
     def handshake(self) -> HandshakeSnapshot:
         """Return a detached status snapshot, never the mutable handshake."""
-        return HandshakeSnapshot(
-            phase=self._handshake.phase,
-            established=self._handshake.established,
-        )
+        with self._lock:
+            return HandshakeSnapshot(
+                phase=self._handshake.phase,
+                established=self._handshake.established,
+            )
 
     @property
     def session(self) -> SessionSnapshot:
-        return SessionSnapshot(
-            phase=self._session.phase,
-            account_id=self._session.account_id,
-            player_id=self._session.player_id,
-            map_id=self._session.map_id,
-        )
+        with self._lock:
+            return SessionSnapshot(
+                phase=self._session.phase,
+                account_id=self._session.account_id,
+                player_id=self._session.player_id,
+                map_id=self._session.map_id,
+            )
 
     def challenge(self, nonce: bytes) -> None:
-        self._require_open()
-        self._handshake.challenge(nonce)
+        with self._lock:
+            self._require_open()
+            self._handshake.challenge(nonce)
 
     def acknowledge(self, nonce: bytes) -> None:
-        self._require_open()
         try:
-            self._handshake.acknowledge(nonce)
+            with self._lock:
+                self._require_open()
+                self._handshake.acknowledge(nonce)
         except HandshakeError:
+            # Run close notification only after the transition lock has been
+            # released; a manager callback may acquire its own lifecycle lock.
             self.close()
             raise
 
     def authenticate(self, account_id: str) -> None:
-        self._require_established()
-        self._session.authenticate(account_id)
+        with self._lock:
+            self._require_established()
+            self._session.authenticate(account_id)
 
     def select_player(self, player_id: str) -> None:
-        self._require_established()
-        self._session.select_player(player_id)
+        with self._lock:
+            self._require_established()
+            self._session.select_player(player_id)
 
     def enter_map(self, map_id: int) -> None:
-        self._require_established()
-        self._session.enter_map(map_id)
+        with self._lock:
+            self._require_established()
+            self._session.enter_map(map_id)
 
     def leave_map(self) -> None:
-        self._require_established()
-        self._session.leave_map()
+        with self._lock:
+            self._require_established()
+            self._session.leave_map()
 
     def _require_open(self) -> None:
         if self._session.phase is SessionPhase.CLOSED:
@@ -99,5 +128,17 @@ class ConnectionGate:
             raise SessionError("synthetic handshake not established")
 
     def close(self) -> None:
-        self._handshake.close()
-        self._session.close()
+        callback = None
+        with self._lock:
+            already_closed = (
+                self._session.phase is SessionPhase.CLOSED
+                and self._handshake.phase is HandshakePhase.CLOSED
+            )
+            self._handshake.close()
+            self._session.close()
+            if not already_closed:
+                callback = self._close_callback
+                self._close_callback = None
+
+        if callback is not None:
+            callback(self)
