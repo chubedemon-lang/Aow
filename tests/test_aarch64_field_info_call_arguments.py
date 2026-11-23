@@ -787,6 +787,42 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
             23,
         )
 
+    def test_resolves_indirect_target_materialized_by_movz_and_movk(self):
+        target = 0x123456789ABC4000
+        code = words(
+            movz_x(9, 0x4000),
+            movk_x(9, 0x9ABC, 16),
+            movk_x(9, 0x5678, 32),
+            movk_x(9, 0x1234, 48),
+            adr(1, self.start + 16, self.cell),
+            ldr_x(0, 1),
+            blr(9),
+        )
+        result = summarize_field_info_call_arguments(
+            code,
+            self.start,
+            {target: [self.label]},
+            self.cells,
+        )
+        self.assertEqual(result["resolved_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_argument_resolved_indirect_call_count"], 1)
+        self.assertEqual(
+            result["indirect_call_observations"][0]["target_method"],
+            "Example.LoginRequest::GetField",
+        )
+
+    def test_movk_overwrite_clears_field_info_value_provenance(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(1, 1),
+            movk_x(1, 0x2000),
+            mov_x(0, 1),
+            bl(self.start + 16, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["field_info_argument_direct_call_count"], 0)
+        self.assertEqual(result["callsite_count"], 0)
+
     def test_32_bit_load_does_not_match_eight_byte_usage_cell(self):
         code = words(
             adr(1, self.start, self.cell),
