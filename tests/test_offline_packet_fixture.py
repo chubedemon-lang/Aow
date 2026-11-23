@@ -109,7 +109,7 @@ class OfflinePacketFixtureTests(unittest.TestCase):
             "server.offline_packet_fixture.hashlib.sha256",
             side_effect=mutate_caller_record,
         ):
-            self.assertEqual(validate(record), b"\\x01\\x02")
+            self.assertEqual(validate(record), b"\x01\x02")
 
         self.assertEqual(record["payload_hex"], "ff")
         self.assertEqual(record["payload_sha256"], "0" * 64)
