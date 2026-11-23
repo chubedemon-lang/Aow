@@ -19,7 +19,8 @@ The registry keeps a reverse lookup from each live Session object to its
 current local connection key. A verified handoff updates both directions
 atomically. Consumers that index related local state by stable Session identity
 can therefore preserve that state when a connection key changes. Closing a
-session removes the reverse lookup.
+session removes the reverse lookup. The bulk `connection_keys_for()` lookup
+resolves a set of handles under one registry snapshot.
 
 For compatibility with the existing synthetic movement and handoff helpers,
 open(), get(), and transfer_connection() return a Session handle. When a

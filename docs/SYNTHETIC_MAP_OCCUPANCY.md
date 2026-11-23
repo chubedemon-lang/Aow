@@ -15,8 +15,9 @@ Membership and join epochs are keyed by the stable in-memory Session object,
 not by a replaceable connection identifier. The registry maintains a reverse
 lookup from each live Session object to its current connection key. A verified
 handoff therefore preserves map occupancy and join epoch under the new key.
-Closing a session removes the reverse lookup; the next prune discards its stale
-occupancy entry.
+Closing a session removes the reverse lookup. Until prune runs, members()
+retains the last-known key for a closed stale entry, preserving the existing
+diagnostic behavior; join_epoch() returns None for a closed or unknown key.
 
 The admission sequence is:
 
@@ -25,12 +26,13 @@ The admission sequence is:
 3. Reconcile stale occupancy entries.
 4. Check the per-map capacity.
 5. Advance the session into the map.
-6. Publish membership and a new local join epoch.
+6. Publish membership, last-known key, and a new local join epoch.
 7. Release the registry lock and then the occupancy lock.
 
 Leave and disconnect also hold the registry lock across the session transition
 and membership removal. Membership queries resolve all current connection
-keys under one registry snapshot. Concurrent callers using the same
+keys under one registry snapshot and fall back to last-known keys only for
+closed entries awaiting prune. Concurrent callers using the same
 MapOccupancy instance therefore observe a serialized capacity decision; two
 simultaneous joins cannot both claim the final slot, and an in-map handoff does
 not orphan an occupant.

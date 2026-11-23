@@ -20,6 +20,7 @@ class MapOccupancy:
         self.registry = registry
         self.capacity_per_map = capacity_per_map
         self._members = {}
+        self._member_keys = {}
         self._join_serial = 0
         self._join_epochs = {}
         self._lock = threading.RLock()
@@ -42,6 +43,7 @@ class MapOccupancy:
                     raise ValueError("map capacity exceeded")
                 session.join_map(map_id)
                 self._members.setdefault(map_id, set()).add(session)
+                self._member_keys[session] = connection_id
                 self._join_serial += 1
                 self._join_epochs[session] = self._join_serial
 
@@ -56,6 +58,7 @@ class MapOccupancy:
 
     def _discard(self, session, map_id):
         self._join_epochs.pop(session, None)
+        self._member_keys.pop(session, None)
         members = self._members.get(map_id)
         if members is not None:
             members.discard(session)
@@ -74,7 +77,10 @@ class MapOccupancy:
     def join_epoch(self, connection_id):
         """Local occupancy incarnation; never an APK protocol field."""
         with self._lock:
-            session = self.registry.get(connection_id)
+            try:
+                session = self.registry.get(connection_id)
+            except RegistryError:
+                return None
             return self._join_epochs.get(session)
 
     def prune(self):
@@ -102,10 +108,22 @@ class MapOccupancy:
         if type(map_id) is not int or not 0 <= map_id <= 2**31 - 1:
             raise ValueError("invalid map identifier")
         with self._lock:
-            return self.registry.connection_ids_for(self._members.get(map_id, set()))
+            members = self._members.get(map_id, set())
+            current_keys = self.registry.connection_keys_for(members)
+            resolved = set()
+            for session, current_key in current_keys.items():
+                if current_key is not None:
+                    self._member_keys[session] = current_key
+                    resolved.add(current_key)
+                else:
+                    last_key = self._member_keys.get(session)
+                    if last_key is not None:
+                        resolved.add(last_key)
+            return frozenset(resolved)
 
     def close_all(self):
         with self._lock:
             self.registry.close_all()
             self._members.clear()
+            self._member_keys.clear()
             self._join_epochs.clear()

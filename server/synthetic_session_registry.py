@@ -72,18 +72,21 @@ class SessionRegistry:
         with self._lock:
             return self._session_keys.get(session)
 
-    def connection_ids_for(self, sessions):
-        """Resolve a set of live Session handles under one registry snapshot."""
+    def connection_keys_for(self, sessions):
+        """Resolve live and closed Session handles under one registry snapshot.
+
+        A None value means the Session is no longer registered. Callers may
+        retain a last-known local key for stale-entry diagnostics until pruning.
+        """
         if type(sessions) not in (set, frozenset):
             raise RegistryError("invalid session collection")
         if any(type(session) is not Session for session in sessions):
             raise RegistryError("invalid session handle")
         with self._lock:
-            return frozenset(
-                self._session_keys[session]
+            return {
+                session: self._session_keys.get(session)
                 for session in sessions
-                if session in self._session_keys
-            )
+            }
 
     def open(self, connection_id):
         key = self._key(connection_id)
