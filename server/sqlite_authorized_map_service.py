@@ -15,6 +15,7 @@ from server.sqlite_character_authorizer import (
     SqliteCharacterAuthorizer,
     require_character_schema,
 )
+from server.sqlite_map_capacity_store import SqliteMapCapacityStore
 from server.sqlite_map_position_store import (
     MapPositionMutation,
     SqliteMapPositionStore,
@@ -24,14 +25,16 @@ from server.synthetic_map_position import MapPosition
 
 
 class SqliteAuthorizedMapService:
-    """Authorize every map operation against a durable synthetic session."""
+    """Authorize map operations and keep optional durable capacity projections."""
 
     def __init__(self, connection: sqlite3.Connection, *,
-                 ttl_seconds: int = 900, clock=None):
+                 ttl_seconds: int = 900, clock=None, map_capacities=None):
         if not isinstance(connection, sqlite3.Connection):
             raise TypeError("sqlite connection required")
         if connection.in_transaction:
             raise ValueError("connection must not have an active transaction")
+        if map_capacities is not None and type(map_capacities) is not dict:
+            raise ValueError("map capacities must be a built-in dictionary")
         require_character_schema(connection)
         self.db = connection
         self.sessions = SqliteSessionStore(
@@ -39,6 +42,26 @@ class SqliteAuthorizedMapService:
         )
         self.authorizer = SqliteCharacterAuthorizer(connection, self.sessions)
         self.positions = SqliteMapPositionStore(connection)
+        self.capacities = SqliteMapCapacityStore(connection)
+        if map_capacities:
+            # Startup configuration is one transaction. Each store call uses a
+            # savepoint, so one invalid map cannot leave a partial configuration.
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                for map_id, capacity in map_capacities.items():
+                    self.capacities.configure_map(map_id, capacity)
+                self.db.commit()
+            except BaseException:
+                self.db.rollback()
+                raise
+
+    def configure_map_capacity(self, map_id: int, capacity: int) -> int:
+        """Trusted local administration only; no player-facing route is exposed."""
+        return self.capacities.configure_map(map_id, capacity)
+
+    def _reconcile_capacity(self, character_id: str) -> None:
+        current = self.positions.get(character_id)
+        self.capacities.reconcile(character_id, current.map_id)
 
     def create_position(self, token: str, character_id: int) -> MapPosition:
         """Create the initial unplaced snapshot atomically with authorization."""
@@ -60,9 +83,11 @@ class SqliteAuthorizedMapService:
         with authorized_character_transaction(
             self.db, self.authorizer, token, character_id
         ) as owned_id:
-            return self.positions.enter(
+            result = self.positions.enter(
                 owned_id, request_id, expected_revision, map_id, x, y
             )
+            self._reconcile_capacity(owned_id)
+            return result
 
     def move(self, token: str, character_id: int, request_id: str,
              expected_revision: int, map_id: int, x: int, y: int
@@ -70,9 +95,11 @@ class SqliteAuthorizedMapService:
         with authorized_character_transaction(
             self.db, self.authorizer, token, character_id
         ) as owned_id:
-            return self.positions.move(
+            result = self.positions.move(
                 owned_id, request_id, expected_revision, map_id, x, y
             )
+            self._reconcile_capacity(owned_id)
+            return result
 
     def leave(self, token: str, character_id: int, request_id: str,
               expected_revision: int, map_id: int
@@ -80,6 +107,8 @@ class SqliteAuthorizedMapService:
         with authorized_character_transaction(
             self.db, self.authorizer, token, character_id
         ) as owned_id:
-            return self.positions.leave(
+            result = self.positions.leave(
                 owned_id, request_id, expected_revision, map_id
             )
+            self._reconcile_capacity(owned_id)
+            return result

@@ -132,6 +132,10 @@ on:
       - 'server/sqlite_map_position_store.py'
       - 'tests/test_sqlite_map_position_store.py'
       - 'docs/SQLITE_MAP_POSITION_STORE.md'
+      - 'server/sqlite_map_capacity_store.py'
+      - 'tests/test_sqlite_map_capacity_store.py'
+      - 'tests/test_sqlite_authorized_map_capacity_service.py'
+      - 'docs/SQLITE_MAP_CAPACITY_STORE.md'
       - 'server/sqlite_authorized_map_position_service.py'
       - 'tests/test_sqlite_authorized_map_position_service.py'
       - 'docs/AUTHORIZED_MAP_POSITION_SERVICE.md'
@@ -383,6 +387,20 @@ jobs:
         run: python -m py_compile server/sqlite_map_position_store.py
       - name: Durable map-position integrity tests (synthetic only)
         run: python -m unittest discover -s tests -p 'test_sqlite_map_position_store.py' -v
+  map-capacity-store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+      - name: Compile durable map-capacity store and authorized facade
+        run: python -m py_compile server/sqlite_map_capacity_store.py server/sqlite_authorized_map_service.py
+      - name: Durable map-capacity store tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_sqlite_map_capacity_store.py' -v
+      - name: Authorized map-capacity transaction tests (synthetic only)
+        run: python -m unittest discover -s tests -p 'test_sqlite_authorized_map_capacity_service.py' -v
   inventory-store:
     runs-on: ubuntu-latest
     timeout-minutes: 10
