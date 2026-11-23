@@ -7,6 +7,7 @@ from tools.aarch64_memory_base_provenance import (
     _decode_adr,
     _decode_adrp,
     _decode_ldr_literal,
+    _validate_relocation_targets,
     summarize_control_flow_memory_base_provenance,
 )
 
@@ -489,6 +490,23 @@ class AArch64MemoryBaseProvenanceTests(unittest.TestCase):
         )
         self.assertEqual(result["memory_accesses"][0]["base_provenance"], "unknown")
         self.assertEqual(result["memory_accesses_with_known_base_provenance"], 0)
+
+    def test_relocation_target_validation_detaches_caller_owned_mapping(self):
+        supplied = {0x5000: 0x9000}
+        snapshot = _validate_relocation_targets(supplied)
+
+        supplied[0x5000] = 0xA000
+        supplied[0x6000] = 0xB000
+
+        self.assertEqual(snapshot, {0x5000: 0x9000})
+        self.assertIs(type(snapshot), dict)
+        self.assertIsNot(snapshot, supplied)
+
+    def test_none_relocation_maps_return_independent_empty_snapshots(self):
+        first = _validate_relocation_targets(None)
+        second = _validate_relocation_targets(None)
+        first[0x5000] = 0x9000
+        self.assertEqual(second, {})
 
     def test_rejects_invalid_input_and_relocation_maps(self):
         invalid = (
