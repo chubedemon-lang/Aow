@@ -64,10 +64,12 @@ def _validate_field_info_cell_references(value):
 
 
 def _validate_method_targets(value):
+    """Validate and detach the address -> metadata-label association map."""
     if type(value) is not dict:
         raise ValueError("method_targets must be an exact dict")
     if len(value) > _MAX_METHOD_TARGETS:
         raise ValueError("method target map exceeds the analysis limit")
+    result = {}
     for address, labels in value.items():
         if (
             type(address) is not int
@@ -77,9 +79,14 @@ def _validate_method_targets(value):
             raise ValueError("method target addresses must be aligned unsigned 64-bit integers")
         if type(labels) not in (list, tuple) or not labels:
             raise ValueError("method target labels must be non-empty built-in lists or tuples")
-        if any(_method_name_from_label(label) is None for label in labels):
+        copied_labels = tuple(labels)
+        if any(_method_name_from_label(label) is None for label in copied_labels):
             raise ValueError("method target labels must use canonical metadata /pN suffixes")
-    return value
+        # Do not retain caller-owned lists or the mutable input dictionary.
+        # A later mutation must not change which metadata method a direct BL
+        # is attributed to during this analysis pass.
+        result[address] = copied_labels
+    return result
 
 
 def _reference_report(reference):
@@ -108,6 +115,9 @@ def summarize_field_info_call_arguments(
     alias. Address formation is limited to ADR/ADRP, 64-bit ADD/SUB immediate,
     MOV-register, and relocation-backed LDR-literal. No arithmetic is applied
     to FieldInfo values. State crosses only a unique forward CFG predecessor.
+
+    Method-target labels are validated into an immutable per-call snapshot so
+    caller mutation cannot change direct-call attribution mid-analysis.
     """
     if type(code) is not bytes or len(code) % 4:
         raise ValueError("AArch64 code window must be exact bytes and word aligned")
