@@ -77,8 +77,8 @@ login_request_callsite_summary; they are not mixed into the transport
 callsite_summary or broadened to every login/session serializer.
 
 For each resolved LoginRequest entry window, the separate summary includes
-bounded direct-helper call observations and the FieldInfo-to-call-argument
-provenance pass. When a statically loaded FieldInfo usage cell can be joined
+resolved direct/indirect method-call observations and the
+FieldInfo-to-call-argument provenance pass. When a statically loaded FieldInfo usage cell can be joined
 to a validated FieldRef coordinate and that value remains in x0-x7 at a
 uniquely resolved direct BL, the report emits the usage position, FieldRef
 index, TypeIndex, local field index, relative instruction index and symbolic

@@ -60,7 +60,6 @@ from tools.il2cpp_native_method_evidence import (
     _module_tables,
     _network_methods,
     _relocated_indirect_call_targets,
-    _summarize_aarch64_calls,
     _summarize_named_method_calls,
     _summarize_relocated_indirect_calls,
 )
@@ -471,7 +470,6 @@ def inspect_bytes(
     # resolved direct calls; it does not infer managed field names or wire order.
     login_request_callsite_summary = []
     for method, target, _section_name, window_bytes, truncated, code in login_request_resolved:
-        helper_summary = _summarize_aarch64_calls(code, target, helper_targets)
         named_summary = _summarize_named_method_calls(code, target, method_targets)
         indirect_summary = _summarize_relocated_indirect_calls(
             code, target, relocations, method_targets
@@ -483,7 +481,6 @@ def inspect_bytes(
             "entry_window_kind": "next_distinct_executable_entry_in_section",
             "entry_window_bytes": window_bytes,
             "entry_window_truncated": truncated,
-            **helper_summary,
             **named_summary,
             **indirect_summary,
             "field_info_call_argument_provenance": (
