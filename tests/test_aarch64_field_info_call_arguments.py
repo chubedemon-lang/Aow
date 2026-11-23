@@ -385,6 +385,143 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
         self.assertEqual(result["field_info_truncated_argument_direct_call_count"], 0)
         self.assertEqual(result["callsite_count"], 0)
 
+    def test_resolves_blr_target_from_relocation_backed_literal_and_reports_field_info(self):
+        literal_slot = 0x1800
+        code = words(
+            ldr_literal_x(9, self.start, literal_slot),
+            adr(1, self.start + 4, self.cell),
+            ldr_x(0, 1),
+            blr(9),
+        )
+        result = self.analyze(
+            code,
+            relocation_targets={literal_slot: self.target},
+        )
+        self.assertEqual(result["resolved_indirect_call_count"], 1)
+        self.assertEqual(result["unresolved_indirect_call_count"], 0)
+        self.assertEqual(result["ambiguous_indirect_call_count"], 0)
+        self.assertEqual(result["field_info_argument_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_argument_resolved_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_argument_unattributed_indirect_call_count"], 0)
+        self.assertEqual(result["indirect_call_observation_count"], 1)
+        observation = result["indirect_call_observations"][0]
+        self.assertEqual(observation["linear_window_indirect_call_ordinal"], 0)
+        self.assertEqual(observation["instruction_index"], 3)
+        self.assertEqual(observation["target_method"], "Example.LoginRequest::GetField")
+        self.assertEqual(
+            observation["field_info_arguments"]["x0"],
+            {
+                "usage_occurrence_position": 7,
+                "field_ref_index": 12,
+                "type_index": 3,
+                "field_index_within_type": 2,
+            },
+        )
+        rendered = json.dumps(result)
+        self.assertNotIn(hex(literal_slot), rendered)
+        self.assertNotIn(hex(self.target), rendered)
+        self.assertNotIn(code.hex(), rendered)
+
+    def test_resolves_blr_target_through_relocation_backed_pointer_slot_load(self):
+        pointer_slot = 0x2800
+        code = words(
+            adrp(9, self.start, pointer_slot),
+            add_x(9, 9, pointer_slot & 0xFFF),
+            ldr_x(9, 9),
+            adr(1, self.start + 12, self.cell),
+            ldr_x(0, 1),
+            blr(9),
+        )
+        result = self.analyze(
+            code,
+            relocation_targets={pointer_slot: self.target},
+        )
+        self.assertEqual(result["resolved_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_argument_resolved_indirect_call_count"], 1)
+        self.assertEqual(
+            result["indirect_call_observations"][0]["target_method"],
+            "Example.LoginRequest::GetField",
+        )
+
+    def test_authenticated_indirect_target_resolution_excludes_target_and_modifier(self):
+        literal_slot = 0x1800
+        second_cell = self.cell + 8
+        code = words(
+            ldr_literal_x(9, self.start, literal_slot),
+            adr(1, self.start + 4, self.cell),
+            ldr_x(0, 1),
+            adr(2, self.start + 12, second_cell),
+            ldr_x(10, 2),
+            blraa(9, 10),
+        )
+        result = summarize_field_info_call_arguments(
+            code,
+            self.start,
+            self.targets,
+            {
+                self.cell: (7, 12, 3, 2),
+                second_cell: (8, 13, 4, 1),
+            },
+            relocation_targets={literal_slot: self.target},
+        )
+        self.assertEqual(result["resolved_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_argument_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_argument_resolved_indirect_call_count"], 1)
+        arguments = result["indirect_call_observations"][0]["field_info_arguments"]
+        self.assertEqual(set(arguments), {"x0"})
+        self.assertNotIn("x10", arguments)
+
+    def test_zero_modifier_authenticated_call_can_resolve_relocated_target(self):
+        literal_slot = 0x1800
+        code = words(
+            ldr_literal_x(9, self.start, literal_slot),
+            adr(1, self.start + 4, self.cell),
+            ldr_x(0, 1),
+            blraaz(9),
+        )
+        result = self.analyze(
+            code,
+            relocation_targets={literal_slot: self.target},
+        )
+        self.assertEqual(result["resolved_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_argument_resolved_indirect_call_count"], 1)
+        self.assertEqual(result["indirect_call_observation_count"], 1)
+
+    def test_unresolved_indirect_target_with_field_info_is_not_attributed(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(0, 1),
+            blr(9),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["resolved_indirect_call_count"], 0)
+        self.assertEqual(result["unresolved_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_argument_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_argument_unattributed_indirect_call_count"], 1)
+        self.assertEqual(result["indirect_call_observations"], [])
+
+    def test_ambiguous_indirect_target_with_field_info_is_not_attributed(self):
+        literal_slot = 0x1800
+        code = words(
+            ldr_literal_x(9, self.start, literal_slot),
+            adr(1, self.start + 4, self.cell),
+            ldr_x(0, 1),
+            blr(9),
+        )
+        result = summarize_field_info_call_arguments(
+            code,
+            self.start,
+            {
+                self.target: [self.label, "Other.Type::Different/p1"],
+            },
+            self.cells,
+            relocation_targets={literal_slot: self.target},
+        )
+        self.assertEqual(result["resolved_indirect_call_count"], 0)
+        self.assertEqual(result["ambiguous_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_argument_unattributed_indirect_call_count"], 1)
+        self.assertEqual(result["indirect_call_observations"], [])
+
     def test_32_bit_load_does_not_match_eight_byte_usage_cell(self):
         code = words(
             adr(1, self.start, self.cell),
