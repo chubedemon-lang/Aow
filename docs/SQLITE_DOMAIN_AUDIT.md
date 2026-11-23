@@ -6,7 +6,7 @@ The inventory-backed quest award store and the generic reward ledger are separat
 
 The generic reward ledger remains a separate synthetic grant/receipt prototype. It is not assumed to be wired into gameplay.
 
-It opens the database using SQLite `mode=ro` and enables `PRAGMA query_only`. It does not construct stores through their normal constructors: those constructors contain `CREATE TABLE/INDEX IF NOT EXISTS` statements and commit, so the audit deliberately bypasses them and invokes only each store's read-only `verify_integrity()` method.
+It opens the database using SQLite `mode=ro`, enables `PRAGMA foreign_keys` while the new connection is still idle, verifies that the setting took effect, and then enables `PRAGMA query_only`. Foreign-key enforcement is connection-local and defaults to OFF on a fresh connection; enabling it before the read-only transaction lets the map-position store enforce the same runtime precondition during audit without writing to the database. It does not construct stores through their normal constructors: those constructors contain `CREATE TABLE/INDEX IF NOT EXISTS` statements and commit, so the audit deliberately bypasses them and invokes only each store's read-only `verify_integrity()` method.
 
 ## Run
 
