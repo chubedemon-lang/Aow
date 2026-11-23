@@ -183,11 +183,32 @@ class SqliteMapCapacityStore:
             "AND name IN (?, ?)",
             ("map_capacity_limits", "map_capacity_members"),
         ).fetchall())
-        if set(definitions) != {"map_capacity_limits", "map_capacity_members"}:
+        expected_definitions = {
+            "map_capacity_limits": """CREATE TABLE map_capacity_limits (
+                map_id INTEGER PRIMARY KEY
+                    CHECK(map_id BETWEEN 0 AND 2147483647),
+                capacity INTEGER NOT NULL
+                    CHECK(capacity BETWEEN 1 AND 100000)
+            )""",
+            "map_capacity_members": """CREATE TABLE map_capacity_members (
+                character_id TEXT PRIMARY KEY
+                    CHECK(length(character_id) BETWEEN 1 AND 128),
+                map_id INTEGER NOT NULL
+                    CHECK(map_id BETWEEN 0 AND 2147483647),
+                FOREIGN KEY(character_id)
+                    REFERENCES map_position_snapshots(character_id)
+                    ON DELETE CASCADE
+            )""",
+        }
+        if set(definitions) != set(expected_definitions):
             raise MapCapacityStoreError("incompatible map-capacity table definitions")
-        if any(type(sql) is not str or "CHECK" not in sql.upper()
-               for sql in definitions.values()):
-            raise MapCapacityStoreError("missing map-capacity CHECK constraints")
+        if any(
+            type(definitions[name]) is not str
+            or "".join(definitions[name].split()).casefold()
+            != "".join(expected.split()).casefold()
+            for name, expected in expected_definitions.items()
+        ):
+            raise MapCapacityStoreError("incompatible map-capacity table constraints")
 
     @contextmanager
     def _write_scope(self, savepoint_name):
