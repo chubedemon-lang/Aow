@@ -20,7 +20,10 @@ map_position_snapshots table. The store verifies its column signatures,
 foreign key, index, and normalized table definitions, including the exact range and
 length CHECK expressions. Tables with unrelated or weakened CHECK clauses are
 rejected even when their columns and foreign keys look compatible. The connection
-remains caller-owned.
+remains caller-owned. The store rechecks that SQLite foreign-key enforcement is
+enabled and CHECK-constraint bypass is disabled at every write boundary and
+during integrity audit; changing either connection pragma after construction
+causes the operation to fail closed before modifying the projection.
 
 ## Operations
 

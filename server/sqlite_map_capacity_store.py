@@ -42,8 +42,7 @@ class SqliteMapCapacityStore:
         self._lock = threading.RLock()
         self.db.execute("PRAGMA busy_timeout = 10000")
         self.db.execute("PRAGMA foreign_keys = ON")
-        if self.db.execute("PRAGMA foreign_keys").fetchone() != (1,):
-            raise MapCapacityStoreError("SQLite foreign keys are disabled")
+        self._validate_connection_constraints()
         parent = self.db.execute(
             "SELECT type FROM sqlite_master WHERE name='map_position_snapshots'"
         ).fetchone()
@@ -81,6 +80,13 @@ class SqliteMapCapacityStore:
             if self.db.in_transaction:
                 self.db.rollback()
             raise
+
+    def _validate_connection_constraints(self):
+        """Require SQLite enforcement settings whenever this store is used."""
+        if self.db.execute("PRAGMA foreign_keys").fetchone() != (1,):
+            raise MapCapacityStoreError("SQLite foreign keys are disabled")
+        if self.db.execute("PRAGMA ignore_check_constraints").fetchone() != (0,):
+            raise MapCapacityStoreError("SQLite CHECK constraints are disabled")
 
     @staticmethod
     def _map_id(value):
@@ -223,6 +229,7 @@ class SqliteMapCapacityStore:
             else:
                 self.db.execute(f"SAVEPOINT {savepoint_name}")
             try:
+                self._validate_connection_constraints()
                 yield
                 if owns_transaction:
                     self.db.commit()
@@ -376,6 +383,7 @@ class SqliteMapCapacityStore:
                 raise ValueError("connection must not have an active transaction")
             self.db.execute("BEGIN")
             try:
+                self._validate_connection_constraints()
                 if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
                     raise MapCapacityStoreError("SQLite quick_check failed")
                 if self.db.execute("PRAGMA foreign_key_check").fetchall():
