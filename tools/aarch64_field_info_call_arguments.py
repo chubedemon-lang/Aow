@@ -8,8 +8,10 @@ tokens, instructions, APK bytes, or packet data.
 It is structural static evidence only. Both conditional outcomes are assumed;
 joins, backedges, unknown instructions, calls, and unsupported transformations
 drop provenance. CSEL retains a FieldRef coordinate only when both possible
-inputs carry the same coordinate. It does not prove runtime execution, managed
-field identity, packet-field identity, or wire semantics.
+inputs carry the same coordinate. MOVZ/MOVN/MOVK are modeled only for exact
+instruction-immediate address construction; they do not establish relocation
+or runtime identity. The pass does not prove execution, managed field identity,
+packet-field identity, or wire semantics.
 """
 import struct
 
@@ -20,7 +22,8 @@ from tools.aarch64_call_argument_evidence import (
     _decode_bl_target,
     _decode_conditional_branch_target,
     _decode_move_register,
-    _decode_unconditional_branch_target,
+    _decode_move_wide,
+,    _decode_unconditional_branch_target,
     _is_indirect_branch,
     _is_indirect_call,
     _method_name_from_label,
@@ -171,8 +174,9 @@ def summarize_field_info_call_arguments(
     FieldInfo usage cell. An unshifted 64-bit MOV-register alias preserves the
     full value. A 32-bit MOV zero-extends a truncated value and is tracked
     separately rather than reported as exact FieldInfo provenance. Address
-    formation is limited to ADR/ADRP, 64-bit ADD/SUB immediate,
-    MOV-register, and relocation-backed LDR-literal. No arithmetic is applied
+    formation is limited to ADR/ADRP, MOVZ/MOVN/MOVK immediate construction,
+    64-bit ADD/SUB immediate, MOV-register, and relocation-backed LDR-literal.
+    No arithmetic is applied
     to FieldInfo values. State crosses only a unique forward CFG predecessor.
 
     Method-target labels are validated into an immutable per-call snapshot so
@@ -312,6 +316,31 @@ def summarize_field_info_call_arguments(
                 destination, address = adrp
                 if destination != 31:
                     addresses[destination] = (address, instruction_index)
+                    field_refs.pop(destination, None)
+                    truncated_field_refs.pop(destination, None)
+                continue
+
+            move_wide = _decode_move_wide(word)
+            if move_wide is not None:
+                operation, destination, immediate, shift, width_mask = move_wide
+                if destination != 31:
+                    if operation == "movz":
+                        address = (immediate << shift) & width_mask
+                        addresses[destination] = (address, instruction_index)
+                    elif operation == "movn":
+                        address = (~(immediate << shift)) & width_mask
+                        addresses[destination] = (address, instruction_index)
+                    else:  # MOVK replaces one 16-bit lane of the prior value.
+                        source_state = addresses.get(destination)
+                        if source_state is None:
+                            addresses.pop(destination, None)
+                        else:
+                            lane_mask = 0xFFFF << shift
+                            address = (
+                                (source_state[0] & width_mask & ~lane_mask)
+                                | (immediate << shift)
+                            ) & width_mask
+                            addresses[destination] = (address, instruction_index)
                     field_refs.pop(destination, None)
                     truncated_field_refs.pop(destination, None)
                 continue
