@@ -12,6 +12,8 @@ import re
 from server.protocol_evidence_registry import (
     Evidence,
     EvidenceError,
+    MAX_EVIDENCE_RECORDS,
+    _validated_evidence_copy,
     snapshot_evidence_records,
 )
 
@@ -43,7 +45,7 @@ def evidence_record_digest(record: Evidence) -> str:
     This stable digest binds approval to one exact record. It is not a
     signature and cannot authenticate the referenced fixture's origin.
     """
-    record = snapshot_evidence_records((record,))[0]
+    record = _validated_evidence_copy(record)
     payload = {
         "artifact_sha256": record.artifact_sha256,
         "method": record.method,
