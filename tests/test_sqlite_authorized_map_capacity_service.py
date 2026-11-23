@@ -132,13 +132,30 @@ class SqliteAuthorizedMapCapacityServiceTests(unittest.TestCase):
             )
         self.assertIsNone(self.service.capacities.capacity(8))
 
-    def test_expired_or_foreign_session_still_fails_before_capacity_change(self):
+    def test_expired_session_fails_before_capacity_change(self):
         self.now[0] = 1030.0
         with self.assertRaises(SessionError):
             self.service.enter(
                 self.owner_token, 101, "expired-enter", 0, 7, 0, 0
             )
         self.assertFalse(self.service.capacities.members(7))
+
+    def test_foreign_character_cannot_claim_capacity(self):
+        with self.assertRaises(SessionError):
+            self.service.enter(
+                self.owner_token, 202, "foreign-enter", 0, 7, 0, 0
+            )
+        self.assertEqual(
+            self.service.get_position(self.other_token, 202), MapPosition()
+        )
+        self.assertFalse(self.service.capacities.members(7))
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_mutations WHERE request_id=?",
+                ("foreign-enter",),
+            ).fetchone()[0],
+            0,
+        )
 
 
 if __name__ == "__main__":
