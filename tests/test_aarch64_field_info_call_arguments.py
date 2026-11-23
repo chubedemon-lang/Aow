@@ -77,6 +77,26 @@ def mov_w(destination, source):
     return 0x2A0003E0 | (source << 16) | destination
 
 
+def csel_x(destination, source_n, source_m, condition=0):
+    return (
+        0x9A800000
+        | (source_m << 16)
+        | (condition << 12)
+        | (source_n << 5)
+        | destination
+    )
+
+
+def csel_w(destination, source_n, source_m, condition=0):
+    return (
+        0x1A800000
+        | (source_m << 16)
+        | (condition << 12)
+        | (source_n << 5)
+        | destination
+    )
+
+
 def ldr_literal_x(destination, pc, literal_slot):
     displacement = literal_slot - pc
     if displacement % 4:
@@ -521,6 +541,129 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
         self.assertEqual(result["ambiguous_indirect_call_count"], 1)
         self.assertEqual(result["field_info_argument_unattributed_indirect_call_count"], 1)
         self.assertEqual(result["indirect_call_observations"], [])
+
+    def test_csel_preserves_same_fieldref_from_both_inputs(self):
+        second_cell = self.cell + 8
+        self.cells[second_cell] = self.cells[self.cell]
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(2, 1),
+            adr(3, self.start + 8, second_cell),
+            ldr_x(4, 3),
+            csel_x(5, 2, 4, condition=1),
+            mov_x(0, 5),
+            bl(self.start + 24, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["callsite_count"], 1)
+        self.assertEqual(result["field_info_argument_direct_call_count"], 1)
+        self.assertEqual(result["conditional_select_field_info_merge_drop_count"], 0)
+        self.assertEqual(
+            result["callsite_observations"][0]["field_info_arguments"]["x0"],
+            {
+                "usage_occurrence_position": 7,
+                "field_ref_index": 12,
+                "type_index": 3,
+                "field_index_within_type": 2,
+            },
+        )
+
+    def test_csel_drops_different_fieldref_coordinates(self):
+        second_cell = self.cell + 8
+        self.cells[second_cell] = (8, 13, 3, 4)
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(2, 1),
+            adr(3, self.start + 8, second_cell),
+            ldr_x(4, 3),
+            csel_x(5, 2, 4),
+            mov_x(0, 5),
+            bl(self.start + 24, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["callsite_count"], 0)
+        self.assertEqual(result["field_info_argument_direct_call_count"], 0)
+        self.assertEqual(result["conditional_select_field_info_merge_drop_count"], 1)
+        self.assertEqual(
+            result["conditional_select_exact_field_info_register_drop_count"], 2
+        )
+
+    def test_csel_w_marks_same_fieldref_as_truncated(self):
+        second_cell = self.cell + 8
+        self.cells[second_cell] = self.cells[self.cell]
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(2, 1),
+            adr(3, self.start + 8, second_cell),
+            ldr_x(4, 3),
+            csel_w(5, 2, 4),
+            mov_x(0, 5),
+            bl(self.start + 24, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["callsite_count"], 0)
+        self.assertEqual(result["field_info_argument_direct_call_count"], 0)
+        self.assertEqual(result["field_info_truncated_argument_direct_call_count"], 1)
+        self.assertEqual(result["conditional_select_field_info_merge_drop_count"], 0)
+
+    def test_csel_drops_fieldref_when_other_input_has_no_provenance(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(2, 1),
+            mov_x(4, 31),
+            csel_x(5, 2, 4),
+            mov_x(0, 5),
+            bl(self.start + 20, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["callsite_count"], 0)
+        self.assertEqual(result["conditional_select_field_info_merge_drop_count"], 1)
+        self.assertEqual(
+            result["conditional_select_exact_field_info_register_drop_count"], 1
+        )
+
+    def test_csel_does_not_promote_truncated_input_to_exact(self):
+        second_cell = self.cell + 8
+        self.cells[second_cell] = self.cells[self.cell]
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(2, 1),
+            mov_w(4, 2),
+            csel_x(5, 2, 4),
+            mov_x(0, 5),
+            bl(self.start + 20, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["callsite_count"], 0)
+        self.assertEqual(result["field_info_truncated_argument_direct_call_count"], 1)
+        self.assertEqual(result["conditional_select_field_info_merge_drop_count"], 0)
+
+    def test_csel_preserves_equal_relocation_backed_indirect_target(self):
+        literal_slot = 0x1800
+        pointer_slot = 0x1810
+        code = words(
+            ldr_literal_x(9, self.start, literal_slot),
+            adr(1, self.start + 4, pointer_slot),
+            ldr_x(10, 1),
+            adr(3, self.start + 12, self.cell),
+            ldr_x(0, 3),
+            csel_x(11, 9, 10, condition=2),
+            blr(11),
+        )
+        result = summarize_field_info_call_arguments(
+            code,
+            self.start,
+            self.targets,
+            self.cells,
+            relocation_targets={
+                literal_slot: self.target,
+                pointer_slot: self.target,
+            },
+        )
+        self.assertEqual(result["resolved_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_argument_resolved_indirect_call_count"], 1)
+        self.assertEqual(result["indirect_call_observations"][0]["target_method"],
+                         "Example.LoginRequest::GetField")
 
     def test_32_bit_load_does_not_match_eight_byte_usage_cell(self):
         code = words(
