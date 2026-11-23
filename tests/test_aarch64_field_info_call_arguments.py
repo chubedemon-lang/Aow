@@ -151,6 +151,9 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
             bl(self.start + 12, self.target),
         )
         result = self.analyze(code)
+        self.assertEqual(result["field_info_argument_direct_call_count"], 1)
+        self.assertEqual(result["unattributed_direct_call_count"], 0)
+        self.assertEqual(result["ambiguous_target_direct_call_count"], 0)
         self.assertEqual(result["callsite_count"], 1)
         observation = result["callsite_observations"][0]
         self.assertEqual(observation["instruction_index"], 3)
@@ -278,7 +281,22 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
             "Example.LoginRequest::GetField",
         )
 
-    def test_ambiguous_direct_target_is_not_attributed(self):
+    def test_unresolved_direct_target_is_counted_but_not_attributed(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(0, 1),
+            bl(self.start + 8, self.target),
+        )
+        result = summarize_field_info_call_arguments(
+            code, self.start, {}, self.cells
+        )
+        self.assertEqual(result["field_info_argument_direct_call_count"], 1)
+        self.assertEqual(result["unattributed_direct_call_count"], 1)
+        self.assertEqual(result["ambiguous_target_direct_call_count"], 0)
+        self.assertEqual(result["callsite_count"], 0)
+        self.assertEqual(result["callsite_observations"], [])
+
+    def test_ambiguous_direct_target_is_counted_but_not_attributed(self):
         code = words(
             adr(1, self.start, self.cell),
             ldr_x(0, 1),
@@ -290,7 +308,11 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
             {self.target: [self.label, "Other.Type::Different/p1"]},
             self.cells,
         )
+        self.assertEqual(result["field_info_argument_direct_call_count"], 1)
+        self.assertEqual(result["unattributed_direct_call_count"], 1)
+        self.assertEqual(result["ambiguous_target_direct_call_count"], 1)
         self.assertEqual(result["callsite_count"], 0)
+        self.assertEqual(result["callsite_observations"], [])
 
     def test_two_predecessor_join_drops_field_provenance(self):
         code = words(
