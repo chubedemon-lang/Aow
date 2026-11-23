@@ -72,4 +72,27 @@ A regression test uses a SQLite connection/cursor guard that raises if either ma
 Construction fails closed if SQLite has disabled CHECK enforcement on the supplied connection or if the persisted table definitions do not reject representative invalid rows. The store replays the two stored CREATE TABLE definitions in an isolated in-memory database and probes character/request identifier bounds, revision bounds, map/coordinate bounds, and the all-null-or-fully-placed snapshot invariant. The probe never writes to the application database. This protects the synthetic persistence contract from a same-column schema that silently omitted CHECK constraints; it does not establish AOW map semantics or protocol compatibility.
 
 
+## Runtime constraint enforcement
+
+The store rechecks both SQLite enforcement switches at every create/transition
+write boundary and before the read-only integrity audit:
+
+- `PRAGMA foreign_keys` must remain enabled.
+- `PRAGMA ignore_check_constraints` must remain disabled.
+
+This matters because the connection is caller-owned and either setting can be
+changed after construction while the connection is idle. A write that detects
+a disabled setting fails before changing the snapshot or inserting a receipt.
+If the store is participating in a caller-owned transaction, the failed
+operation rolls back only its savepoint and leaves the outer transaction open.
+The integrity audit rejects the same unsafe connection state and still rolls
+back its read transaction on every exit.
+
+Regression tests toggle each setting after the store has been constructed.
+They verify that writes and audits fail closed, no map mutation receipt is
+created, the snapshot remains unchanged, and transaction ownership is
+preserved. These checks protect this synthetic SQLite store only; they do not
+establish any AOW map or movement behavior.
+
+
 The placed-state CHECK explicitly requires map_id, x, and y to be non-NULL before applying numeric bounds. SQLite treats a CHECK expression that evaluates to NULL as passing, so range comparisons alone do not reject partially NULL coordinate tuples. The in-memory schema probe includes each partial-NULL shape as a negative case.
