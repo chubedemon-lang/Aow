@@ -148,6 +148,28 @@ class SqliteMapCapacityStoreTests(unittest.TestCase):
                     SqliteMapCapacityStore(self.db)
                 self.assertFalse(self.db.in_transaction)
 
+    def test_verify_integrity_rejects_untrimmed_persisted_character_id(self):
+        self.capacity.configure_map(7, 1)
+        self.db.execute(
+            """INSERT INTO map_position_snapshots
+               (character_id, map_id, x, y, revision)
+               VALUES (?, ?, ?, ?, ?)""",
+            (" alpha", 7, 1, 1, 0),
+        )
+        self.db.execute(
+            "INSERT INTO map_capacity_members(character_id, map_id) VALUES (?, ?)",
+            (" alpha", 7),
+        )
+
+        with self.assertRaises(MapCapacityStoreError):
+            self.capacity.verify_integrity()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT character_id, map_id FROM map_capacity_members"
+            ).fetchall(),
+            [(" alpha", 7)],
+        )
+
     def test_two_connections_enforce_one_slot_across_writers(self):
         self.capacity.configure_map(11, 1)
         barrier = threading.Barrier(2)

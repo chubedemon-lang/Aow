@@ -31,8 +31,9 @@ remains caller-owned.
   the durable position snapshot. It inserts, moves, or removes the membership
   projection. An unconfigured map is not capacity-managed.
 - members(map_id) and capacity(map_id) expose the current synthetic projection.
-- verify_integrity() checks SQLite quick_check, foreign keys, membership/
-  position agreement, missing memberships on configured maps, memberships on
+- verify_integrity() checks SQLite quick_check, foreign keys, persisted map/
+  capacity and character-identifier value boundaries, membership/position
+  agreement, missing memberships on configured maps, memberships on
   unconfigured maps, and capacity overruns. It is diagnostic and never repairs state.
 
 ## Transaction and multi-connection behavior
