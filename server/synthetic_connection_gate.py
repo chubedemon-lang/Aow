@@ -4,8 +4,20 @@ NOT an AOW wire adapter, packet decoder, or claim of APK compatibility.
 """
 from dataclasses import dataclass
 
-from server.synthetic_handshake import SyntheticHandshake, HandshakeError
+from server.synthetic_handshake import (
+    HandshakeError,
+    Phase as HandshakePhase,
+    SyntheticHandshake,
+)
 from server.synthetic_session import Phase as SessionPhase, SyntheticSession, SessionError
+
+
+@dataclass(frozen=True, slots=True)
+class HandshakeSnapshot:
+    """Read-only handshake status; contains no transition methods."""
+
+    phase: HandshakePhase
+    established: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,10 +33,9 @@ class SessionSnapshot:
 class ConnectionGate:
     """Keep fixture authentication unavailable until fixture handshake succeeds.
 
-    The mutable session object and handshake reference are private. The
-    handshake property exposes only its validated transition API, while the
-    session property returns a frozen snapshot so callers cannot transition
-    the underlying session without passing through this gate.
+    The mutable session and handshake objects stay private. Public properties
+    return detached frozen snapshots; all state transitions go through this
+    gate so a caller cannot close or advance only one half of the lifecycle.
     """
 
     __slots__ = ("_handshake", "_session")
@@ -34,8 +45,12 @@ class ConnectionGate:
         self._session = SyntheticSession()
 
     @property
-    def handshake(self) -> SyntheticHandshake:
-        return self._handshake
+    def handshake(self) -> HandshakeSnapshot:
+        """Return a detached status snapshot, never the mutable handshake."""
+        return HandshakeSnapshot(
+            phase=self._handshake.phase,
+            established=self._handshake.established,
+        )
 
     @property
     def session(self) -> SessionSnapshot:

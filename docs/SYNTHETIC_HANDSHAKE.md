@@ -4,21 +4,25 @@
 is **not** derived from the AOW APK and does not define a wire challenge,
 nonce length, packet type, message ID, or authentication exchange.
 
-The phase is intentionally exposed as a read-only property. Callers must use
-`challenge()`, `acknowledge()`, and `close()`; direct assignment such as
-`handshake.phase = Phase.ESTABLISHED` is rejected. This prevents accidental
-state bypass in code that composes the fixture with
-`server.synthetic_connection_gate.ConnectionGate`.
+The phase is exposed as a read-only property on the handshake object. The
+connection gate does not expose that mutable object: its `handshake` property
+returns a detached, frozen `HandshakeSnapshot` containing only the current
+phase and an `established` flag. The snapshot has no `challenge()`,
+`acknowledge()`, or `close()` methods. Callers must perform transitions
+through `ConnectionGate.challenge()`, `acknowledge()`, and `close()`.
 
-The connection gate now keeps its mutable session and handshake references in
-private slots. Its `handshake` property returns the validated handshake
-transition object but cannot be replaced. Its `session` property returns a
-frozen `SessionSnapshot` with phase and identity fields only; the snapshot
-does not expose `authenticate()`, `select_player()`, or map-transition
-methods. Mutating the snapshot cannot alter the gate's underlying session.
+The detached handshake snapshot is intentionally stale after a later
+transition; callers obtain a fresh snapshot from the property when they need
+current status. This prevents a holder of a status view from closing or
+advancing only the handshake half while leaving the session half in a
+contradictory state. The session property likewise returns a frozen
+`SessionSnapshot` with phase and identity fields only; it does not expose
+`authenticate()`, `select_player()`, or map-transition methods. Mutating
+either snapshot cannot alter the gate's underlying state.
+
 `SyntheticSession` also exposes read-only lifecycle properties and uses slots
-so accidental assignment cannot skip a transition or inject replacement
-state.
+so ordinary accidental assignment cannot skip a transition or inject
+replacement state.
 
 The nonce is accepted only as an exact `bytes` value in the fixture's local
 8–32 byte test range. A mismatched acknowledgement closes the fixture and
