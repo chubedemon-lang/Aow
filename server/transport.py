@@ -8,11 +8,13 @@ from typing import Callable
 
 from server.protocol_evidence_registry import (
     EvidenceError,
+    snapshot_evidence_records,
     validate_local_evidence_reference,
     validate_public_evidence_text,
 )
 from server.protocol_evidence_gates import (
     STAGES,
+    GateResult,
     evaluate_evidence,
     evidence_record_digest,
 )
@@ -129,7 +131,11 @@ class EvidenceGatedTransportAdapter(TransportAdapter):
         # record selection, and the adapter's retained evidence metadata.
         # Otherwise a concurrent caller mutation could change the allowlist
         # or records after the gate has approved a different collection.
-        record_snapshot = tuple(records)
+        # Detach and validate Evidence objects before the gate runs. The gate
+        # takes its own internal copy, but this adapter must also retain the
+        # exact same records for terminal selection and audit metadata after
+        # evaluate_evidence returns.
+        record_snapshot = snapshot_evidence_records(records)
         approval_snapshot = tuple(approved_evidence_digests)
 
         stage_index = STAGES.index(required_through)
@@ -210,10 +216,13 @@ class EvidenceGatedTransportAdapter(TransportAdapter):
 
     @property
     def gate_results(self):
-        """Ordered evidence readiness results through the selected stage."""
-        return self._gate_results
+        """Return detached readiness results through the selected stage."""
+        return tuple(
+            GateResult(item.stage, item.ready, tuple(item.missing))
+            for item in self._gate_results
+        )
 
     @property
     def evidence_records(self):
-        """Selected artifact's records for the required stage prefix."""
-        return self._evidence_records
+        """Return detached, revalidated records for the required stage prefix."""
+        return snapshot_evidence_records(self._evidence_records)

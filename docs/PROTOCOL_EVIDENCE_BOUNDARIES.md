@@ -25,6 +25,11 @@ APK compatibility.
 - Gate evaluation revalidates and copies each record before fingerprint,
   digest, or topic aggregation; caller-owned frozen instances are never read
   again after that snapshot is built.
+- The evidence-gated transport adapter takes its own validated deep snapshot
+  before gate evaluation and uses that same detached tuple for terminal-record
+  selection and retained audit metadata. Its `evidence_records` and
+  `gate_results` properties return detached copies, so callers cannot mutate
+  the adapter's retained view through a frozen-dataclass bypass.
 - The approved-digest allowlist must be an exact built-in `list`, `tuple`, or
   `frozenset`, with at most 4,096 entries.
 - Artifact fingerprints must be exact built-in lowercase SHA-256 strings.

@@ -12,8 +12,7 @@ import re
 from server.protocol_evidence_registry import (
     Evidence,
     EvidenceError,
-    MAX_EVIDENCE_RECORDS,
-    _validated_evidence_copy,
+    snapshot_evidence_records,
 )
 
 
@@ -88,26 +87,10 @@ def evaluate_evidence(
     The order is intentional: a downstream stage cannot be marked ready until
     the prior stages have eligible verified evidence from the same artifact.
     """
-    if type(records) not in (list, tuple):
-        raise EvidenceError("records must be a built-in list or tuple")
-    # Snapshot exact built-in collections once. Re-reading a caller-owned list
-    # across validation, fingerprint selection and topic aggregation would let
-    # concurrent mutation change which evidence is actually evaluated.
-    record_snapshot = tuple(records)
-    if len(record_snapshot) > MAX_EVIDENCE_RECORDS:
-        raise EvidenceError(
-            f"records must contain at most {MAX_EVIDENCE_RECORDS} entries"
-        )
-    if any(type(record) is not Evidence for record in record_snapshot):
-        raise EvidenceError("all records must be exact Evidence instances")
-    try:
-        record_snapshot = tuple(
-            _validated_evidence_copy(record) for record in record_snapshot
-        )
-    except EvidenceError as exc:
-        raise EvidenceError(
-            "all records must be valid exact Evidence instances"
-        ) from exc
+    # One validated deep snapshot is used for all fingerprint, digest and
+    # topic decisions. Callers that need the same records after this function
+    # returns must take their own snapshot before invoking the gate.
+    record_snapshot = snapshot_evidence_records(records)
     if type(approved_evidence_digests) not in (list, tuple, frozenset):
         raise EvidenceError(
             "approved_evidence_digests must be a built-in list, tuple, or frozenset"

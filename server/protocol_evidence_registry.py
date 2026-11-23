@@ -238,6 +238,33 @@ def _validated_evidence_copy(record):
         raise EvidenceError("invalid record") from exc
 
 
+def snapshot_evidence_records(records):
+    """Return a bounded tuple of detached, freshly validated Evidence copies.
+
+    Callers that make multiple decisions from one evidence collection should
+    take this snapshot once and use only the returned records. A tuple of
+    caller-owned frozen dataclasses is not sufficient: object.__setattr__ can
+    still mutate those objects after a readiness gate has evaluated copies.
+    """
+    if type(records) not in (list, tuple):
+        raise EvidenceError("records must be a built-in list or tuple")
+    record_snapshot = tuple(records)
+    if len(record_snapshot) > MAX_EVIDENCE_RECORDS:
+        raise EvidenceError(
+            f"records must contain at most {MAX_EVIDENCE_RECORDS} entries"
+        )
+    if any(type(record) is not Evidence for record in record_snapshot):
+        raise EvidenceError("all records must be exact Evidence instances")
+    try:
+        return tuple(
+            _validated_evidence_copy(record) for record in record_snapshot
+        )
+    except EvidenceError as exc:
+        raise EvidenceError(
+            "all records must be valid exact Evidence instances"
+        ) from exc
+
+
 class EvidenceRegistry:
     def __init__(self):
         self._records = []
