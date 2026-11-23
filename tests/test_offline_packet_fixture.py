@@ -1,6 +1,7 @@
 """Tests use invented local bytes, not APK packets or proprietary captures."""
 import hashlib
 import unittest
+from unittest.mock import patch
 
 from server.offline_packet_fixture import FixtureValidationError, validate_packet_fixture
 
@@ -93,6 +94,26 @@ class OfflinePacketFixtureTests(unittest.TestCase):
         with self.assertRaises(FixtureValidationError):
             validate({**fixture(), "source_sha256": "A" * 64})
 
+
+    def test_validation_uses_a_detached_record_snapshot(self):
+        record = fixture()
+        expected_digest = record["payload_sha256"]
+        original_sha256 = hashlib.sha256
+
+        def mutate_caller_record(payload):
+            record["payload_hex"] = "ff"
+            record["payload_sha256"] = "0" * 64
+            return original_sha256(payload)
+
+        with patch(
+            "server.offline_packet_fixture.hashlib.sha256",
+            side_effect=mutate_caller_record,
+        ):
+            self.assertEqual(validate(record), b"\x01\x02")
+
+        self.assertEqual(record["payload_hex"], "ff")
+        self.assertEqual(record["payload_sha256"], "0" * 64)
+        self.assertNotEqual(record["payload_sha256"], expected_digest)
 
     def test_rejects_dict_subclasses_before_invoking_overrides(self):
         class ExplosiveDict(dict):

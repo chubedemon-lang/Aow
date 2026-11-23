@@ -39,28 +39,31 @@ def validate_packet_fixture(
         raise FixtureValidationError("max_bytes out of range")
     if type(record) is not dict:
         raise FixtureValidationError("invalid fixture fields")
-    if any(type(key) is not str for key in record):
+    # Detach caller-owned metadata before making any validation decision.
+    # All subsequent reads use one exact built-in dictionary snapshot.
+    snapshot = dict.copy(record)
+    if any(type(key) is not str for key in snapshot):
         raise FixtureValidationError("invalid fixture fields")
-    if set(record) != {
+    if set(snapshot) != {
         "source_sha256", "payload_hex", "payload_sha256", "verified"
     }:
         raise FixtureValidationError("invalid fixture fields")
-    if record["verified"] is not True:
+    if snapshot["verified"] is not True:
         raise FixtureValidationError("fixture requires explicit verification")
 
     for key in ("source_sha256", "payload_sha256"):
-        value = record[key]
+        value = snapshot[key]
         if type(value) is not str or not _SHA256.fullmatch(value):
             raise FixtureValidationError("invalid SHA-256 metadata")
-    if record["source_sha256"] != expected_source_sha256:
+    if snapshot["source_sha256"] != expected_source_sha256:
         raise FixtureValidationError("fixture source digest does not match expected artifact")
 
-    value = record["payload_hex"]
+    value = snapshot["payload_hex"]
     if type(value) is not str or len(value) > 2 * max_bytes:
         raise FixtureValidationError("invalid fixture size")
     if not _HEX.fullmatch(value):
-        raise FixtureValidationError("invalid payload hex")
+        raise FixtureValidationError("invalid fixture payload hex")
     payload = bytes.fromhex(value)
-    if hashlib.sha256(payload).hexdigest() != record["payload_sha256"]:
+    if hashlib.sha256(payload).hexdigest() != snapshot["payload_sha256"]:
         raise FixtureValidationError("payload digest mismatch")
     return payload

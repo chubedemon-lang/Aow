@@ -1,9 +1,10 @@
 """All samples are invented; no original APK or packet data is included."""
 import hashlib
 import unittest
+from unittest.mock import patch
 
 from server.offline_fixture_batch import validate_fixture_batch
-from server.offline_packet_fixture import FixtureValidationError
+from server.offline_packet_fixture import FixtureValidationError, validate_packet_fixture
 
 
 def fixture(payload, source="a"):
@@ -35,6 +36,60 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(result["count"], 2)
         self.assertEqual(result["total_bytes"], 3)
         self.assertEqual(result["payload_sha256"][0], hashlib.sha256(b"a").hexdigest())
+
+    def test_batch_snapshots_membership_before_validating_payloads(self):
+        records = [fixture(b"a"), fixture(b"bc")]
+        expected_sources = {record["source_sha256"] for record in records}
+        original_validate = validate_packet_fixture
+        calls = []
+
+        def clear_caller_list(record, **kwargs):
+            if not calls:
+                records.clear()
+            calls.append(record)
+            return original_validate(record, **kwargs)
+
+        with patch(
+            "server.offline_fixture_batch.validate_packet_fixture",
+            side_effect=clear_caller_list,
+        ):
+            result = validate_fixture_batch(
+                records, expected_source_sha256s=expected_sources
+            )
+
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["total_bytes"], 3)
+        self.assertEqual(records, [])
+
+    def test_batch_detaches_every_record_before_first_payload_validation(self):
+        records = [fixture(b"a"), fixture(b"bc")]
+        second_record = records[1]
+        expected_sources = {record["source_sha256"] for record in records}
+        original_validate = validate_packet_fixture
+        calls = []
+
+        def mutate_later_record(record, **kwargs):
+            if not calls:
+                second_record["payload_hex"] = "zz"
+                second_record["payload_sha256"] = "0" * 64
+            calls.append(record)
+            return original_validate(record, **kwargs)
+
+        with patch(
+            "server.offline_fixture_batch.validate_packet_fixture",
+            side_effect=mutate_later_record,
+        ):
+            result = validate_fixture_batch(
+                records, expected_source_sha256s=expected_sources
+            )
+
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["total_bytes"], 3)
+        self.assertEqual(
+            result["payload_sha256"],
+            (hashlib.sha256(b"a").hexdigest(), hashlib.sha256(b"bc").hexdigest()),
+        )
+        self.assertEqual(second_record["payload_hex"], "zz")
 
     def test_no_raw_bytes_in_summary(self):
         self.assertNotIn(b"private", repr(validate([fixture(b"private")])).encode())
