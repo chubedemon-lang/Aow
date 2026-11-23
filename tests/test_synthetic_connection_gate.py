@@ -2,7 +2,11 @@
 from dataclasses import FrozenInstanceError
 import unittest
 
-from server.synthetic_connection_gate import ConnectionGate, SessionSnapshot
+from server.synthetic_connection_gate import (
+    ConnectionGate,
+    HandshakeSnapshot,
+    SessionSnapshot,
+)
 from server.synthetic_handshake import HandshakeError, Phase as HandshakePhase
 from server.synthetic_session import Phase, SessionError
 
@@ -66,6 +70,30 @@ class ConnectionGateTests(unittest.TestCase):
         with self.assertRaises(SessionError):
             gate.authenticate("account")
         self.assertIsNone(gate.session.account_id)
+
+    def test_handshake_is_a_frozen_snapshot_not_a_mutable_handle(self):
+        gate = ConnectionGate()
+        snapshot = gate.handshake
+        self.assertIsInstance(snapshot, HandshakeSnapshot)
+        self.assertFalse(hasattr(snapshot, "challenge"))
+        self.assertFalse(hasattr(snapshot, "acknowledge"))
+        self.assertFalse(hasattr(snapshot, "close"))
+        with self.assertRaises(FrozenInstanceError):
+            snapshot.phase = HandshakePhase.ESTABLISHED
+        with self.assertRaises(FrozenInstanceError):
+            snapshot.established = True
+
+        gate.challenge(b"12345678")
+        gate.acknowledge(b"12345678")
+        self.assertEqual(snapshot.phase, HandshakePhase.NEW)
+        self.assertFalse(snapshot.established)
+        self.assertEqual(gate.handshake.phase, HandshakePhase.ESTABLISHED)
+        self.assertTrue(gate.handshake.established)
+
+        # The detached view cannot close only the handshake while leaving the
+        # session authenticated and internally inconsistent.
+        gate.authenticate("account")
+        self.assertEqual(gate.session.phase, Phase.AUTHENTICATED)
 
     def test_session_is_a_frozen_snapshot_not_a_mutable_handle(self):
         gate = ConnectionGate()
