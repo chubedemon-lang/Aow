@@ -228,7 +228,7 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
         self.assertEqual(arguments["x0"]["field_ref_index"], 1)
         self.assertEqual(arguments["x2"]["field_ref_index"], 4)
 
-    def test_32_bit_mov_preserves_encoded_field_info_token_provenance(self):
+    def test_32_bit_mov_is_counted_as_truncated_not_exact_field_info(self):
         code = words(
             adr(1, self.start, self.cell),
             ldr_x(2, 1),
@@ -236,8 +236,34 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
             bl(self.start + 12, self.target),
         )
         result = self.analyze(code)
-        self.assertEqual(result["callsite_count"], 1)
-        self.assertIn("x0", result["callsite_observations"][0]["field_info_arguments"])
+        self.assertEqual(result["field_info_argument_direct_call_count"], 0)
+        self.assertEqual(result["field_info_truncated_argument_direct_call_count"], 1)
+        self.assertEqual(result["callsite_count"], 0)
+        self.assertEqual(result["callsite_observations"], [])
+
+    def test_64_bit_mov_does_not_restore_truncated_field_info_value(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(2, 1),
+            mov_w(0, 2),
+            mov_x(3, 0),
+            bl(self.start + 16, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["field_info_argument_direct_call_count"], 0)
+        self.assertEqual(result["field_info_truncated_argument_direct_call_count"], 1)
+        self.assertEqual(result["callsite_count"], 0)
+
+    def test_overwrite_clears_truncated_field_info_provenance(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(2, 1),
+            mov_w(0, 2),
+            adr(0, self.start + 12, self.cell + 0x100),
+            bl(self.start + 16, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["field_info_truncated_argument_direct_call_count"], 0)
 
     def test_32_bit_load_does_not_match_eight_byte_usage_cell(self):
         code = words(
