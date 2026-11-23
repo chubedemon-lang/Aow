@@ -5,7 +5,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 
 from server.synthetic_map_occupancy import MapOccupancy
-from server.synthetic_session_registry import SessionRegistry
+from server.synthetic_session_registry import RegistryError, SessionRegistry
 from server.synthetic_session_state import Phase
 
 
@@ -61,6 +61,50 @@ class MapOccupancyConcurrencyTests(unittest.TestCase):
                 for connection_id in connection_ids),
             1,
         )
+
+    def test_verified_transfer_cannot_split_map_admission(self):
+        registry = SessionRegistry(capacity=1)
+        maps = MapOccupancy(registry, capacity_per_map=1)
+        session = registry.open("old")
+        registry.authenticate("old", "account")
+        registry.select_character("old", "hero")
+
+        join_entered = threading.Event()
+        release_join = threading.Event()
+        transfer_started = threading.Event()
+        original_join = session.join_map
+
+        def paused_join(map_id):
+            join_entered.set()
+            if not release_join.wait(timeout=5):
+                raise TimeoutError("test did not release map join")
+            return original_join(map_id)
+
+        session.join_map = paused_join
+
+        def transfer():
+            transfer_started.set()
+            return registry.transfer_connection("old", "new", verified=True)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            join_future = pool.submit(maps.join, "old", 77)
+            self.assertTrue(join_entered.wait(timeout=5))
+            transfer_future = pool.submit(transfer)
+            try:
+                self.assertTrue(transfer_started.wait(timeout=5))
+                time.sleep(0.05)
+                self.assertFalse(transfer_future.done())
+            finally:
+                release_join.set()
+
+            join_future.result(timeout=5)
+            with self.assertRaisesRegex(RegistryError, "cannot transfer connection while in map"):
+                transfer_future.result(timeout=5)
+
+        self.assertEqual(maps.members(77), frozenset({"old"}))
+        self.assertIs(registry.get("old"), session)
+        with self.assertRaises(RegistryError):
+            registry.get("new")
 
 
 if __name__ == "__main__":

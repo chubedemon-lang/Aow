@@ -6,6 +6,7 @@ operations are serialized with a re-entrant lock so capacity and uniqueness
 checks remain atomic under concurrent callers.
 """
 import threading
+from contextlib import contextmanager
 
 from .synthetic_session_state import Phase, Session, SessionError
 
@@ -49,6 +50,19 @@ class SessionRegistry:
         except KeyError:
             raise SessionError("unsupported session transition") from None
         return handler(connection_id, *args)
+
+    @contextmanager
+    def locked_session(self, connection_id):
+        """Hold the registry lock while composing a multi-object state update.
+
+        The yielded handle is valid for coordinated work only inside this
+        context. Do not retain it after leaving the context. The re-entrant
+        lock permits the handle's public transition methods to route back
+        through this registry without releasing the outer critical section.
+        """
+        key = self._key(connection_id)
+        with self._lock:
+            yield self._get_locked(key)
 
     def open(self, connection_id):
         key = self._key(connection_id)
@@ -120,6 +134,8 @@ class SessionRegistry:
 
         This does not authenticate the new connection or represent an AOW
         reconnect packet. Caller must independently verify the handoff.
+        An in-map session cannot be transferred because the local map
+        occupancy index is keyed by its current connection identifier.
         """
         if verified is not True:
             raise RegistryError("external verification required")
@@ -130,7 +146,10 @@ class SessionRegistry:
                 raise RegistryError("unknown source connection")
             if new_key in self._sessions:
                 raise RegistryError("target connection already registered")
-            session = self._sessions.pop(old_key)
+            session = self._sessions[old_key]
+            if session.snapshot.phase is Phase.IN_MAP:
+                raise RegistryError("cannot transfer connection while in map")
+            self._sessions.pop(old_key)
             self._sessions[new_key] = session
             self._bind_locked(new_key, session)
             return session

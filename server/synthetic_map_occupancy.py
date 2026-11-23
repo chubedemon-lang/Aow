@@ -1,9 +1,9 @@
 """Local-only map occupancy index backed by the synthetic session registry.
 
-A process-local re-entrant lock makes map-capacity admission and the matching
-session/membership updates atomic among callers using this MapOccupancy
-instance. It does not provide cross-process or multi-instance capacity
-coordination, and it does not imply any AOW map or room contract.
+A process-local re-entrant lock serializes map membership. A registry lock is
+held across admission and publication so verified connection transfers cannot
+split a session transition from its occupancy key. This remains synthetic and
+does not imply any AOW map or room contract.
 """
 import threading
 
@@ -27,22 +27,25 @@ class MapOccupancy:
     def join(self, connection_id, map_id):
         """Atomically reserve one local map slot and advance the session."""
         with self._lock:
-            session = self.registry.get(connection_id)
-            if session.snapshot.phase is not Phase.CHARACTER_SELECTED:
-                raise SessionError("map join not allowed")
-            if type(map_id) is not int or not 0 <= map_id <= 2**31 - 1:
-                raise SessionError("invalid map identifier")
-            # Reconcile externally closed sessions before applying map capacity.
-            # The RLock keeps this prune/check/transition/insert sequence atomic
-            # against other operations on this occupancy instance.
-            self.prune()
-            members = self._members.get(map_id, set())
-            if len(members) >= self.capacity_per_map:
-                raise ValueError("map capacity exceeded")
-            session.join_map(map_id)
-            self._members.setdefault(map_id, set()).add(connection_id)
-            self._join_serial += 1
-            self._join_epochs[connection_id] = self._join_serial
+            # Keep the registry key stable until the matching occupancy entry
+            # and join epoch have been published. A concurrent verified
+            # handoff must therefore happen either before this admission or
+            # after it; transfer_connection rejects the latter while IN_MAP.
+            with self.registry.locked_session(connection_id) as session:
+                if session.snapshot.phase is not Phase.CHARACTER_SELECTED:
+                    raise SessionError("map join not allowed")
+                if type(map_id) is not int or not 0 <= map_id <= 2**31 - 1:
+                    raise SessionError("invalid map identifier")
+                # Reconcile externally closed sessions before applying map capacity.
+                # Both locks are re-entrant for this same thread.
+                self.prune()
+                members = self._members.get(map_id, set())
+                if len(members) >= self.capacity_per_map:
+                    raise ValueError("map capacity exceeded")
+                session.join_map(map_id)
+                self._members.setdefault(map_id, set()).add(connection_id)
+                self._join_serial += 1
+                self._join_epochs[connection_id] = self._join_serial
 
     def leave(self, connection_id):
         with self._lock:
