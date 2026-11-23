@@ -231,8 +231,8 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
     def test_32_bit_mov_is_counted_as_truncated_not_exact_field_info(self):
         code = words(
             adr(1, self.start, self.cell),
-            ldr_x(2, 1),
-            mov_w(0, 2),
+            ldr_x(8, 1),
+            mov_w(0, 8),
             bl(self.start + 12, self.target),
         )
         result = self.analyze(code)
@@ -244,8 +244,8 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
     def test_64_bit_mov_does_not_restore_truncated_field_info_value(self):
         code = words(
             adr(1, self.start, self.cell),
-            ldr_x(2, 1),
-            mov_w(0, 2),
+            ldr_x(8, 1),
+            mov_w(0, 8),
             mov_x(3, 0),
             bl(self.start + 16, self.target),
         )
@@ -257,8 +257,8 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
     def test_overwrite_clears_truncated_field_info_provenance(self):
         code = words(
             adr(1, self.start, self.cell),
-            ldr_x(2, 1),
-            mov_w(0, 2),
+            ldr_x(8, 1),
+            mov_w(0, 8),
             adr(0, self.start + 12, self.cell + 0x100),
             bl(self.start + 16, self.target),
         )
