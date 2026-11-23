@@ -4,6 +4,7 @@ import struct
 import unittest
 
 from tools.aarch64_field_info_call_arguments import (
+    _validate_method_targets,
     summarize_field_info_call_arguments,
 )
 
@@ -129,6 +130,18 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
             self.cells,
             **kwargs,
         )
+
+    def test_method_target_validation_detaches_mapping_and_label_lists(self):
+        supplied = {self.target: [self.label]}
+        snapshot = _validate_method_targets(supplied)
+
+        supplied[self.target][0] = "Other.Type::Changed/p1"
+        supplied[self.target] = ["Other.Type::Replacement/p0"]
+        supplied[0x5000] = ["Other.Type::Added/p0"]
+
+        self.assertEqual(snapshot, {self.target: (self.label,)})
+        self.assertIs(type(snapshot), dict)
+        self.assertIs(type(snapshot[self.target]), tuple)
 
     def test_traces_exact_static_cell_load_through_mov_to_argument(self):
         code = words(
