@@ -36,6 +36,10 @@ The bounded intraprocedural pass recognizes:
   FieldInfo usage cell.
 - A resulting FieldRef coordinate remaining in x0-x7 until a uniquely
   resolved direct BL.
+- Aggregate exact/truncated argument-presence counters at recognized BLR,
+  BLRAA/BLRAB, and zero-modifier authenticated indirect calls. The call-target
+  register and pointer-authentication modifier register are excluded; indirect
+  targets are not attributed and no per-call observation is emitted.
 
 The analysis uses the existing conservative CFG builder. Both conditional
 outcomes are considered. State crosses only a unique forward predecessor;
@@ -46,9 +50,10 @@ Ambiguous direct-call targets are not attributed.
 ## Output and interpretation
 
 The redacted output includes only relative instruction/block indexes, a
-metadata method label, argument-register names, and FieldRef table coordinates.
-It never emits native addresses, relocation slots, encoded usage tokens,
-instruction words, APK bytes, packet bytes, endpoint values, or player data.
+metadata method label, argument-register names, FieldRef table coordinates,
+and aggregate direct/indirect call counters. It never emits native addresses,
+relocation slots, encoded usage tokens, instruction words, APK bytes, packet
+bytes, endpoint values, or player data.
 
 A reported coordinate means only that a value loaded from the specified
 static FieldInfo usage cell was still present in an argument register at a
@@ -61,7 +66,11 @@ FieldInfo value but have no unique target association. Such calls are
 counted as unattributed (and separately as ambiguous when multiple target
 labels remain); they are deliberately not emitted as method observations.
 This prevents an empty attributed-observation list from being mistaken for
-proof that no FieldInfo-bearing calls were encountered.
+proof that no FieldInfo-bearing direct calls were encountered. Separate
+indirect-call counters identify recognized BLR-family callsites carrying exact
+or truncated FieldInfo provenance in x0-x7 after excluding the instruction's
+target and authentication-modifier inputs. Those counters do not resolve the
+indirect destination and are not per-call method observations.
 
 These counters do not identify a managed declaring type or field name, prove
 the call ran, prove the argument's semantic use, identify a packet field,
