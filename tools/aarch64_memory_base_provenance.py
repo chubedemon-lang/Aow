@@ -137,16 +137,20 @@ def _validate_known_static_cells(known_static_cells):
         return None
     if type(known_static_cells) not in (tuple, list):
         raise ValueError("known_static_cells must be a built-in tuple or list")
-    if len(known_static_cells) > _MAX_RELOCATION_TARGETS:
+    # A caller-owned list can be mutated between validation passes. Take one
+    # immutable snapshot and use it for the size, value, duplicate and sort
+    # checks so every check describes the same input.
+    snapshot = tuple(known_static_cells)
+    if len(snapshot) > _MAX_RELOCATION_TARGETS:
         raise ValueError("known static cell list exceeds the analysis limit")
     if any(
         type(address) is not int or not 0 <= address <= _U64_MAX - 7
-        for address in known_static_cells
+        for address in snapshot
     ):
         raise ValueError("known static cells must be valid unsigned 64-bit 8-byte ranges")
-    if len(set(known_static_cells)) != len(known_static_cells):
+    if len(set(snapshot)) != len(snapshot):
         raise ValueError("known_static_cells must not contain duplicates")
-    return tuple(sorted(known_static_cells))
+    return tuple(sorted(snapshot))
 
 
 def _memory_access_overlaps_known_static_cell(base_state, access, known_static_cells):
