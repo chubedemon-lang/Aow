@@ -238,8 +238,8 @@ def summarize_field_info_call_arguments(
     unknown_instruction_exact_field_info_register_drop_count = 0
     unknown_instruction_truncated_field_info_register_drop_count = 0
     conditional_select_field_info_merge_drop_count = 0
-    conditional_select_exact_field_info_register_drop_count = 0
-    conditional_select_truncated_field_info_register_drop_count = 0
+    conditional_select_exact_source_register_unmerged_count = 0
+    conditional_select_truncated_source_register_unmerged_count = 0
 
     for block_index, (block_start, block_end) in enumerate(blocks):
         if block_index not in reachable:
@@ -398,10 +398,10 @@ def summarize_field_info_call_arguments(
                             truncated_field_refs[destination] = same_coordinate
                     elif any(reference is not None for reference in selected_references):
                         conditional_select_field_info_merge_drop_count += 1
-                        conditional_select_exact_field_info_register_drop_count += sum(
+                        conditional_select_exact_source_register_unmerged_count += sum(
                             reference is not None for reference in exact_sources
                         )
-                        conditional_select_truncated_field_info_register_drop_count += sum(
+                        conditional_select_truncated_source_register_unmerged_count += sum(
                             reference is not None for reference in truncated_sources
                         )
 
@@ -672,11 +672,11 @@ def summarize_field_info_call_arguments(
         "conditional_select_field_info_merge_drop_count": (
             conditional_select_field_info_merge_drop_count
         ),
-        "conditional_select_exact_field_info_register_drop_count": (
-            conditional_select_exact_field_info_register_drop_count
+        "conditional_select_exact_source_register_unmerged_count": (
+            conditional_select_exact_source_register_unmerged_count
         ),
-        "conditional_select_truncated_field_info_register_drop_count": (
-            conditional_select_truncated_field_info_register_drop_count
+        "conditional_select_truncated_source_register_unmerged_count": (
+            conditional_select_truncated_source_register_unmerged_count
         ),
         "callsite_count": observation_count,
         "callsite_observations": observations,
@@ -690,7 +690,7 @@ def summarize_field_info_call_arguments(
             "copies or a same-coordinate X-form CSEL until a uniquely resolved direct "
             "BL or BLR-family target. A CSEL coordinate is retained only when both "
             "possible inputs carry the same FieldRef coordinate; otherwise the "
-            "destination is cleared and the discarded source registers are counted. "
+            "destination is cleared and the unmerged source-register provenance is counted. "
             "32-bit MOV results, W-form CSEL results, and CSEL results with an already "
             "truncated input are tracked separately in the truncated-argument counters "
             "and are never emitted as exact FieldInfo provenance. Recognized BLR, "
