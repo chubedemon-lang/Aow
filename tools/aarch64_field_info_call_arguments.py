@@ -23,7 +23,7 @@ from tools.aarch64_call_argument_evidence import (
     _decode_conditional_branch_target,
     _decode_move_register,
     _decode_move_wide,
-,    _decode_unconditional_branch_target,
+    _decode_unconditional_branch_target,
     _is_indirect_branch,
     _is_indirect_call,
     _method_name_from_label,
