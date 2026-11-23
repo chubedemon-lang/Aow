@@ -85,7 +85,8 @@ class SqliteMapCapacityStore:
         """Require SQLite enforcement settings whenever this store is used."""
         if self.db.execute("PRAGMA foreign_keys").fetchone() != (1,):
             raise MapCapacityStoreError("SQLite foreign keys are disabled")
-        self._validate_connection_constraints()
+        if self.db.execute("PRAGMA ignore_check_constraints").fetchone() != (0,):
+            raise MapCapacityStoreError("SQLite CHECK constraints are disabled")
 
     @staticmethod
     def _map_id(value):
