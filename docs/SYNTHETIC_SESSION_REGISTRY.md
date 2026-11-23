@@ -9,6 +9,19 @@ by a re-entrant lock. This makes the capacity check and the one-active-session
 constraints for accounts and characters atomic for concurrent callers within
 one Python process.
 
+For composite local state updates, `locked_session(connection_id)` holds the
+registry lock while yielding the current Session handle. The handle must not be
+retained after the context exits. This lets a caller such as MapOccupancy
+publish a related membership record before a verified connection transfer can
+change the registry key.
+
+The registry keeps a reverse lookup from each live Session object to its
+current local connection key. A verified handoff updates both directions
+atomically. Consumers that index related local state by stable Session identity
+can therefore preserve that state when a connection key changes. Closing a
+session removes the reverse lookup. The bulk `connection_keys_for()` lookup
+resolves a set of handles under one registry snapshot.
+
 For compatibility with the existing synthetic movement and handoff helpers,
 open(), get(), and transfer_connection() return a Session handle. When a
 Session is registry-owned, every public transition method on that handle is
@@ -34,7 +47,8 @@ process-local lock.
 
 Run:
 
-python -m unittest discover -s tests -p 'test_synthetic_session_registry.py' -v
+    python -m unittest discover -s tests -p 'test_synthetic_session_registry.py' -v
+    python -m unittest discover -s tests -p 'test_synthetic_map_occupancy_concurrency.py' -v
 
 All identifiers and transitions here are synthetic fixtures. No wire message
 IDs, reconnect semantics, account protocol, or APK compatibility are implied.

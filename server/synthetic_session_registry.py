@@ -6,6 +6,7 @@ operations are serialized with a re-entrant lock so capacity and uniqueness
 checks remain atomic under concurrent callers.
 """
 import threading
+from contextlib import contextmanager
 
 from .synthetic_session_state import Phase, Session, SessionError
 
@@ -20,6 +21,7 @@ class SessionRegistry:
             raise RegistryError("invalid capacity")
         self.capacity = capacity
         self._sessions = {}
+        self._session_keys = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -50,6 +52,42 @@ class SessionRegistry:
             raise SessionError("unsupported session transition") from None
         return handler(connection_id, *args)
 
+    @contextmanager
+    def locked_session(self, connection_id):
+        """Hold the registry lock while composing a multi-object state update.
+
+        The yielded handle is valid for coordinated work only inside this
+        context. Do not retain it after leaving the context. The re-entrant
+        lock permits the handle's public transition methods to route back
+        through this registry without releasing the outer critical section.
+        """
+        key = self._key(connection_id)
+        with self._lock:
+            yield self._get_locked(key)
+
+    def connection_id_for(self, session):
+        """Return the current local key for a live Session, or None if closed."""
+        if type(session) is not Session:
+            raise RegistryError("invalid session handle")
+        with self._lock:
+            return self._session_keys.get(session)
+
+    def connection_keys_for(self, sessions):
+        """Resolve live and closed Session handles under one registry snapshot.
+
+        A None value means the Session is no longer registered. Callers may
+        retain a last-known local key for stale-entry diagnostics until pruning.
+        """
+        if type(sessions) not in (set, frozenset):
+            raise RegistryError("invalid session collection")
+        if any(type(session) is not Session for session in sessions):
+            raise RegistryError("invalid session handle")
+        with self._lock:
+            return {
+                session: self._session_keys.get(session)
+                for session in sessions
+            }
+
     def open(self, connection_id):
         key = self._key(connection_id)
         with self._lock:
@@ -60,6 +98,7 @@ class SessionRegistry:
             session = Session()
             self._bind_locked(key, session)
             self._sessions[key] = session
+            self._session_keys[session] = key
             return session
 
     def get(self, connection_id):
@@ -120,6 +159,8 @@ class SessionRegistry:
 
         This does not authenticate the new connection or represent an AOW
         reconnect packet. Caller must independently verify the handoff.
+        Session identity is stable across the handoff; indexes that retain the
+        Session handle can resolve its new connection key through this registry.
         """
         if verified is not True:
             raise RegistryError("external verification required")
@@ -132,6 +173,7 @@ class SessionRegistry:
                 raise RegistryError("target connection already registered")
             session = self._sessions.pop(old_key)
             self._sessions[new_key] = session
+            self._session_keys[session] = new_key
             self._bind_locked(new_key, session)
             return session
 
@@ -141,6 +183,7 @@ class SessionRegistry:
             session = self._sessions.pop(key, None)
             if session is None:
                 return False
+            self._session_keys.pop(session, None)
             session._close_unchecked()
             return True
 
@@ -152,6 +195,7 @@ class SessionRegistry:
     def _close_locked(self, key):
         session = self._sessions.pop(key, None)
         if session is not None:
+            self._session_keys.pop(session, None)
             session._close_unchecked()
 
     @property
