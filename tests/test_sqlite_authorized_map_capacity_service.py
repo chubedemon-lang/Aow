@@ -79,7 +79,7 @@ class SqliteAuthorizedMapCapacityServiceTests(unittest.TestCase):
         )
         self.assertTrue(replay.replayed)
         self.assertEqual(replay.snapshot, first.snapshot)
-        self.assertEqual(self.service.get_position(self.owner_token, 101), MapPosition())
+        self.assertEqual(self.service.get_position(self.owner_token, 101), MapPosition(revision=2))
         self.assertFalse(self.service.capacities.members(7))
 
     def test_two_service_connections_share_one_durable_capacity(self):
