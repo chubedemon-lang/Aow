@@ -694,5 +694,64 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
 
 
 
+    def test_write_fails_closed_when_foreign_keys_disabled_after_construction(self):
+        self.store.create("hero")
+        self.db.execute("PRAGMA foreign_keys = OFF")
+
+        with self.assertRaisesRegex(
+            MapPositionStoreError, "SQLite foreign keys are disabled"
+        ):
+            self.store.enter("hero", "fk-disabled", 0, 7, 10, 20)
+
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(self.store.get("hero"), MapPosition())
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_mutations"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_nested_write_fails_closed_when_check_constraints_disabled(self):
+        self.store.create("hero")
+        self.db.execute("PRAGMA ignore_check_constraints = ON")
+        self.db.execute("BEGIN")
+        try:
+            with self.assertRaisesRegex(
+                MapPositionStoreError, "SQLite CHECK constraints are disabled"
+            ):
+                self.store.enter("hero", "checks-disabled", 0, 7, 10, 20)
+
+            self.assertTrue(self.db.in_transaction)
+            self.assertEqual(self.store.get("hero"), MapPosition())
+            self.assertEqual(
+                self.db.execute(
+                    "SELECT count(*) FROM map_position_mutations"
+                ).fetchone()[0],
+                0,
+            )
+        finally:
+            self.db.rollback()
+
+    def test_integrity_audit_rejects_runtime_disabled_enforcement(self):
+        self.store.create("hero")
+
+        self.db.execute("PRAGMA foreign_keys = OFF")
+        with self.assertRaisesRegex(
+            MapPositionStoreError, "SQLite foreign keys are disabled"
+        ):
+            self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
+        self.db.execute("PRAGMA foreign_keys = ON")
+        self.db.execute("PRAGMA ignore_check_constraints = ON")
+        with self.assertRaisesRegex(
+            MapPositionStoreError, "SQLite CHECK constraints are disabled"
+        ):
+            self.store.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+        self.db.execute("PRAGMA ignore_check_constraints = OFF")
+
+
 if __name__ == "__main__":
     unittest.main()
