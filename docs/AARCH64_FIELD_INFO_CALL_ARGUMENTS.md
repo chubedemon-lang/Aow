@@ -28,7 +28,9 @@ The bounded intraprocedural pass recognizes:
 
 - ADR and ADRP address formation.
 - 64-bit ADD/SUB immediate address adjustment.
-- Unshifted 32/64-bit MOV-register copies.
+- Unshifted 64-bit MOV-register copies that preserve the full value.
+- 32-bit MOV-register copies are tracked as truncated provenance, not as exact
+  FieldInfo values, because writing Wd zero-extends the low 32 bits into Xd.
 - Relocation-backed 64-bit LDR-literal address loads.
 - Exact 64-bit LDR and 64-bit LDP element loads from a supplied eight-byte
   FieldInfo usage cell.
@@ -50,9 +52,12 @@ instruction words, APK bytes, packet bytes, endpoint values, or player data.
 
 A reported coordinate means only that a value loaded from the specified
 static FieldInfo usage cell was still present in an argument register at a
-uniquely resolved direct call under the supported static transfer rules. The
-summary also reports aggregate coverage counters for direct calls that carry a
-tracked FieldInfo value but have no unique target association. Such calls are
+uniquely resolved direct call under the supported value-preserving static
+transfer rules. A 32-bit MOV is not value-preserving for an eight-byte
+FieldInfo-cell load; calls carrying only that truncated provenance are counted
+separately and are not emitted as exact observations. The summary also reports
+aggregate coverage counters for direct calls that carry a tracked exact
+FieldInfo value but have no unique target association. Such calls are
 counted as unattributed (and separately as ambiguous when multiple target
 labels remain); they are deliberately not emitted as method observations.
 This prevents an empty attributed-observation list from being mistaken for
