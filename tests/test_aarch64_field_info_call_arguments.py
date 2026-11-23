@@ -277,6 +277,40 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
         result = self.analyze(code)
         self.assertEqual(result["field_info_truncated_argument_direct_call_count"], 0)
 
+    def test_unknown_instruction_counts_exact_and_truncated_field_info_drops(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(8, 1),
+            mov_w(0, 8),
+            0xCA030042,  # EOR X2, X2, X3: unsupported by this bounded pass.
+            bl(self.start + 16, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["unknown_instruction_field_info_drop_count"], 1)
+        self.assertEqual(
+            result["unknown_instruction_exact_field_info_register_drop_count"], 1
+        )
+        self.assertEqual(
+            result["unknown_instruction_truncated_field_info_register_drop_count"], 1
+        )
+        self.assertEqual(result["field_info_argument_direct_call_count"], 0)
+        self.assertEqual(result["field_info_truncated_argument_direct_call_count"], 0)
+        self.assertEqual(result["callsite_count"], 0)
+
+    def test_unknown_instruction_without_field_info_state_is_not_counted(self):
+        code = words(
+            0xCA030042,  # EOR X2, X2, X3.
+            bl(self.start + 4, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["unknown_instruction_field_info_drop_count"], 0)
+        self.assertEqual(
+            result["unknown_instruction_exact_field_info_register_drop_count"], 0
+        )
+        self.assertEqual(
+            result["unknown_instruction_truncated_field_info_register_drop_count"], 0
+        )
+
     def test_indirect_blr_counts_exact_field_info_argument_without_attribution(self):
         code = words(
             adr(1, self.start, self.cell),

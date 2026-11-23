@@ -45,7 +45,7 @@ The analysis uses the existing conservative CFG builder. Both conditional
 outcomes are considered. State crosses only a unique forward predecessor;
 joins and backedges start unknown. Calls clobber caller-saved registers.
 Unknown instructions and unsupported transformations clear tracked state.
-Ambiguous direct-call targets are not attributed.
+Ambiguous direct-call targets are not attributed. When an unsupported instruction conservatively clears tracked state, the report counts the drop event and the exact/truncated FieldInfo registers discarded. This distinguishes unsupported data-flow from a path where no FieldInfo provenance was present.
 
 ## Output and interpretation
 
@@ -75,8 +75,7 @@ indirect destination and are not per-call method observations.
 These counters do not identify a managed declaring type or field name, prove
 the call ran, prove the argument's semantic use, identify a packet field,
 establish serializer order, or establish a wire contract. The CFG is bounded
-and structural; predicates are not evaluated and unsupported instructions can
-terminate provenance.
+and structural; predicates are not evaluated and unsupported instructions can terminate provenance. Such termination is counted separately for exact and truncated FieldInfo registers, but the report intentionally does not expose the unknown instruction word or infer which registers it actually modifies.
 
 Run the synthetic regression vectors with:
 

@@ -196,6 +196,9 @@ def summarize_field_info_call_arguments(
     field_info_truncated_argument_indirect_call_count = 0
     unattributed_direct_call_count = 0
     ambiguous_target_direct_call_count = 0
+    unknown_instruction_field_info_drop_count = 0
+    unknown_instruction_exact_field_info_register_drop_count = 0
+    unknown_instruction_truncated_field_info_register_drop_count = 0
 
     for block_index, (block_start, block_end) in enumerate(blocks):
         if block_index not in reachable:
@@ -446,7 +449,16 @@ def summarize_field_info_call_arguments(
             ):
                 continue
 
-            # Unknown instructions may overwrite any tracked register.
+            # Unknown instructions may overwrite any tracked register. Count
+            # FieldInfo provenance that is conservatively discarded so an
+            # empty callsite summary can be distinguished from unsupported
+            # data-flow encountered before the call.
+            exact_dropped = len(field_refs)
+            truncated_dropped = len(truncated_field_refs)
+            if exact_dropped or truncated_dropped:
+                unknown_instruction_field_info_drop_count += 1
+                unknown_instruction_exact_field_info_register_drop_count += exact_dropped
+                unknown_instruction_truncated_field_info_register_drop_count += truncated_dropped
             addresses.clear()
             field_refs.clear()
             truncated_field_refs.clear()
@@ -474,6 +486,15 @@ def summarize_field_info_call_arguments(
         ),
         "unattributed_direct_call_count": unattributed_direct_call_count,
         "ambiguous_target_direct_call_count": ambiguous_target_direct_call_count,
+        "unknown_instruction_field_info_drop_count": (
+            unknown_instruction_field_info_drop_count
+        ),
+        "unknown_instruction_exact_field_info_register_drop_count": (
+            unknown_instruction_exact_field_info_register_drop_count
+        ),
+        "unknown_instruction_truncated_field_info_register_drop_count": (
+            unknown_instruction_truncated_field_info_register_drop_count
+        ),
         "callsite_count": observation_count,
         "callsite_observations": observations,
         "callsite_observations_truncated": observation_count > len(observations),
@@ -492,7 +513,10 @@ def summarize_field_info_call_arguments(
             "target attribution or per-call observation is emitted. The report "
             "separately counts FieldInfo-bearing direct calls whose target is "
             "missing or ambiguous; those calls are not attributed or emitted as "
-            "observations. This is "
+            "observations. Unknown instructions that conservatively clear tracked "
+            "FieldInfo state are counted separately, including exact and truncated "
+            "register drops; this exposes unsupported data-flow without treating it "
+            "as a negative field-use result. This is "
             "static register provenance, not runtime execution, managed owner/name resolution, "
             "packet-field attribution, serializer order, or wire semantics. "
             "Both conditional outcomes are assumed; joins, backedges, unknown "
