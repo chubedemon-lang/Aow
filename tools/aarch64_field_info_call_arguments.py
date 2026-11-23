@@ -7,8 +7,9 @@ tokens, instructions, APK bytes, or packet data.
 
 It is structural static evidence only. Both conditional outcomes are assumed;
 joins, backedges, unknown instructions, calls, and unsupported transformations
-drop provenance. It does not prove runtime execution, managed field identity,
-packet-field identity, or wire semantics.
+drop provenance. CSEL retains a FieldRef coordinate only when both possible
+inputs carry the same coordinate. It does not prove runtime execution, managed
+field identity, packet-field identity, or wire semantics.
 """
 import struct
 
@@ -40,6 +41,21 @@ _MAX_FIELD_INFO_CELLS = 200_000
 _MAX_METHOD_TARGETS = 200_000
 _MAX_REPORTED_CALLS = 512
 _NOP = 0xD503201F
+
+
+def _decode_conditional_select(word):
+    """Decode CSEL (not CSINC/CSINV/CSNEG), returning Rd, Rn, Rm, width mask."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    # sf is intentionally excluded; condition, Rm, Rn and Rd remain variable.
+    # op[1:0] must be 00, which excludes the other conditional-select aliases.
+    if (word & 0x7FE00C00) != 0x1A800000:
+        return None
+    destination = word & 0x1F
+    source_n = (word >> 5) & 0x1F
+    source_m = (word >> 16) & 0x1F
+    width_mask = _U64_MAX if word & 0x80000000 else 0xFFFFFFFF
+    return destination, source_n, source_m, width_mask
 
 
 def _validate_field_info_cell_references(value):
@@ -221,6 +237,9 @@ def summarize_field_info_call_arguments(
     unknown_instruction_field_info_drop_count = 0
     unknown_instruction_exact_field_info_register_drop_count = 0
     unknown_instruction_truncated_field_info_register_drop_count = 0
+    conditional_select_field_info_merge_drop_count = 0
+    conditional_select_exact_source_register_unmerged_count = 0
+    conditional_select_truncated_source_register_unmerged_count = 0
 
     for block_index, (block_start, block_end) in enumerate(blocks):
         if block_index not in reachable:
@@ -333,6 +352,69 @@ def summarize_field_info_call_arguments(
                         # A later MOV Xd, Xm cannot recover bits already lost
                         # by an earlier 32-bit write.
                         truncated_field_refs[destination] = source_truncated_field_ref
+                continue
+
+            conditional_select = _decode_conditional_select(word)
+            if conditional_select is not None:
+                destination, source_n, source_m, width_mask = conditional_select
+                if destination != 31:
+                    # Snapshot both inputs before clearing Rd: CSEL permits Rd
+                    # to alias either source register.
+                    source_registers = (source_n, source_m)
+                    exact_sources = [
+                        field_refs.get(register) if register != 31 else None
+                        for register in source_registers
+                    ]
+                    truncated_sources = [
+                        truncated_field_refs.get(register) if register != 31 else None
+                        for register in source_registers
+                    ]
+                    selected_references = [
+                        exact if exact is not None else truncated
+                        for exact, truncated in zip(exact_sources, truncated_sources)
+                    ]
+                    source_addresses = [
+                        addresses.get(register) if register != 31 else None
+                        for register in source_registers
+                    ]
+
+                    addresses.pop(destination, None)
+                    field_refs.pop(destination, None)
+                    truncated_field_refs.pop(destination, None)
+
+                    if (
+                        selected_references[0] is not None
+                        and selected_references[0] == selected_references[1]
+                    ):
+                        same_coordinate = selected_references[0]
+                        if (
+                            width_mask == _U64_MAX
+                            and all(reference is not None for reference in exact_sources)
+                        ):
+                            field_refs[destination] = same_coordinate
+                        else:
+                            # A W-form CSEL zero-extends a 32-bit result; a
+                            # source already marked truncated cannot regain bits.
+                            truncated_field_refs[destination] = same_coordinate
+                    elif any(reference is not None for reference in selected_references):
+                        conditional_select_field_info_merge_drop_count += 1
+                        conditional_select_exact_source_register_unmerged_count += sum(
+                            reference is not None for reference in exact_sources
+                        )
+                        conditional_select_truncated_source_register_unmerged_count += sum(
+                            reference is not None for reference in truncated_sources
+                        )
+
+                    if (
+                        width_mask == _U64_MAX
+                        and source_addresses[0] is not None
+                        and source_addresses[1] is not None
+                        and source_addresses[0][0] == source_addresses[1][0]
+                    ):
+                        addresses[destination] = (
+                            source_addresses[0][0],
+                            instruction_index,
+                        )
                 continue
 
             literal_load = _decode_ldr_literal(word, pc)
@@ -587,6 +669,15 @@ def summarize_field_info_call_arguments(
         "unknown_instruction_truncated_field_info_register_drop_count": (
             unknown_instruction_truncated_field_info_register_drop_count
         ),
+        "conditional_select_field_info_merge_drop_count": (
+            conditional_select_field_info_merge_drop_count
+        ),
+        "conditional_select_exact_source_register_unmerged_count": (
+            conditional_select_exact_source_register_unmerged_count
+        ),
+        "conditional_select_truncated_source_register_unmerged_count": (
+            conditional_select_truncated_source_register_unmerged_count
+        ),
         "callsite_count": observation_count,
         "callsite_observations": observations,
         "callsite_observations_truncated": observation_count > len(observations),
@@ -596,9 +687,13 @@ def summarize_field_info_call_arguments(
             "A FieldRef coordinate is reported only when a value was loaded by "
             "an exact 64-bit integer load from a caller-supplied FieldInfo usage "
             "cell and remained in x0-x7 through value-preserving 64-bit MOV-register "
-            "copies until a uniquely resolved direct BL. 32-bit MOV truncation is "
-            "tracked separately in field_info_truncated_argument_direct_call_count "
-            "and is not emitted as exact FieldInfo provenance. Recognized BLR, "
+            "copies or a same-coordinate X-form CSEL until a uniquely resolved direct "
+            "BL or BLR-family target. A CSEL coordinate is retained only when both "
+            "possible inputs carry the same FieldRef coordinate; otherwise the "
+            "destination is cleared and the unmerged source-register provenance is counted. "
+            "32-bit MOV results, W-form CSEL results, and CSEL results with an already "
+            "truncated input are tracked separately in the truncated-argument counters "
+            "and are never emitted as exact FieldInfo provenance. Recognized BLR, "
             "BLRAA/BLRAB and zero-modifier authenticated indirect calls exclude "
             "their target and authentication-modifier registers from ABI arguments. "
             "An indirect target is resolved only when its tracked address maps to "

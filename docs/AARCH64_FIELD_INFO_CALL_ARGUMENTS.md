@@ -29,6 +29,10 @@ The bounded intraprocedural pass recognizes:
 - ADR and ADRP address formation.
 - 64-bit ADD/SUB immediate address adjustment.
 - Unshifted 64-bit MOV-register copies that preserve the full value.
+- CSEL preserves FieldInfo provenance only when both possible source registers
+  carry the same FieldRef coordinate. The condition is not evaluated.
+- A W-form CSEL is tracked as truncated provenance because its selected
+  32-bit value is zero-extended into the 64-bit destination.
 - 32-bit MOV-register copies are tracked as truncated provenance, not as exact
   FieldInfo values, because writing Wd zero-extends the low 32 bits into Xd.
 - Relocation-backed 64-bit LDR-literal address loads.
@@ -49,7 +53,10 @@ The analysis uses the existing conservative CFG builder. Both conditional
 outcomes are considered. State crosses only a unique forward predecessor;
 joins and backedges start unknown. Calls clobber caller-saved registers.
 Unknown instructions and unsupported transformations clear tracked state.
-Ambiguous direct-call targets are not attributed. When an unsupported instruction conservatively clears tracked state, the report counts the drop event and the exact/truncated FieldInfo registers discarded. This distinguishes unsupported data-flow from a path where no FieldInfo provenance was present.
+A CSEL with differing, missing, or mixed FieldRef coordinates drops the
+ambiguous result and increments dedicated source-unmerge counters; a same-coordinate
+selection is retained, but W-form results remain truncated. Ambiguous
+direct-call targets are not attributed. When an unsupported instruction conservatively clears tracked state, the report counts the drop event and the exact/truncated FieldInfo registers discarded. This distinguishes unsupported data-flow from a path where no FieldInfo provenance was present.
 
 ## Output and interpretation
 
@@ -114,6 +121,14 @@ cover PC-relative relocation loads and relocation-backed pointer-slot loads,
 plus unresolved/ambiguous targets and pointer-authentication input exclusion.
 This is a tool-capability change only: no new APK analysis was run and no new
 LoginRequest callsite count or wire-contract observation is claimed.
+
+The analyzer also models the CSEL alias conservatively: both source operands
+must carry the same FieldRef coordinate before that coordinate is retained.
+A W-form selection or any selection involving already-truncated input remains
+truncated. If the two source coordinates differ or one source lacks provenance,
+the destination is cleared and the unmerged exact/truncated source-register
+counts are reported separately. CSEL conditions are decoded only as instruction
+structure; their runtime predicates are not evaluated.
 
 This is a new static-analysis bridge for prioritizing private offline review.
 It does not resolve the declaring managed field name, prove the call
