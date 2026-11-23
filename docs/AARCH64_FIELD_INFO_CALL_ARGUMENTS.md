@@ -12,15 +12,15 @@ The caller supplies:
 - Its aligned private start address.
 - The existing relocation-backed direct-call target map.
 - A private map from each exact eight-byte FieldInfo usage cell address to
-  \`(usage occurrence position, FieldRef index, TypeIndex, local field index)\`.
+  `(usage occurrence position, FieldRef index, TypeIndex, local field index)`.
 - Optionally, the existing relocation-slot-to-target map for PC-relative
   literal address loads.
 
 The network callsite analyzer constructs the FieldInfo cell map by sorting
 relocation-backed static usage-cell addresses and joining those cells, in the
-same order, with the already validated \`correlate_field_info_usage_tokens()\`
+same order, with the already validated `correlate_field_info_usage_tokens()`
 result. Only occurrences whose status is
-\`field_ref_coordinate_resolved\` are supplied to this helper.
+`field_ref_coordinate_resolved` are supplied to this helper.
 
 ## Supported provenance
 
@@ -59,9 +59,9 @@ terminate provenance.
 
 Run the synthetic regression vectors with:
 
-\`\`\`sh
+```sh
 python -m unittest discover -s tests -p 'test_aarch64_field_info_call_arguments.py' -v
-\`\`\`
+```
 
 The helper is not run against an APK by CI. Keep APKs, native libraries,
 private static-analysis reports, and all raw captures outside the public

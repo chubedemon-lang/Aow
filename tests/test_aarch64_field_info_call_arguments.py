@@ -142,13 +142,15 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
         observation = result["callsite_observations"][0]
         self.assertEqual(observation["instruction_index"], 3)
         self.assertEqual(observation["target_method"], "Example.LoginRequest::GetField")
+        expected_reference = {
+            "usage_occurrence_position": 7,
+            "field_ref_index": 12,
+            "type_index": 3,
+            "field_index_within_type": 2,
+        }
         self.assertEqual(observation["field_info_arguments"], {
-            "x0": {
-                "usage_occurrence_position": 7,
-                "field_ref_index": 12,
-                "type_index": 3,
-                "field_index_within_type": 2,
-            },
+            "x0": expected_reference,
+            "x2": expected_reference,
         })
 
     def test_traces_adrp_add_address_formation(self):
