@@ -84,6 +84,17 @@ class SqliteMapCapacityStoreTests(unittest.TestCase):
             {"members": 0, "configured_maps": 0},
         )
 
+    def test_verify_integrity_detects_projection_drift_without_repair(self):
+        self.capacity.configure_map(7, 1)
+        self.positions.enter("alpha", "enter", 0, 7, 1, 1)
+        self.capacity.reconcile("alpha", 7)
+        self.db.execute(
+            "UPDATE map_position_snapshots SET map_id=8 WHERE character_id='alpha'"
+        )
+        with self.assertRaises(MapCapacityStoreError):
+            self.capacity.verify_integrity()
+        self.assertEqual(self.capacity.members(7), frozenset({"alpha"}))
+
     def test_two_connections_enforce_one_slot_across_writers(self):
         self.capacity.configure_map(11, 1)
         barrier = threading.Barrier(2)
