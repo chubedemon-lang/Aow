@@ -50,11 +50,18 @@ instruction words, APK bytes, packet bytes, endpoint values, or player data.
 
 A reported coordinate means only that a value loaded from the specified
 static FieldInfo usage cell was still present in an argument register at a
-uniquely resolved direct call under the supported static transfer rules. It
-does not identify a managed declaring type or field name, prove the call ran,
-prove the argument's semantic use, identify a packet field, establish
-serializer order, or establish a wire contract. The CFG is bounded and
-structural; predicates are not evaluated and unsupported instructions can
+uniquely resolved direct call under the supported static transfer rules. The
+summary also reports aggregate coverage counters for direct calls that carry a
+tracked FieldInfo value but have no unique target association. Such calls are
+counted as unattributed (and separately as ambiguous when multiple target
+labels remain); they are deliberately not emitted as method observations.
+This prevents an empty attributed-observation list from being mistaken for
+proof that no FieldInfo-bearing calls were encountered.
+
+These counters do not identify a managed declaring type or field name, prove
+the call ran, prove the argument's semantic use, identify a packet field,
+establish serializer order, or establish a wire contract. The CFG is bounded
+and structural; predicates are not evaluated and unsupported instructions can
 terminate provenance.
 
 Run the synthetic regression vectors with:

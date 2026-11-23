@@ -172,6 +172,9 @@ def summarize_field_info_call_arguments(
     observations = []
     observation_count = 0
     reachable_direct_calls = 0
+    field_info_argument_direct_call_count = 0
+    unattributed_direct_call_count = 0
+    ambiguous_target_direct_call_count = 0
 
     for block_index, (block_start, block_end) in enumerate(blocks):
         if block_index not in reachable:
@@ -323,24 +326,32 @@ def summarize_field_info_call_arguments(
             direct_target = _decode_bl_target(word, pc)
             if direct_target is not None:
                 reachable_direct_calls += 1
-                labels = _ordered_method_labels(targets.get(direct_target, ()))
-                if len(labels) == 1:
-                    method_name = _method_name_from_label(labels[0])
-                    arguments = {
-                        f"x{register}": _reference_report(field_refs[register])
-                        for register in range(8)
-                        if register in field_refs
-                    }
-                    if arguments:
-                        observation_count += 1
-                        if len(observations) < max_observations:
-                            observations.append({
-                                "linear_window_call_ordinal": call_ordinals[instruction_index],
-                                "control_flow_block_index": block_index,
-                                "instruction_index": instruction_index,
-                                "target_method": method_name,
-                                "field_info_arguments": arguments,
-                            })
+                arguments = {
+                    f"x{register}": _reference_report(field_refs[register])
+                    for register in range(8)
+                    if register in field_refs
+                }
+                if arguments:
+                    field_info_argument_direct_call_count += 1
+                    labels = _ordered_method_labels(targets.get(direct_target, ()))
+                    if len(labels) != 1:
+                        unattributed_direct_call_count += 1
+                        if len(labels) > 1:
+                            ambiguous_target_direct_call_count += 1
+                    else:
+                        method_name = _method_name_from_label(labels[0])
+                        if method_name is not None:
+                            observation_count += 1
+                            if len(observations) < max_observations:
+                                observations.append({
+                                    "linear_window_call_ordinal": call_ordinals[instruction_index],
+                                    "control_flow_block_index": block_index,
+                                    "instruction_index": instruction_index,
+                                    "target_method": method_name,
+                                    "field_info_arguments": arguments,
+                                })
+                        else:
+                            unattributed_direct_call_count += 1
                 for register in _CALLER_SAVED_REGISTERS:
                     addresses.pop(register, None)
                     field_refs.pop(register, None)
@@ -372,6 +383,9 @@ def summarize_field_info_call_arguments(
         "field_info_cell_count": len(cells),
         "direct_call_instruction_count": total_direct_calls,
         "statically_reachable_direct_call_count": reachable_direct_calls,
+        "field_info_argument_direct_call_count": field_info_argument_direct_call_count,
+        "unattributed_direct_call_count": unattributed_direct_call_count,
+        "ambiguous_target_direct_call_count": ambiguous_target_direct_call_count,
         "callsite_count": observation_count,
         "callsite_observations": observations,
         "callsite_observations_truncated": observation_count > len(observations),
@@ -381,8 +395,10 @@ def summarize_field_info_call_arguments(
             "A FieldRef coordinate is reported only when a value was loaded by "
             "an exact 64-bit integer load from a caller-supplied FieldInfo usage "
             "cell and remained in x0-x7 through supported MOV-register copies "
-            "until a uniquely resolved direct BL. This is static register "
-            "provenance, not runtime execution, managed owner/name resolution, "
+            "until a uniquely resolved direct BL. The report separately counts "
+            "FieldInfo-bearing direct calls whose target is missing or ambiguous; "
+            "those calls are not attributed or emitted as observations. This is "
+            "static register provenance, not runtime execution, managed owner/name resolution, "
             "packet-field attribution, serializer order, or wire semantics. "
             "Both conditional outcomes are assumed; joins, backedges, unknown "
             "instructions, calls, and unsupported transformations drop state."
