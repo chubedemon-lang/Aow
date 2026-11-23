@@ -9,6 +9,7 @@ from tools.aarch64_memory_base_provenance import (
     _decode_adr,
     _decode_adrp,
     _decode_ldr_literal,
+    _validate_known_static_cells,
     _validate_relocation_targets,
     summarize_control_flow_memory_base_provenance,
 )
