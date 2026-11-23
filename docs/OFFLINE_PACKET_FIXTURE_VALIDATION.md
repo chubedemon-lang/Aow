@@ -23,6 +23,14 @@ strings for hexadecimal payloads. Dictionary keys must also be exact built-in
 strings. Subclasses are rejected so caller-defined mapping, hashing, equality,
 length or iteration hooks cannot run inside the validation boundary.
 
+The single-fixture validator detaches the exact record dictionary before
+reading its fields. The batch validator snapshots batch membership and
+detaches every record dictionary before validating the first payload. After
+those snapshots are taken, later mutations to the caller's list or dictionaries
+cannot change the source-to-payload association or alter an in-progress batch.
+This is an in-process consistency boundary, not proof of capture origin or
+protocol meaning.
+
 The batch validator performs its encoded-length preflight only when
 `payload_hex` is an exact built-in string. A string subclass is passed to the
 single-fixture validator and rejected there before its custom `__len__` hook
