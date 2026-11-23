@@ -95,6 +95,18 @@ def bl(pc, target):
     return 0x94000000 | ((displacement // 4) & 0x03FFFFFF)
 
 
+def blr(register):
+    return 0xD63F0000 | (register << 5)
+
+
+def blraa(target_register, modifier_register):
+    return 0xD73F0800 | (target_register << 5) | modifier_register
+
+
+def blraaz(target_register):
+    return 0xD63F081F | (target_register << 5)
+
+
 def cbz_w(register, pc, target):
     displacement = target - pc
     if displacement % 4:
@@ -264,6 +276,80 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
         )
         result = self.analyze(code)
         self.assertEqual(result["field_info_truncated_argument_direct_call_count"], 0)
+
+    def test_indirect_blr_counts_exact_field_info_argument_without_attribution(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(0, 1),
+            blr(9),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["indirect_call_instruction_count"], 1)
+        self.assertEqual(result["statically_reachable_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_argument_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_truncated_argument_indirect_call_count"], 0)
+        self.assertEqual(result["field_info_argument_direct_call_count"], 0)
+        self.assertEqual(result["callsite_count"], 0)
+        self.assertEqual(result["callsite_observations"], [])
+
+    def test_indirect_call_target_register_is_not_counted_as_an_argument(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(0, 1),
+            blr(0),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["field_info_argument_indirect_call_count"], 0)
+        self.assertEqual(result["callsite_count"], 0)
+
+    def test_authenticated_call_excludes_target_and_modifier_registers(self):
+        second_cell = self.cell + 8
+        third_cell = self.cell + 16
+        code = words(
+            adr(3, self.start, self.cell),
+            ldr_x(0, 3),
+            adr(4, self.start + 8, second_cell),
+            ldr_x(1, 4),
+            adr(5, self.start + 16, third_cell),
+            ldr_x(2, 5),
+            blraa(1, 2),
+        )
+        result = summarize_field_info_call_arguments(
+            code,
+            self.start,
+            self.targets,
+            {
+                self.cell: (0, 1, 2, 3),
+                second_cell: (1, 4, 5, 6),
+                third_cell: (2, 7, 8, 9),
+            },
+        )
+        self.assertEqual(result["field_info_argument_indirect_call_count"], 1)
+        self.assertEqual(result["statically_reachable_indirect_call_count"], 1)
+        self.assertEqual(result["callsite_count"], 0)
+
+    def test_zero_modifier_authenticated_target_is_not_counted_as_argument(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(0, 1),
+            blraaz(0),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["field_info_argument_indirect_call_count"], 0)
+        self.assertEqual(result["callsite_count"], 0)
+
+    def test_truncated_field_info_at_indirect_call_is_counted_separately(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(8, 1),
+            mov_w(0, 8),
+            blr(9),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["field_info_argument_indirect_call_count"], 0)
+        self.assertEqual(result["field_info_truncated_argument_indirect_call_count"], 1)
+        self.assertEqual(result["field_info_truncated_argument_direct_call_count"], 0)
+        self.assertEqual(result["callsite_count"], 0)
 
     def test_32_bit_load_does_not_match_eight_byte_usage_cell(self):
         code = words(
