@@ -581,12 +581,15 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
             bl(self.start + 24, self.target),
         )
         result = self.analyze(code)
-        self.assertEqual(result["callsite_count"], 0)
-        self.assertEqual(result["field_info_argument_direct_call_count"], 0)
+        self.assertEqual(result["callsite_count"], 1)
+        self.assertEqual(result["field_info_argument_direct_call_count"], 1)
         self.assertEqual(result["conditional_select_field_info_merge_drop_count"], 1)
         self.assertEqual(
-            result["conditional_select_exact_field_info_register_drop_count"], 2
+            result["conditional_select_exact_source_register_unmerged_count"], 2
         )
+        arguments = result["callsite_observations"][0]["field_info_arguments"]
+        self.assertNotIn("x0", arguments)
+        self.assertNotIn("x5", arguments)
 
     def test_csel_w_marks_same_fieldref_as_truncated(self):
         second_cell = self.cell + 8
@@ -601,10 +604,13 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
             bl(self.start + 24, self.target),
         )
         result = self.analyze(code)
-        self.assertEqual(result["callsite_count"], 0)
-        self.assertEqual(result["field_info_argument_direct_call_count"], 0)
+        self.assertEqual(result["callsite_count"], 1)
+        self.assertEqual(result["field_info_argument_direct_call_count"], 1)
         self.assertEqual(result["field_info_truncated_argument_direct_call_count"], 1)
         self.assertEqual(result["conditional_select_field_info_merge_drop_count"], 0)
+        self.assertNotIn(
+            "x0", result["callsite_observations"][0]["field_info_arguments"]
+        )
 
     def test_csel_drops_fieldref_when_other_input_has_no_provenance(self):
         code = words(
@@ -616,11 +622,14 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
             bl(self.start + 20, self.target),
         )
         result = self.analyze(code)
-        self.assertEqual(result["callsite_count"], 0)
+        self.assertEqual(result["callsite_count"], 1)
         self.assertEqual(result["conditional_select_field_info_merge_drop_count"], 1)
         self.assertEqual(
-            result["conditional_select_exact_field_info_register_drop_count"], 1
+            result["conditional_select_exact_source_register_unmerged_count"], 1
         )
+        arguments = result["callsite_observations"][0]["field_info_arguments"]
+        self.assertNotIn("x0", arguments)
+        self.assertNotIn("x5", arguments)
 
     def test_csel_does_not_promote_truncated_input_to_exact(self):
         second_cell = self.cell + 8
@@ -634,9 +643,13 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
             bl(self.start + 20, self.target),
         )
         result = self.analyze(code)
-        self.assertEqual(result["callsite_count"], 0)
+        self.assertEqual(result["callsite_count"], 1)
+        self.assertEqual(result["field_info_argument_direct_call_count"], 1)
         self.assertEqual(result["field_info_truncated_argument_direct_call_count"], 1)
         self.assertEqual(result["conditional_select_field_info_merge_drop_count"], 0)
+        self.assertNotIn(
+            "x0", result["callsite_observations"][0]["field_info_arguments"]
+        )
 
     def test_csel_preserves_equal_relocation_backed_indirect_target(self):
         literal_slot = 0x1800
