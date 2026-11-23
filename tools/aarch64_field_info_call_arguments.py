@@ -99,6 +99,17 @@ def _reference_report(reference):
     }
 
 
+def _indirect_call_input_registers(word):
+    """Return BLR target/authentication input registers, not ABI arguments."""
+    if (word & 0xFFFFFC1F) == 0xD63F0000:  # BLR Xn
+        return frozenset({(word >> 5) & 0x1F})
+    if (word & 0xFFFFFC00) in (0xD73F0800, 0xD73F0C00):  # BLRAA/BLRAB Xn, Xm
+        return frozenset({(word >> 5) & 0x1F, word & 0x1F})
+    if (word & 0xFFFFFC1F) in (0xD63F081F, 0xD63F0C1F):  # BLRAAZ/BLRABZ Xn
+        return frozenset({(word >> 5) & 0x1F})
+    return frozenset()
+
+
 def summarize_field_info_call_arguments(
     code,
     start_va,
@@ -164,10 +175,13 @@ def summarize_field_info_call_arguments(
 
     call_ordinals = {}
     total_direct_calls = 0
+    total_indirect_calls = 0
     for index, word in enumerate(words):
         if _decode_bl_target(word, start_va + index * 4) is not None:
             call_ordinals[index] = total_direct_calls
             total_direct_calls += 1
+        if _is_indirect_call(word):
+            total_indirect_calls += 1
 
     outgoing_addresses = {}
     outgoing_field_refs = {}
@@ -177,6 +191,9 @@ def summarize_field_info_call_arguments(
     reachable_direct_calls = 0
     field_info_argument_direct_call_count = 0
     field_info_truncated_argument_direct_call_count = 0
+    reachable_indirect_calls = 0
+    field_info_argument_indirect_call_count = 0
+    field_info_truncated_argument_indirect_call_count = 0
     unattributed_direct_call_count = 0
     ambiguous_target_direct_call_count = 0
 
@@ -397,6 +414,24 @@ def summarize_field_info_call_arguments(
                 continue
 
             if _is_indirect_call(word):
+                reachable_indirect_calls += 1
+                non_argument_inputs = _indirect_call_input_registers(word)
+                has_exact_field_argument = any(
+                    register not in non_argument_inputs and register in field_refs
+                    for register in range(8)
+                )
+                has_truncated_field_argument = any(
+                    register not in non_argument_inputs
+                    and register in truncated_field_refs
+                    for register in range(8)
+                )
+                if has_exact_field_argument:
+                    field_info_argument_indirect_call_count += 1
+                if has_truncated_field_argument:
+                    field_info_truncated_argument_indirect_call_count += 1
+                # The target and pointer-authentication modifier are instruction
+                # inputs, not ABI argument registers; exclude them above. Do not
+                # attribute an indirect target or emit per-call observations.
                 for register in _CALLER_SAVED_REGISTERS:
                     addresses.pop(register, None)
                     field_refs.pop(register, None)
@@ -429,6 +464,14 @@ def summarize_field_info_call_arguments(
         "field_info_truncated_argument_direct_call_count": (
             field_info_truncated_argument_direct_call_count
         ),
+        "indirect_call_instruction_count": total_indirect_calls,
+        "statically_reachable_indirect_call_count": reachable_indirect_calls,
+        "field_info_argument_indirect_call_count": (
+            field_info_argument_indirect_call_count
+        ),
+        "field_info_truncated_argument_indirect_call_count": (
+            field_info_truncated_argument_indirect_call_count
+        ),
         "unattributed_direct_call_count": unattributed_direct_call_count,
         "ambiguous_target_direct_call_count": ambiguous_target_direct_call_count,
         "callsite_count": observation_count,
@@ -442,9 +485,14 @@ def summarize_field_info_call_arguments(
             "cell and remained in x0-x7 through value-preserving 64-bit MOV-register "
             "copies until a uniquely resolved direct BL. 32-bit MOV truncation is "
             "tracked separately in field_info_truncated_argument_direct_call_count "
-            "and is not emitted as exact FieldInfo provenance. The report separately counts "
-            "FieldInfo-bearing direct calls whose target is missing or ambiguous; "
-            "those calls are not attributed or emitted as observations. This is "
+            "and is not emitted as exact FieldInfo provenance. Recognized BLR, "
+            "BLRAA/BLRAB and zero-modifier authenticated indirect calls receive "
+            "separate aggregate exact/truncated argument counters; their target "
+            "and authentication-modifier registers are excluded, and no indirect "
+            "target attribution or per-call observation is emitted. The report "
+            "separately counts FieldInfo-bearing direct calls whose target is "
+            "missing or ambiguous; those calls are not attributed or emitted as "
+            "observations. This is "
             "static register provenance, not runtime execution, managed owner/name resolution, "
             "packet-field attribution, serializer order, or wire semantics. "
             "Both conditional outcomes are assumed; joins, backedges, unknown "
