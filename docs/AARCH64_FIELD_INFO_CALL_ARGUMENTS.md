@@ -31,6 +31,11 @@ The bounded intraprocedural pass recognizes:
 - Unshifted 64-bit MOV-register copies that preserve the full value.
 - CSEL preserves FieldInfo provenance only when both possible source registers
   carry the same FieldRef coordinate. The condition is not evaluated.
+- CSINC, CSINV and CSNEG are recognized as value-transforming conditional-select
+  operations. Their FieldInfo source use and any overwritten destination
+  provenance are counted, but the transformed destination is never treated as
+  an exact FieldInfo value. Only the destination register is cleared, preserving
+  unrelated source-register state.
 - A W-form CSEL is tracked as truncated provenance because its selected
   32-bit value is zero-extended into the 64-bit destination.
 - 32-bit MOV-register copies are tracked as truncated provenance, not as exact
@@ -52,7 +57,10 @@ The bounded intraprocedural pass recognizes:
 The analysis uses the existing conservative CFG builder. Both conditional
 outcomes are considered. State crosses only a unique forward predecessor;
 joins and backedges start unknown. Calls clobber caller-saved registers.
-Unknown instructions and unsupported transformations clear tracked state.
+Recognized CSINC/CSINV/CSNEG operations clear only their destination while
+preserving source registers that are not overwritten. Other unknown
+instructions clear tracked state and increment the exact/truncated drop
+counters.
 A CSEL with differing, missing, or mixed FieldRef coordinates drops the
 ambiguous result and increments dedicated source-unmerge counters; a same-coordinate
 selection is retained, but W-form results remain truncated. Ambiguous
@@ -128,7 +136,9 @@ A W-form selection or any selection involving already-truncated input remains
 truncated. If the two source coordinates differ or one source lacks provenance,
 the destination is cleared and the unmerged exact/truncated source-register
 counts are reported separately. CSEL conditions are decoded only as instruction
-structure; their runtime predicates are not evaluated.
+structure; their runtime predicates are not evaluated. CSINC/CSINV/CSNEG source
+uses, opcode counts, and destination provenance drops are reported separately;
+their transformed results are not emitted as FieldInfo coordinates.
 
 This is a new static-analysis bridge for prioritizing private offline review.
 It does not resolve the declaring managed field name, prove the call

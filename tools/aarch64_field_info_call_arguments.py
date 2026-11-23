@@ -58,6 +58,25 @@ def _decode_conditional_select(word):
     return destination, source_n, source_m, width_mask
 
 
+def _decode_conditional_select_transform(word):
+    """Decode CSINC/CSINV/CSNEG, whose result is not a value-preserving copy."""
+    if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+        return None
+    family = word & 0x7FE00C00
+    operation = {
+        0x1A800400: "csinc",
+        0x5A800000: "csinv",
+        0x5A800400: "csneg",
+    }.get(family)
+    if operation is None:
+        return None
+    destination = word & 0x1F
+    source_n = (word >> 5) & 0x1F
+    source_m = (word >> 16) & 0x1F
+    width_mask = _U64_MAX if word & 0x80000000 else 0xFFFFFFFF
+    return destination, source_n, source_m, width_mask, operation
+
+
 def _validate_field_info_cell_references(value):
     """Validate address -> (occurrence, FieldRef index, TypeIndex, local index)."""
     if type(value) is not dict:
@@ -240,6 +259,16 @@ def summarize_field_info_call_arguments(
     conditional_select_field_info_merge_drop_count = 0
     conditional_select_exact_source_register_unmerged_count = 0
     conditional_select_truncated_source_register_unmerged_count = 0
+    conditional_select_transform_operation_counts = {
+        "csinc": 0,
+        "csinv": 0,
+        "csneg": 0,
+    }
+    conditional_select_transform_field_info_use_count = 0
+    conditional_select_transform_exact_source_register_use_count = 0
+    conditional_select_transform_truncated_source_register_use_count = 0
+    conditional_select_transform_exact_destination_drop_count = 0
+    conditional_select_transform_truncated_destination_drop_count = 0
 
     for block_index, (block_start, block_end) in enumerate(blocks):
         if block_index not in reachable:
@@ -415,6 +444,50 @@ def summarize_field_info_call_arguments(
                             source_addresses[0][0],
                             instruction_index,
                         )
+                continue
+
+            conditional_transform = _decode_conditional_select_transform(word)
+            if conditional_transform is not None:
+                (
+                    destination,
+                    source_n,
+                    source_m,
+                    width_mask,
+                    operation,
+                ) = conditional_transform
+                conditional_select_transform_operation_counts[operation] += 1
+                source_registers = {
+                    register
+                    for register in (source_n, source_m)
+                    if register != 31
+                }
+                exact_source_count = sum(
+                    register in field_refs for register in source_registers
+                )
+                truncated_source_count = sum(
+                    register in truncated_field_refs
+                    for register in source_registers
+                )
+                if exact_source_count or truncated_source_count:
+                    conditional_select_transform_field_info_use_count += 1
+                    conditional_select_transform_exact_source_register_use_count += (
+                        exact_source_count
+                    )
+                    conditional_select_transform_truncated_source_register_use_count += (
+                        truncated_source_count
+                    )
+
+                if destination != 31:
+                    if destination in field_refs:
+                        conditional_select_transform_exact_destination_drop_count += 1
+                    if destination in truncated_field_refs:
+                        conditional_select_transform_truncated_destination_drop_count += 1
+                    # CSINC/CSINV/CSNEG transform the selected value. The
+                    # sources remain unchanged unless Rd aliases one of them;
+                    # only the destination loses value/address provenance.
+                    addresses.pop(destination, None)
+                    field_refs.pop(destination, None)
+                    truncated_field_refs.pop(destination, None)
                 continue
 
             literal_load = _decode_ldr_literal(word, pc)
@@ -678,6 +751,24 @@ def summarize_field_info_call_arguments(
         "conditional_select_truncated_source_register_unmerged_count": (
             conditional_select_truncated_source_register_unmerged_count
         ),
+        "conditional_select_transform_operation_counts": (
+            conditional_select_transform_operation_counts
+        ),
+        "conditional_select_transform_field_info_use_count": (
+            conditional_select_transform_field_info_use_count
+        ),
+        "conditional_select_transform_exact_source_register_use_count": (
+            conditional_select_transform_exact_source_register_use_count
+        ),
+        "conditional_select_transform_truncated_source_register_use_count": (
+            conditional_select_transform_truncated_source_register_use_count
+        ),
+        "conditional_select_transform_exact_destination_drop_count": (
+            conditional_select_transform_exact_destination_drop_count
+        ),
+        "conditional_select_transform_truncated_destination_drop_count": (
+            conditional_select_transform_truncated_destination_drop_count
+        ),
         "callsite_count": observation_count,
         "callsite_observations": observations,
         "callsite_observations_truncated": observation_count > len(observations),
@@ -691,6 +782,10 @@ def summarize_field_info_call_arguments(
             "BL or BLR-family target. A CSEL coordinate is retained only when both "
             "possible inputs carry the same FieldRef coordinate; otherwise the "
             "destination is cleared and the unmerged source-register provenance is counted. "
+            "CSINC, CSINV and CSNEG are recognized as value-transforming operations: "
+            "tracked source use and destination drops are counted, only the destination "
+            "register is cleared, and unrelated source registers remain tracked. "
+            "Their transformed result is never promoted to exact FieldInfo provenance. "
             "32-bit MOV results, W-form CSEL results, and CSEL results with an already "
             "truncated input are tracked separately in the truncated-argument counters "
             "and are never emitted as exact FieldInfo provenance. Recognized BLR, "
@@ -711,7 +806,9 @@ def summarize_field_info_call_arguments(
             "as a negative field-use result. This is "
             "static register provenance, not runtime execution, managed owner/name resolution, "
             "packet-field attribution, serializer order, or wire semantics. "
-            "Both conditional outcomes are assumed; joins, backedges, unknown "
-            "instructions, calls, and unsupported transformations drop state."
+            "Both conditional outcomes are assumed; joins and backedges start unknown. "
+            "Calls clobber caller-saved registers. Recognized CSINC/CSINV/CSNEG "
+            "operations clear only their destination; other unknown instructions "
+            "conservatively clear all tracked state."
         ),
     }

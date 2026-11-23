@@ -97,6 +97,36 @@ def csel_w(destination, source_n, source_m, condition=0):
     )
 
 
+def csinc_x(destination, source_n, source_m, condition=0):
+    return (
+        0x9A800400
+        | (source_m << 16)
+        | (condition << 12)
+        | (source_n << 5)
+        | destination
+    )
+
+
+def csinv_x(destination, source_n, source_m, condition=0):
+    return (
+        0xDA800000
+        | (source_m << 16)
+        | (condition << 12)
+        | (source_n << 5)
+        | destination
+    )
+
+
+def csneg_w(destination, source_n, source_m, condition=0):
+    return (
+        0x5A800400
+        | (source_m << 16)
+        | (condition << 12)
+        | (source_n << 5)
+        | destination
+    )
+
+
 def ldr_literal_x(destination, pc, literal_slot):
     displacement = literal_slot - pc
     if displacement % 4:
@@ -764,6 +794,65 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
             bl(self.start + 24, self.target),
         )
         self.assertEqual(self.analyze(code)["callsite_count"], 0)
+
+    def test_csinc_counts_field_info_use_and_preserves_unmodified_source(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(2, 1),
+            csinc_x(5, 2, 4, condition=1),
+            mov_x(0, 2),
+            bl(self.start + 16, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["conditional_select_transform_operation_counts"]["csinc"], 1)
+        self.assertEqual(result["conditional_select_transform_field_info_use_count"], 1)
+        self.assertEqual(
+            result["conditional_select_transform_exact_source_register_use_count"], 1
+        )
+        self.assertEqual(result["conditional_select_transform_exact_destination_drop_count"], 0)
+        self.assertEqual(result["unknown_instruction_field_info_drop_count"], 0)
+        self.assertEqual(result["callsite_count"], 1)
+        self.assertIn(
+            "x0", result["callsite_observations"][0]["field_info_arguments"]
+        )
+
+    def test_csinv_clears_only_destination_when_it_aliases_field_info_source(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(2, 1),
+            csinv_x(2, 2, 4, condition=2),
+            mov_x(0, 2),
+            bl(self.start + 16, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["conditional_select_transform_operation_counts"]["csinv"], 1)
+        self.assertEqual(result["conditional_select_transform_field_info_use_count"], 1)
+        self.assertEqual(
+            result["conditional_select_transform_exact_source_register_use_count"], 1
+        )
+        self.assertEqual(result["conditional_select_transform_exact_destination_drop_count"], 1)
+        self.assertEqual(result["unknown_instruction_field_info_drop_count"], 0)
+        self.assertEqual(result["callsite_count"], 0)
+
+    def test_csneg_w_counts_truncated_source_without_promoting_result(self):
+        code = words(
+            adr(1, self.start, self.cell),
+            ldr_x(8, 1),
+            mov_w(2, 8),
+            csneg_w(5, 2, 4, condition=3),
+            mov_x(0, 2),
+            bl(self.start + 20, self.target),
+        )
+        result = self.analyze(code)
+        self.assertEqual(result["conditional_select_transform_operation_counts"]["csneg"], 1)
+        self.assertEqual(result["conditional_select_transform_field_info_use_count"], 1)
+        self.assertEqual(
+            result["conditional_select_transform_truncated_source_register_use_count"], 1
+        )
+        self.assertEqual(result["conditional_select_transform_truncated_destination_drop_count"], 0)
+        self.assertEqual(result["field_info_truncated_argument_direct_call_count"], 1)
+        self.assertEqual(result["callsite_count"], 0)
+        self.assertEqual(result["unknown_instruction_field_info_drop_count"], 0)
 
     def test_report_never_emits_native_addresses_or_bytes(self):
         code = words(
