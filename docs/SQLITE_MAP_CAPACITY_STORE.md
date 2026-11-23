@@ -16,8 +16,11 @@ caller-supplied test/server configuration; no original-game value is inferred.
 - A map_id index supports bounded occupancy counts.
 
 Construction requires an idle SQLite connection and an initialized
-map_position_snapshots table. The store verifies its column signatures, foreign
-key, index, and CHECK-constraint presence. The connection remains caller-owned.
+map_position_snapshots table. The store verifies its column signatures,
+foreign key, index, and normalized table definitions, including the exact range and
+length CHECK expressions. Tables with unrelated or weakened CHECK clauses are
+rejected even when their columns and foreign keys look compatible. The connection
+remains caller-owned.
 
 ## Operations
 
