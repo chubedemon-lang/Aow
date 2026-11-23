@@ -110,6 +110,17 @@ def _indirect_call_input_registers(word):
     return frozenset()
 
 
+def _indirect_call_target_register(word):
+    """Return the control-flow target register for a recognized BLR-family call."""
+    if (word & 0xFFFFFC1F) == 0xD63F0000:  # BLR Xn
+        return (word >> 5) & 0x1F
+    if (word & 0xFFFFFC00) in (0xD73F0800, 0xD73F0C00):  # BLRAA/BLRAB Xn, Xm
+        return (word >> 5) & 0x1F
+    if (word & 0xFFFFFC1F) in (0xD63F081F, 0xD63F0C1F):  # BLRAAZ/BLRABZ Xn
+        return (word >> 5) & 0x1F
+    return None
+
+
 def summarize_field_info_call_arguments(
     code,
     start_va,
@@ -174,6 +185,7 @@ def summarize_field_info_call_arguments(
                 predecessors[destination].add(source)
 
     call_ordinals = {}
+    indirect_call_ordinals = {}
     total_direct_calls = 0
     total_indirect_calls = 0
     for index, word in enumerate(words):
@@ -181,6 +193,7 @@ def summarize_field_info_call_arguments(
             call_ordinals[index] = total_direct_calls
             total_direct_calls += 1
         if _is_indirect_call(word):
+            indirect_call_ordinals[index] = total_indirect_calls
             total_indirect_calls += 1
 
     outgoing_addresses = {}
@@ -192,8 +205,17 @@ def summarize_field_info_call_arguments(
     field_info_argument_direct_call_count = 0
     field_info_truncated_argument_direct_call_count = 0
     reachable_indirect_calls = 0
+    resolved_indirect_call_count = 0
+    unresolved_indirect_call_count = 0
+    ambiguous_indirect_call_count = 0
     field_info_argument_indirect_call_count = 0
     field_info_truncated_argument_indirect_call_count = 0
+    field_info_argument_resolved_indirect_call_count = 0
+    field_info_argument_unattributed_indirect_call_count = 0
+    field_info_truncated_argument_resolved_indirect_call_count = 0
+    field_info_truncated_argument_unattributed_indirect_call_count = 0
+    indirect_call_observations = []
+    indirect_call_observation_count = 0
     unattributed_direct_call_count = 0
     ambiguous_target_direct_call_count = 0
     unknown_instruction_field_info_drop_count = 0
@@ -358,11 +380,17 @@ def summarize_field_info_call_arguments(
                             effective_address = (
                                 base_state[0] + byte_offset + displacement
                             )
-                            if (
-                                0 <= effective_address <= _U64_MAX - 7
-                                and effective_address in cells
-                            ):
-                                field_refs[destination] = cells[effective_address]
+                            if 0 <= effective_address <= _U64_MAX - 7:
+                                if effective_address in cells:
+                                    field_refs[destination] = cells[effective_address]
+                                elif effective_address in relocations:
+                                    # A relocation-backed pointer slot can feed
+                                    # a later BLR-family target register. Keep
+                                    # this separate from FieldInfo value provenance.
+                                    addresses[destination] = (
+                                        relocations[effective_address],
+                                        instruction_index,
+                                    )
                 writeback = access.get("base_update_bytes", 0)
                 if writeback and base_register != 31:
                     if base_state is None:
@@ -419,22 +447,66 @@ def summarize_field_info_call_arguments(
             if _is_indirect_call(word):
                 reachable_indirect_calls += 1
                 non_argument_inputs = _indirect_call_input_registers(word)
-                has_exact_field_argument = any(
-                    register not in non_argument_inputs and register in field_refs
-                    for register in range(8)
+                target_register = _indirect_call_target_register(word)
+                target_state = (
+                    addresses.get(target_register)
+                    if target_register is not None and target_register != 31
+                    else None
                 )
-                has_truncated_field_argument = any(
-                    register not in non_argument_inputs
+                target_address = target_state[0] if target_state is not None else None
+                labels = _ordered_method_labels(targets.get(target_address, ()))
+                target_method = (
+                    _method_name_from_label(labels[0]) if len(labels) == 1 else None
+                )
+                if target_method is not None:
+                    resolved_indirect_call_count += 1
+                elif len(labels) > 1:
+                    ambiguous_indirect_call_count += 1
+                else:
+                    unresolved_indirect_call_count += 1
+
+                arguments = {
+                    f"x{register}": _reference_report(field_refs[register])
+                    for register in range(8)
+                    if register not in non_argument_inputs and register in field_refs
+                }
+                truncated_arguments = [
+                    register for register in range(8)
+                    if register not in non_argument_inputs
                     and register in truncated_field_refs
-                    for register in range(8)
-                )
+                ]
+                has_exact_field_argument = bool(arguments)
+                has_truncated_field_argument = bool(truncated_arguments)
                 if has_exact_field_argument:
                     field_info_argument_indirect_call_count += 1
+                    if target_method is not None:
+                        field_info_argument_resolved_indirect_call_count += 1
+                    else:
+                        field_info_argument_unattributed_indirect_call_count += 1
                 if has_truncated_field_argument:
                     field_info_truncated_argument_indirect_call_count += 1
+                    if target_method is not None:
+                        field_info_truncated_argument_resolved_indirect_call_count += 1
+                    else:
+                        field_info_truncated_argument_unattributed_indirect_call_count += 1
+
+                if target_method is not None and arguments:
+                    indirect_call_observation_count += 1
+                    if len(indirect_call_observations) < max_observations:
+                        indirect_call_observations.append({
+                            "linear_window_indirect_call_ordinal": (
+                                indirect_call_ordinals[instruction_index]
+                            ),
+                            "control_flow_block_index": block_index,
+                            "instruction_index": instruction_index,
+                            "target_method": target_method,
+                            "field_info_arguments": arguments,
+                        })
+
                 # The target and pointer-authentication modifier are instruction
-                # inputs, not ABI argument registers; exclude them above. Do not
-                # attribute an indirect target or emit per-call observations.
+                # inputs, not ABI arguments. Their registers are excluded above.
+                # Indirect targets are attributed only when the tracked address
+                # maps to one unique metadata-backed method entry.
                 for register in _CALLER_SAVED_REGISTERS:
                     addresses.pop(register, None)
                     field_refs.pop(register, None)
@@ -478,11 +550,31 @@ def summarize_field_info_call_arguments(
         ),
         "indirect_call_instruction_count": total_indirect_calls,
         "statically_reachable_indirect_call_count": reachable_indirect_calls,
+        "resolved_indirect_call_count": resolved_indirect_call_count,
+        "unresolved_indirect_call_count": unresolved_indirect_call_count,
+        "ambiguous_indirect_call_count": ambiguous_indirect_call_count,
         "field_info_argument_indirect_call_count": (
             field_info_argument_indirect_call_count
         ),
         "field_info_truncated_argument_indirect_call_count": (
             field_info_truncated_argument_indirect_call_count
+        ),
+        "field_info_argument_resolved_indirect_call_count": (
+            field_info_argument_resolved_indirect_call_count
+        ),
+        "field_info_argument_unattributed_indirect_call_count": (
+            field_info_argument_unattributed_indirect_call_count
+        ),
+        "field_info_truncated_argument_resolved_indirect_call_count": (
+            field_info_truncated_argument_resolved_indirect_call_count
+        ),
+        "field_info_truncated_argument_unattributed_indirect_call_count": (
+            field_info_truncated_argument_unattributed_indirect_call_count
+        ),
+        "indirect_call_observation_count": indirect_call_observation_count,
+        "indirect_call_observations": indirect_call_observations,
+        "indirect_call_observations_truncated": (
+            indirect_call_observation_count > len(indirect_call_observations)
         ),
         "unattributed_direct_call_count": unattributed_direct_call_count,
         "ambiguous_target_direct_call_count": ambiguous_target_direct_call_count,
@@ -507,11 +599,16 @@ def summarize_field_info_call_arguments(
             "copies until a uniquely resolved direct BL. 32-bit MOV truncation is "
             "tracked separately in field_info_truncated_argument_direct_call_count "
             "and is not emitted as exact FieldInfo provenance. Recognized BLR, "
-            "BLRAA/BLRAB and zero-modifier authenticated indirect calls receive "
-            "separate aggregate exact/truncated argument counters; their target "
-            "and authentication-modifier registers are excluded, and no indirect "
-            "target attribution or per-call observation is emitted. The report "
-            "separately counts FieldInfo-bearing direct calls whose target is "
+            "BLRAA/BLRAB and zero-modifier authenticated indirect calls exclude "
+            "their target and authentication-modifier registers from ABI arguments. "
+            "An indirect target is resolved only when its tracked address maps to "
+            "one unique metadata-backed method entry; relocation-backed literal "
+            "and 64-bit pointer-slot loads can provide that address provenance. "
+            "Resolved indirect calls carrying exact FieldInfo values receive a "
+            "separate redacted per-call observation. Unresolved and ambiguous "
+            "targets remain separate counters and are never attributed. Truncated "
+            "FieldInfo values remain separately counted and are never emitted as "
+            "exact coordinates. The report separately counts FieldInfo-bearing direct calls whose target is "
             "missing or ambiguous; those calls are not attributed or emitted as "
             "observations. Unknown instructions that conservatively clear tracked "
             "FieldInfo state are counted separately, including exact and truncated "

@@ -34,12 +34,16 @@ The bounded intraprocedural pass recognizes:
 - Relocation-backed 64-bit LDR-literal address loads.
 - Exact 64-bit LDR and 64-bit LDP element loads from a supplied eight-byte
   FieldInfo usage cell.
+- Relocation-backed 64-bit pointer-slot loads from a statically known address;
+  the loaded pointer remains separate from FieldInfo value provenance.
 - A resulting FieldRef coordinate remaining in x0-x7 until a uniquely
-  resolved direct BL.
-- Aggregate exact/truncated argument-presence counters at recognized BLR,
-  BLRAA/BLRAB, and zero-modifier authenticated indirect calls. The call-target
-  register and pointer-authentication modifier register are excluded; indirect
-  targets are not attributed and no per-call observation is emitted.
+  resolved direct BL or uniquely resolved BLR-family call.
+- Recognized BLR, BLRAA/BLRAB, and zero-modifier authenticated calls exclude
+  their target and pointer-authentication modifier registers from ABI arguments.
+  An indirect target is attributed only when its tracked address maps to one
+  unique metadata-backed method entry. Resolved calls carrying exact FieldInfo
+  coordinates receive separate redacted per-call observations; unresolved and
+  ambiguous targets remain explicit aggregate counters.
 
 The analysis uses the existing conservative CFG builder. Both conditional
 outcomes are considered. State crosses only a unique forward predecessor;
@@ -100,9 +104,16 @@ For each resolved LoginRequest entry window, the separate summary includes
 resolved direct/indirect method-call observations and the
 FieldInfo-to-call-argument provenance pass. When a statically loaded FieldInfo usage cell can be joined
 to a validated FieldRef coordinate and that value remains in x0-x7 at a
-uniquely resolved direct BL, the report emits the usage position, FieldRef
-index, TypeIndex, local field index, relative instruction index and symbolic
-target method label.
+uniquely resolved direct BL or uniquely resolved BLR-family target, the report
+emits the usage position, FieldRef index, TypeIndex, local field index,
+relative instruction index and symbolic target method label.
+
+The BLR-family target resolver accepts only a tracked target-register address
+that maps to one unique metadata-backed method entry. Its synthetic tests
+cover PC-relative relocation loads and relocation-backed pointer-slot loads,
+plus unresolved/ambiguous targets and pointer-authentication input exclusion.
+This is a tool-capability change only: no new APK analysis was run and no new
+LoginRequest callsite count or wire-contract observation is claimed.
 
 This is a new static-analysis bridge for prioritizing private offline review.
 It does not resolve the declaring managed field name, prove the call
