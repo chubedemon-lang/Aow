@@ -21,6 +21,7 @@ class SessionRegistry:
             raise RegistryError("invalid capacity")
         self.capacity = capacity
         self._sessions = {}
+        self._session_keys = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -64,6 +65,26 @@ class SessionRegistry:
         with self._lock:
             yield self._get_locked(key)
 
+    def connection_id_for(self, session):
+        """Return the current local key for a live Session, or None if closed."""
+        if type(session) is not Session:
+            raise RegistryError("invalid session handle")
+        with self._lock:
+            return self._session_keys.get(session)
+
+    def connection_ids_for(self, sessions):
+        """Resolve a set of live Session handles under one registry snapshot."""
+        if type(sessions) not in (set, frozenset):
+            raise RegistryError("invalid session collection")
+        if any(type(session) is not Session for session in sessions):
+            raise RegistryError("invalid session handle")
+        with self._lock:
+            return frozenset(
+                self._session_keys[session]
+                for session in sessions
+                if session in self._session_keys
+            )
+
     def open(self, connection_id):
         key = self._key(connection_id)
         with self._lock:
@@ -74,6 +95,7 @@ class SessionRegistry:
             session = Session()
             self._bind_locked(key, session)
             self._sessions[key] = session
+            self._session_keys[session] = key
             return session
 
     def get(self, connection_id):
@@ -134,8 +156,8 @@ class SessionRegistry:
 
         This does not authenticate the new connection or represent an AOW
         reconnect packet. Caller must independently verify the handoff.
-        An in-map session cannot be transferred because the local map
-        occupancy index is keyed by its current connection identifier.
+        Session identity is stable across the handoff; indexes that retain the
+        Session handle can resolve its new connection key through this registry.
         """
         if verified is not True:
             raise RegistryError("external verification required")
@@ -146,11 +168,9 @@ class SessionRegistry:
                 raise RegistryError("unknown source connection")
             if new_key in self._sessions:
                 raise RegistryError("target connection already registered")
-            session = self._sessions[old_key]
-            if session.snapshot.phase is Phase.IN_MAP:
-                raise RegistryError("cannot transfer connection while in map")
-            self._sessions.pop(old_key)
+            session = self._sessions.pop(old_key)
             self._sessions[new_key] = session
+            self._session_keys[session] = new_key
             self._bind_locked(new_key, session)
             return session
 
@@ -160,6 +180,7 @@ class SessionRegistry:
             session = self._sessions.pop(key, None)
             if session is None:
                 return False
+            self._session_keys.pop(session, None)
             session._close_unchecked()
             return True
 
@@ -171,6 +192,7 @@ class SessionRegistry:
     def _close_locked(self, key):
         session = self._sessions.pop(key, None)
         if session is not None:
+            self._session_keys.pop(session, None)
             session._close_unchecked()
 
     @property

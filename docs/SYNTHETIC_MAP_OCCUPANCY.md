@@ -6,16 +6,17 @@ SessionRegistry. It is not an AOW map, room, matchmaking, or movement protocol.
 ## Concurrency boundary
 
 A re-entrant occupancy lock protects local map membership. During admission,
-MapOccupancy also holds the SessionRegistry lock until the session transition,
-membership entry, and join epoch have all been published. This prevents a
-verified connection handoff from moving the registry key between the session
+MapOccupancy also holds the SessionRegistry lock until the session transition
+and stable-identity membership entry have both been published. This prevents a
+verified connection handoff from changing the key between the session
 transition and occupancy insertion.
 
-A verified connection transfer is rejected while a session is IN_MAP because
-this local occupancy index is keyed by the current connection identifier.
-Callers must leave the synthetic map before transferring the connection.
-This is a conservative in-memory invariant, not a claim about AOW reconnect
-semantics.
+Membership and join epochs are keyed by the stable in-memory Session object,
+not by a replaceable connection identifier. The registry maintains a reverse
+lookup from each live Session object to its current connection key. A verified
+handoff therefore preserves map occupancy and join epoch under the new key.
+Closing a session removes the reverse lookup; the next prune discards its stale
+occupancy entry.
 
 The admission sequence is:
 
@@ -27,10 +28,12 @@ The admission sequence is:
 6. Publish membership and a new local join epoch.
 7. Release the registry lock and then the occupancy lock.
 
-Leave, disconnect, prune, membership reads, epoch reads, and close-all use the
-occupancy lock. Concurrent callers using the same MapOccupancy instance
-therefore observe a serialized capacity decision; two simultaneous joins
-cannot both claim the final slot.
+Leave and disconnect also hold the registry lock across the session transition
+and membership removal. Membership queries resolve all current connection
+keys under one registry snapshot. Concurrent callers using the same
+MapOccupancy instance therefore observe a serialized capacity decision; two
+simultaneous joins cannot both claim the final slot, and an in-map handoff does
+not orphan an occupant.
 
 The lock is process-local and instance-local. It does not coordinate multiple
 MapOccupancy instances, worker processes, or hosts. A future multi-process
@@ -47,7 +50,7 @@ Run:
     python -m unittest discover -s tests -p 'test_synthetic_map_occupancy_prune.py' -v
 
 The concurrency regressions verify that exactly one of twelve contenders
-obtains a map with capacity one, and that a verified connection transfer cannot
-interleave with map admission and orphan the occupancy key. All identifiers
-and map values are synthetic. No AOW packet, map ID, coordinate, room capacity,
-reconnect behavior, or APK behavior is inferred.
+obtains a map with capacity one, and that a verified handoff during admission
+preserves membership and join epoch under the new connection key. All
+identifiers and map values are synthetic. No AOW packet, map ID, coordinate,
+room capacity, reconnect behavior, or APK behavior is inferred.

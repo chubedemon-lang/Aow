@@ -1,9 +1,9 @@
 """Local-only map occupancy index backed by the synthetic session registry.
 
-A process-local re-entrant lock serializes map membership. A registry lock is
-held across admission and publication so verified connection transfers cannot
-split a session transition from its occupancy key. This remains synthetic and
-does not imply any AOW map or room contract.
+A process-local re-entrant lock serializes map membership. Membership is keyed
+by stable Session object identity, not the replaceable connection identifier,
+so a verified local handoff cannot orphan an in-map occupant. This remains
+synthetic and does not imply any AOW map or room contract.
 """
 import threading
 
@@ -27,10 +27,8 @@ class MapOccupancy:
     def join(self, connection_id, map_id):
         """Atomically reserve one local map slot and advance the session."""
         with self._lock:
-            # Keep the registry key stable until the matching occupancy entry
-            # and join epoch have been published. A concurrent verified
-            # handoff must therefore happen either before this admission or
-            # after it; transfer_connection rejects the latter while IN_MAP.
+            # Keep the registry key stable until the session transition and
+            # matching stable-identity membership entry have been published.
             with self.registry.locked_session(connection_id) as session:
                 if session.snapshot.phase is not Phase.CHARACTER_SELECTED:
                     raise SessionError("map join not allowed")
@@ -43,40 +41,41 @@ class MapOccupancy:
                 if len(members) >= self.capacity_per_map:
                     raise ValueError("map capacity exceeded")
                 session.join_map(map_id)
-                self._members.setdefault(map_id, set()).add(connection_id)
+                self._members.setdefault(map_id, set()).add(session)
                 self._join_serial += 1
-                self._join_epochs[connection_id] = self._join_serial
+                self._join_epochs[session] = self._join_serial
 
     def leave(self, connection_id):
         with self._lock:
-            session = self.registry.get(connection_id)
-            if session.snapshot.phase is not Phase.IN_MAP:
-                raise SessionError("map leave not allowed")
-            map_id = session.snapshot.map_id
-            session.leave_map()
-            self._discard(connection_id, map_id)
+            with self.registry.locked_session(connection_id) as session:
+                if session.snapshot.phase is not Phase.IN_MAP:
+                    raise SessionError("map leave not allowed")
+                map_id = session.snapshot.map_id
+                session.leave_map()
+                self._discard(session, map_id)
 
-    def _discard(self, connection_id, map_id):
-        self._join_epochs.pop(connection_id, None)
+    def _discard(self, session, map_id):
+        self._join_epochs.pop(session, None)
         members = self._members.get(map_id)
         if members is not None:
-            members.discard(connection_id)
+            members.discard(session)
             if not members:
                 del self._members[map_id]
 
     def disconnect(self, connection_id):
         with self._lock:
-            session = self.registry.get(connection_id)
-            map_id = session.snapshot.map_id
-            closed = self.registry.close(connection_id)
-            if map_id is not None:
-                self._discard(connection_id, map_id)
-            return closed
+            with self.registry.locked_session(connection_id) as session:
+                map_id = session.snapshot.map_id
+                closed = self.registry.close(connection_id)
+                if map_id is not None:
+                    self._discard(session, map_id)
+                return closed
 
     def join_epoch(self, connection_id):
         """Local occupancy incarnation; never an APK protocol field."""
         with self._lock:
-            return self._join_epochs.get(connection_id)
+            session = self.registry.get(connection_id)
+            return self._join_epochs.get(session)
 
     def prune(self):
         """Reconcile occupancy after sessions closed outside MapOccupancy.
@@ -87,14 +86,15 @@ class MapOccupancy:
         with self._lock:
             removed = 0
             for map_id, members in tuple(self._members.items()):
-                for connection_id in tuple(members):
-                    try:
-                        snap = self.registry.get(connection_id).snapshot
-                        valid = snap.phase is Phase.IN_MAP and snap.map_id == map_id
-                    except RegistryError:
-                        valid = False
+                for session in tuple(members):
+                    snap = session.snapshot
+                    valid = (
+                        self.registry.connection_id_for(session) is not None
+                        and snap.phase is Phase.IN_MAP
+                        and snap.map_id == map_id
+                    )
                     if not valid:
-                        self._discard(connection_id, map_id)
+                        self._discard(session, map_id)
                         removed += 1
             return removed
 
@@ -102,7 +102,7 @@ class MapOccupancy:
         if type(map_id) is not int or not 0 <= map_id <= 2**31 - 1:
             raise ValueError("invalid map identifier")
         with self._lock:
-            return frozenset(self._members.get(map_id, ()))
+            return self.registry.connection_ids_for(self._members.get(map_id, set()))
 
     def close_all(self):
         with self._lock:

@@ -11,16 +11,15 @@ one Python process.
 
 For composite local state updates, `locked_session(connection_id)` holds the
 registry lock while yielding the current Session handle. The handle must not be
-retained after the context exits. This permits a caller such as MapOccupancy to
+retained after the context exits. This lets a caller such as MapOccupancy
 publish a related membership record before a verified connection transfer can
 change the registry key.
 
-A verified connection transfer is rejected while the session is IN_MAP. The
-synthetic map occupancy index is keyed by connection identifier, so allowing
-the key to change during map membership would orphan the index entry. A caller
-must leave the synthetic map before transferring. This is a conservative
-local invariant and says nothing about AOW reconnect packets or live-server
-behavior.
+The registry keeps a reverse lookup from each live Session object to its
+current local connection key. A verified handoff updates both directions
+atomically. Consumers that index related local state by stable Session identity
+can therefore preserve that state when a connection key changes. Closing a
+session removes the reverse lookup.
 
 For compatibility with the existing synthetic movement and handoff helpers,
 open(), get(), and transfer_connection() return a Session handle. When a

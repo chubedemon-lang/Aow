@@ -5,7 +5,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 
 from server.synthetic_map_occupancy import MapOccupancy
-from server.synthetic_session_registry import RegistryError, SessionRegistry
+from server.synthetic_session_registry import SessionRegistry
 from server.synthetic_session_state import Phase
 
 
@@ -62,7 +62,7 @@ class MapOccupancyConcurrencyTests(unittest.TestCase):
             1,
         )
 
-    def test_verified_transfer_cannot_split_map_admission(self):
+    def test_verified_transfer_preserves_in_map_membership(self):
         registry = SessionRegistry(capacity=1)
         maps = MapOccupancy(registry, capacity_per_map=1)
         session = registry.open("old")
@@ -98,13 +98,16 @@ class MapOccupancyConcurrencyTests(unittest.TestCase):
                 release_join.set()
 
             join_future.result(timeout=5)
-            with self.assertRaisesRegex(RegistryError, "cannot transfer connection while in map"):
-                transfer_future.result(timeout=5)
+            moved = transfer_future.result(timeout=5)
 
-        self.assertEqual(maps.members(77), frozenset({"old"}))
-        self.assertIs(registry.get("old"), session)
-        with self.assertRaises(RegistryError):
-            registry.get("new")
+        self.assertIs(moved, session)
+        self.assertEqual(maps.members(77), frozenset({"new"}))
+        self.assertIsNone(maps.join_epoch("old"))
+        self.assertEqual(maps.join_epoch("new"), 1)
+        self.assertEqual(registry.connection_id_for(session), "new")
+        maps.leave("new")
+        self.assertFalse(maps.members(77))
+        self.assertEqual(session.snapshot.phase, Phase.CHARACTER_SELECTED)
 
 
 if __name__ == "__main__":
