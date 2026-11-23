@@ -773,7 +773,7 @@ class AArch64FieldInfoCallArgumentTests(unittest.TestCase):
     def test_movk_w_zero_extends_the_materialized_address(self):
         cell = 0x2A18
         code = words(
-            movz_x(1, 0x1234),
+            movz_x(1, 0x1234, 48),
             movk_w(1, 0x2A18),
             ldr_x(0, 1),
             bl(self.start + 12, self.target),
