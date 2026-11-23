@@ -67,6 +67,13 @@ def _open_read_only(database):
             uri=True,
             timeout=3,
         )
+        # Foreign-key enforcement is connection-local and defaults to OFF
+        # for a fresh SQLite connection. Enable it before query_only and before
+        # any transaction so every store integrity audit sees the same runtime
+        # enforcement state required by its write path.
+        connection.execute("PRAGMA foreign_keys = ON")
+        if connection.execute("PRAGMA foreign_keys").fetchone() != (1,):
+            raise DomainAuditError("SQLite foreign-key enforcement is unavailable")
         connection.execute("PRAGMA query_only = ON")
         return connection
     except DomainAuditError:
