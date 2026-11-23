@@ -380,6 +380,17 @@ class SqliteMapCapacityStore:
                     raise MapCapacityStoreError("SQLite quick_check failed")
                 if self.db.execute("PRAGMA foreign_key_check").fetchall():
                     raise MapCapacityStoreError("map-capacity foreign key check failed")
+                for map_id, capacity in self.db.execute(
+                    "SELECT map_id, capacity FROM map_capacity_limits ORDER BY map_id"
+                ):
+                    self._map_id(map_id)
+                    self._capacity(capacity)
+                for character_id, map_id in self.db.execute(
+                    "SELECT character_id, map_id FROM map_capacity_members "
+                    "ORDER BY character_id"
+                ):
+                    self._character_id(character_id)
+                    self._map_id(map_id)
                 mismatched = self.db.execute(
                     """SELECT count(*) FROM map_capacity_members m
                        LEFT JOIN map_position_snapshots p
