@@ -15,6 +15,7 @@ from server.sqlite_reward_ledger import SqliteRewardLedger
 from server.sqlite_shop_store import ShopOffer, SqliteShopStore
 from tools.sqlite_domain_audit import (
     DomainAuditError,
+    _open_read_only,
     inspect_domain_database,
     main,
 )
@@ -56,6 +57,18 @@ class SqliteDomainAuditTests(unittest.TestCase):
             quantity=2,
         )
         connection.close()
+
+    def test_read_only_connection_enables_foreign_keys_before_query_only(self):
+        connection = _open_read_only(self.path)
+        try:
+            self.assertEqual(
+                connection.execute("PRAGMA foreign_keys").fetchone(), (1,)
+            )
+            self.assertEqual(
+                connection.execute("PRAGMA query_only").fetchone(), (1,)
+            )
+        finally:
+            connection.close()
 
     def test_audits_all_existing_domain_stores(self):
         result = inspect_domain_database(self.path)
