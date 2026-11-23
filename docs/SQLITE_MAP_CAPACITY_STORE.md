@@ -29,8 +29,8 @@ key, index, and CHECK-constraint presence. The connection remains caller-owned.
   projection. An unconfigured map is not capacity-managed.
 - members(map_id) and capacity(map_id) expose the current synthetic projection.
 - verify_integrity() checks SQLite quick_check, foreign keys, membership/
-  position agreement, missing memberships on configured maps, and capacity
-  overruns. It is diagnostic and never repairs state.
+  position agreement, missing memberships on configured maps, memberships on
+  unconfigured maps, and capacity overruns. It is diagnostic and never repairs state.
 
 ## Transaction and multi-connection behavior
 

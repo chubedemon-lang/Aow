@@ -95,6 +95,16 @@ class SqliteMapCapacityStoreTests(unittest.TestCase):
             self.capacity.verify_integrity()
         self.assertEqual(self.capacity.members(7), frozenset({"alpha"}))
 
+    def test_verify_integrity_detects_unconfigured_membership_without_repair(self):
+        self.positions.enter("alpha", "unconfigured-enter", 0, 12, 1, 1)
+        self.db.execute(
+            "INSERT INTO map_capacity_members(character_id, map_id) VALUES (?, ?)",
+            ("alpha", 12),
+        )
+        with self.assertRaises(MapCapacityStoreError):
+            self.capacity.verify_integrity()
+        self.assertEqual(self.capacity.members(12), frozenset({"alpha"}))
+
     def test_two_connections_enforce_one_slot_across_writers(self):
         self.capacity.configure_map(11, 1)
         barrier = threading.Barrier(2)
