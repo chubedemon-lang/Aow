@@ -373,6 +373,11 @@ class SqliteMapCapacityStore:
                          ON m.character_id=p.character_id AND m.map_id=p.map_id
                        WHERE p.map_id IS NOT NULL AND m.character_id IS NULL"""
                 ).fetchone()[0]
+                unconfigured = self.db.execute(
+                    """SELECT count(*) FROM map_capacity_members m
+                       LEFT JOIN map_capacity_limits l ON l.map_id=m.map_id
+                       WHERE l.map_id IS NULL"""
+                ).fetchone()[0]
                 over_capacity = self.db.execute(
                     """SELECT count(*) FROM (
                            SELECT m.map_id, count(*) AS occupants, l.capacity
@@ -382,7 +387,7 @@ class SqliteMapCapacityStore:
                            HAVING occupants>l.capacity
                        )"""
                 ).fetchone()[0]
-                if mismatched or missing or over_capacity:
+                if mismatched or missing or unconfigured or over_capacity:
                     raise MapCapacityStoreError("map-capacity projection is inconsistent")
                 members = self.db.execute(
                     "SELECT count(*) FROM map_capacity_members"
