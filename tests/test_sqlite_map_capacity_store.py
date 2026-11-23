@@ -218,6 +218,31 @@ class SqliteMapCapacityStoreTests(unittest.TestCase):
             with self.subTest(character_id=character_id), self.assertRaises(MapCapacityStoreError):
                 self.capacity.reconcile(character_id, None)
 
+    def test_writes_and_integrity_audit_fail_closed_if_foreign_keys_are_disabled(self):
+        self.positions.enter("alpha", "enter", 0, 7, 0, 0)
+        self.db.execute("PRAGMA foreign_keys = OFF")
+
+        with self.assertRaisesRegex(MapCapacityStoreError, "foreign keys are disabled"):
+            self.capacity.configure_map(7, 1)
+        self.assertIsNone(self.capacity.capacity(7))
+        self.assertFalse(self.db.in_transaction)
+
+        with self.assertRaisesRegex(MapCapacityStoreError, "foreign keys are disabled"):
+            self.capacity.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
+    def test_writes_and_integrity_audit_fail_closed_if_check_constraints_are_disabled(self):
+        self.db.execute("PRAGMA ignore_check_constraints = ON")
+
+        with self.assertRaisesRegex(MapCapacityStoreError, "CHECK constraints are disabled"):
+            self.capacity.configure_map(7, 1)
+        self.assertIsNone(self.capacity.capacity(7))
+        self.assertFalse(self.db.in_transaction)
+
+        with self.assertRaisesRegex(MapCapacityStoreError, "CHECK constraints are disabled"):
+            self.capacity.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
     def test_constructor_requires_position_schema_and_idle_connection(self):
         empty = sqlite3.connect(":memory:", isolation_level=None)
         try:
