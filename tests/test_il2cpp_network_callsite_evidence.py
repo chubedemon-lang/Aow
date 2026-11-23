@@ -364,6 +364,100 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         self.assertFalse(report["raw_instructions_emitted"])
         self.assertFalse(report["packet_bytes_emitted"])
 
+
+    def test_login_request_serializer_fieldinfo_reaches_resolved_call_argument(self):
+        metadata = bytearray(make_metadata(
+            ["serialize", "SyntheticHelper"],
+            image="ConvertedAssembly.dll",
+            type_name="LoginRequestSTSerializer",
+            namespace="com.geargames.serialization.serializers",
+            fields=(("syntheticField", 17, 0x04000001),),
+        ))
+        metadata.extend(bytes((-len(metadata)) % 8))
+        field_ref_offset = len(metadata)
+        metadata.extend(struct.pack("<ii", 17, 0))
+        struct.pack_into("<II", metadata, 0xB8, field_ref_offset, 8)
+
+        encoded = encode_field_info_usage_index(0, 31)
+        pc = 0x5000
+        target_page = 0x3000
+        page_delta = (target_page - (pc & ~0xFFF)) >> 12
+        immediate = page_delta & ((1 << 21) - 1)
+        adrp_x8 = (
+            0x90000000
+            | ((immediate & 0x3) << 29)
+            | (((immediate >> 2) & 0x7FFFF) << 5)
+            | 8
+        )
+        add_x8_x8_0x70 = 0x91000000 | (0x70 << 10) | (8 << 5) | 8
+        ldr_x9_x8 = 0xF9400000 | (8 << 5) | 9
+        mov_x1_x9 = 0xAA0003E0 | (9 << 16) | 1
+        bl_synthetic_helper = 0x94000000 | 11  # PC 0x5010 -> entry 0x503C
+        elf = make_elf(
+            2,
+            image="ConvertedAssembly.dll",
+            text_words=(
+                adrp_x8,
+                add_x8_x8_0x70,
+                ldr_x9_x8,
+                mov_x1_x9,
+                bl_synthetic_helper,
+            ),
+            method_entry_targets=(0x5000, 0x503C),
+            field_info_token=encoded,
+        )
+
+        report = inspect_bytes(bytes(metadata), elf)
+        self.assertEqual(report["selected_method_records"], 0)
+        self.assertEqual(report["selected_login_request_method_records"], 1)
+        self.assertEqual(report["resolved_login_request_entry_windows"], 1)
+        self.assertEqual(report["callsite_summary"], [])
+        self.assertEqual(len(report["login_request_callsite_summary"]), 1)
+
+        provenance = report["login_request_callsite_summary"][0][
+            "field_info_call_argument_provenance"
+        ]
+        self.assertEqual(provenance["callsite_count"], 1)
+        observation = provenance["callsite_observations"][0]
+        self.assertEqual(
+            observation["field_info_arguments"]["x1"],
+            {
+                "usage_occurrence_position": 0,
+                "field_ref_index": 0,
+                "type_index": 17,
+                "field_index_within_type": 0,
+            },
+        )
+        rendered = json.dumps(report)
+        self.assertNotIn("0x5000", rendered)
+        self.assertNotIn("0x3070", rendered)
+        self.assertNotIn(hex(encoded), rendered)
+        self.assertFalse(report["native_addresses_emitted"])
+        self.assertFalse(report["raw_instructions_emitted"])
+
+    def test_login_request_deserializer_is_included_but_other_login_types_are_not(self):
+        for type_name, method_name, expected in (
+            ("LoginRequestSTDeserializer", "deserialize", 1),
+            ("LoginAnswerSTSerializer", "serialize", 0),
+            ("SessionRestoreRequestSTSerializer", "serialize", 0),
+        ):
+            with self.subTest(type_name=type_name):
+                report = inspect_bytes(
+                    make_metadata(
+                        [method_name],
+                        image="ConvertedAssembly.dll",
+                        type_name=type_name,
+                        namespace="com.geargames.serialization.serializers",
+                    ),
+                    make_elf(1, image="ConvertedAssembly.dll"),
+                )
+                self.assertEqual(
+                    report["selected_login_request_method_records"], expected
+                )
+                self.assertEqual(
+                    len(report["login_request_callsite_summary"]), expected
+                )
+
     def test_serializer_classes_are_not_duplicated_as_transport_callsite_roots(self):
         report = inspect_bytes(
             make_metadata(
@@ -376,6 +470,9 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(report["selected_method_records"], 0)
         self.assertEqual(report["callsite_summary"], [])
+        self.assertEqual(report["selected_login_request_method_records"], 1)
+        self.assertEqual(report["resolved_login_request_entry_windows"], 1)
+        self.assertEqual(len(report["login_request_callsite_summary"]), 1)
 
     def test_connection_bootstrap_state_machine_is_an_explicit_callsite_root(self):
         report = inspect_bytes(

@@ -92,6 +92,23 @@ NETWORK_SUPPORT_METHODS = {
     ("com.geargames.common.network", "OnMessageReceivedDelegate"): {".ctor"},
 }
 
+# Keep only the exact LoginRequest serializer/deserializer pair in a separate
+# report section. Other login/session serializers remain covered by the broader
+# native-method analyzer and are not duplicated as transport callsite roots.
+LOGIN_REQUEST_SERIALIZER_METHODS = frozenset({
+    (
+        "com.geargames.serialization.serializers",
+        "LoginRequestSTSerializer",
+        "serialize",
+    ),
+    (
+        "com.geargames.serialization.serializers",
+        "LoginRequestSTDeserializer",
+        "deserialize",
+    ),
+})
+
+
 def _metadata_usage_static_values_for_decoder(
     elf, sections, relocations, metadata_version, decoder,
 ):
@@ -191,9 +208,16 @@ def inspect_bytes(
     allowlist[loading_presenter_key] = set(
         allowlist.get(loading_presenter_key, ())
     ) | {"OnProgressAnswer", "OnProgressNotification"}
+    all_methods = _network_methods(metadata, info, allowlist)
     methods = [
-        method for method in _network_methods(metadata, info, allowlist)
+        method for method in all_methods
         if method["category"] != "login_session_serializer"
+    ]
+    login_request_methods = [
+        method for method in all_methods
+        if (
+            method["namespace"], method["type"], method["method"]
+        ) in LOGIN_REQUEST_SERIALIZER_METHODS
     ]
 
     sections, relocations, tables = _module_tables(elf, info["images"])
@@ -206,18 +230,33 @@ def inspect_bytes(
     )
 
     resolved = []
+    login_request_resolved = []
     unresolved_methods = 0
+    unresolved_login_request_methods = 0
     direct_targets = set()
     indirect_targets = set()
-    for method in methods:
+    login_request_keys = {
+        (method["namespace"], method["type"], method["method"])
+        for method in login_request_methods
+    }
+    for method in methods + login_request_methods:
         pointer_table = tables.get(method["image"])
+        is_login_request = (
+            method["namespace"], method["type"], method["method"]
+        ) in login_request_keys
         if pointer_table is None:
-            unresolved_methods += 1
+            if is_login_request:
+                unresolved_login_request_methods += 1
+            else:
+                unresolved_methods += 1
             continue
         slot = pointer_table + method["slot_index"] * 8
         relocation = relocations.get(slot)
         if relocation is None or relocation[0] != R_AARCH64_RELATIVE:
-            unresolved_methods += 1
+            if is_login_request:
+                unresolved_login_request_methods += 1
+            else:
+                unresolved_methods += 1
             continue
         target = relocation[1]
         matches = [
@@ -225,17 +264,27 @@ def inspect_bytes(
             if section["address"] <= target < section["address"] + section["size"]
         ]
         if len(matches) != 1:
-            unresolved_methods += 1
+            if is_login_request:
+                unresolved_login_request_methods += 1
+            else:
+                unresolved_methods += 1
             continue
         section_name, section = matches[0]
         window = windows.get((section_name, target))
         if window is None:
-            unresolved_methods += 1
+            if is_login_request:
+                unresolved_login_request_methods += 1
+            else:
+                unresolved_methods += 1
             continue
         window_bytes, truncated = window
         file_offset = section["offset"] + target - section["address"]
         code = _slice(elf, file_offset, window_bytes, "network method entry window")
-        resolved.append((method, target, section_name, window_bytes, truncated, code))
+        entry = (method, target, section_name, window_bytes, truncated, code)
+        if is_login_request:
+            login_request_resolved.append(entry)
+        else:
+            resolved.append(entry)
         direct_targets.update(_direct_branch_targets(code, target))
         indirect_targets.update(
             _relocated_indirect_call_targets(code, target, relocations)
@@ -283,7 +332,9 @@ def inspect_bytes(
         if image["method_start"] is not None
     }
     encoded_method_usage_targets = {}
-    for method, target, _section_name, _window_bytes, _truncated, _code in resolved:
+    for method, target, _section_name, _window_bytes, _truncated, _code in (
+        resolved + login_request_resolved
+    ):
         image_start = image_starts.get(method["image"])
         if image_start is None:
             continue
@@ -414,6 +465,38 @@ def inspect_bytes(
         item["parameter_count"], item["image"],
     ))
 
+    # Keep LoginRequest evidence separate from transport roots. This report
+    # joins FieldInfo-derived FieldRef coordinates to x0-x7 only at uniquely
+    # resolved direct calls; it does not infer managed field names or wire order.
+    login_request_callsite_summary = []
+    for method, target, _section_name, window_bytes, truncated, code in login_request_resolved:
+        named_summary = _summarize_named_method_calls(code, target, method_targets)
+        indirect_summary = _summarize_relocated_indirect_calls(
+            code, target, relocations, method_targets
+        )
+        login_request_callsite_summary.append({
+            "type": method["type"],
+            "method": method["method"],
+            "image": method["image"],
+            "entry_window_kind": "next_distinct_executable_entry_in_section",
+            "entry_window_bytes": window_bytes,
+            "entry_window_truncated": truncated,
+            **named_summary,
+            **indirect_summary,
+            "field_info_call_argument_provenance": (
+                summarize_field_info_call_arguments(
+                    code,
+                    target,
+                    method_targets,
+                    field_info_cell_references,
+                    relocation_targets=relative_relocation_targets,
+                )
+            ),
+        })
+    login_request_callsite_summary.sort(
+        key=lambda item: (item["type"], item["method"], item["image"])
+    )
+
     return {
         "apk_sha256": apk_sha256,
         "metadata_version": info["version"],
@@ -421,10 +504,14 @@ def inspect_bytes(
         "selected_method_records": len(methods),
         "resolved_entry_windows": len(resolved),
         "unresolved_method_records": unresolved_methods,
+        "selected_login_request_method_records": len(login_request_methods),
+        "resolved_login_request_entry_windows": len(login_request_resolved),
+        "unresolved_login_request_method_records": unresolved_login_request_methods,
         "field_info_usage_static_cell_count": len(static_field_info_values),
         "field_info_usage_correlation": field_info_correlation,
         "field_info_usage_cell_addresses_emitted": False,
         "callsite_summary": callsite_summary,
+        "login_request_callsite_summary": login_request_callsite_summary,
         "native_addresses_emitted": False,
         "raw_instructions_emitted": False,
         "packet_bytes_emitted": False,
@@ -444,7 +531,10 @@ def inspect_bytes(
             "FieldInfo usage cells are correlated to static FieldRef coordinates; "
             "the optional native-type flag adds only a symbolic Il2CppType "
             "category. Neither result identifies a managed owner or proves that "
-            "a selected network method accesses the field."
+            "a selected network method accesses the field. The separate "
+            "LoginRequest summary adds only static FieldInfo-to-argument "
+            "coordinates for uniquely resolved direct calls; it does not "
+            "identify field names or serializer order."
         ),
     }
 

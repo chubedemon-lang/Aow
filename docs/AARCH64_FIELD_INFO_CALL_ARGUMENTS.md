@@ -66,3 +66,27 @@ python -m unittest discover -s tests -p 'test_aarch64_field_info_call_arguments.
 The helper is not run against an APK by CI. Keep APKs, native libraries,
 private static-analysis reports, and all raw captures outside the public
 repository.
+
+
+## LoginRequest-only FieldInfo bridge
+
+The redacted network callsite analyzer keeps the exact
+LoginRequestSTSerializer.serialize and
+LoginRequestSTDeserializer.deserialize entrypoints in a separate
+login_request_callsite_summary; they are not mixed into the transport
+callsite_summary or broadened to every login/session serializer.
+
+For each resolved LoginRequest entry window, the separate summary includes
+resolved direct/indirect method-call observations and the
+FieldInfo-to-call-argument provenance pass. When a statically loaded FieldInfo usage cell can be joined
+to a validated FieldRef coordinate and that value remains in x0-x7 at a
+uniquely resolved direct BL, the report emits the usage position, FieldRef
+index, TypeIndex, local field index, relative instruction index and symbolic
+target method label.
+
+This is a new static-analysis bridge for prioritizing private offline review.
+It does not resolve the declaring managed field name, prove the call
+executes, identify a packet field, establish serializer field order, or
+establish a wire contract. Synthetic CI uses fabricated metadata, ELF
+relocations and instructions only; the original APK and private reports remain
+outside this public repository.
