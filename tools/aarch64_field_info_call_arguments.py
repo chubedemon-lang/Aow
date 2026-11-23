@@ -111,8 +111,10 @@ def summarize_field_info_call_arguments(
     """Report FieldInfo-derived values present in x0-x7 at resolved direct BLs.
 
     A value is tracked only after an exact 64-bit load from a supplied static
-    FieldInfo usage cell. It may then cross an unshifted 32/64-bit MOV-register
-    alias. Address formation is limited to ADR/ADRP, 64-bit ADD/SUB immediate,
+    FieldInfo usage cell. An unshifted 64-bit MOV-register alias preserves the
+    full value. A 32-bit MOV zero-extends a truncated value and is tracked
+    separately rather than reported as exact FieldInfo provenance. Address
+    formation is limited to ADR/ADRP, 64-bit ADD/SUB immediate,
     MOV-register, and relocation-backed LDR-literal. No arithmetic is applied
     to FieldInfo values. State crosses only a unique forward CFG predecessor.
 
@@ -169,10 +171,12 @@ def summarize_field_info_call_arguments(
 
     outgoing_addresses = {}
     outgoing_field_refs = {}
+    outgoing_truncated_field_refs = {}
     observations = []
     observation_count = 0
     reachable_direct_calls = 0
     field_info_argument_direct_call_count = 0
+    field_info_truncated_argument_direct_call_count = 0
     unattributed_direct_call_count = 0
     ambiguous_target_direct_call_count = 0
 
@@ -183,6 +187,7 @@ def summarize_field_info_call_arguments(
         if block_index == 0 or len(incoming) != 1:
             addresses = {}
             field_refs = {}
+            truncated_field_refs = {}
         else:
             predecessor = next(iter(incoming))
             if (
@@ -191,9 +196,13 @@ def summarize_field_info_call_arguments(
             ):
                 addresses = dict(outgoing_addresses[predecessor])
                 field_refs = dict(outgoing_field_refs[predecessor])
+                truncated_field_refs = dict(
+                    outgoing_truncated_field_refs[predecessor]
+                )
             else:
                 addresses = {}
                 field_refs = {}
+                truncated_field_refs = {}
 
         for instruction_index in range(block_start, block_end):
             word = words[instruction_index]
@@ -205,6 +214,7 @@ def summarize_field_info_call_arguments(
                 if destination != 31:
                     addresses[destination] = (address, instruction_index)
                     field_refs.pop(destination, None)
+                    truncated_field_refs.pop(destination, None)
                 continue
 
             adrp = _decode_adrp(word, pc)
@@ -213,6 +223,7 @@ def summarize_field_info_call_arguments(
                 if destination != 31:
                     addresses[destination] = (address, instruction_index)
                     field_refs.pop(destination, None)
+                    truncated_field_refs.pop(destination, None)
                 continue
 
             add = _decode_add_immediate(word)
@@ -229,6 +240,7 @@ def summarize_field_info_call_arguments(
                         else:
                             addresses.pop(destination, None)
                     field_refs.pop(destination, None)
+                    truncated_field_refs.pop(destination, None)
                 continue
 
             sub = _decode_sub_immediate(word)
@@ -244,12 +256,20 @@ def summarize_field_info_call_arguments(
                             instruction_index,
                         )
                     field_refs.pop(destination, None)
+                    truncated_field_refs.pop(destination, None)
                 continue
 
             move = _decode_move_register(word)
             if move is not None:
                 destination, source, width_mask = move
                 if destination != 31:
+                    # Capture source provenance before writing destination: MOV
+                    # permits source and destination to be the same register.
+                    source_field_ref = field_refs.get(source)
+                    source_has_exact_field_ref = source in field_refs
+                    source_truncated_field_ref = truncated_field_refs.get(source)
+                    source_has_truncated_field_ref = source in truncated_field_refs
+
                     if width_mask == _U64_MAX and source in addresses:
                         addresses[destination] = (
                             addresses[source][0],
@@ -257,10 +277,20 @@ def summarize_field_info_call_arguments(
                         )
                     else:
                         addresses.pop(destination, None)
-                    if source in field_refs and width_mask in (_U64_MAX, 0xFFFFFFFF):
-                        field_refs[destination] = field_refs[source]
-                    else:
-                        field_refs.pop(destination, None)
+
+                    field_refs.pop(destination, None)
+                    truncated_field_refs.pop(destination, None)
+                    if source_has_exact_field_ref:
+                        if width_mask == _U64_MAX:
+                            field_refs[destination] = source_field_ref
+                        else:
+                            # MOV Wd, Wm zero-extends the low 32 bits; it cannot
+                            # preserve an exact 64-bit FieldInfo-cell value.
+                            truncated_field_refs[destination] = source_field_ref
+                    elif source_has_truncated_field_ref:
+                        # A later MOV Xd, Xm cannot recover bits already lost
+                        # by an earlier 32-bit write.
+                        truncated_field_refs[destination] = source_truncated_field_ref
                 continue
 
             literal_load = _decode_ldr_literal(word, pc)
@@ -276,6 +306,7 @@ def summarize_field_info_call_arguments(
                             instruction_index,
                         )
                     field_refs.pop(destination, None)
+                    truncated_field_refs.pop(destination, None)
                 continue
 
             access = decode_integer_memory_access(word)
@@ -297,6 +328,7 @@ def summarize_field_info_call_arguments(
                             continue
                         addresses.pop(destination, None)
                         field_refs.pop(destination, None)
+                        truncated_field_refs.pop(destination, None)
                         byte_offset = access.get("byte_offset")
                         if (
                             element_bytes == 8
@@ -331,6 +363,12 @@ def summarize_field_info_call_arguments(
                     for register in range(8)
                     if register in field_refs
                 }
+                truncated_arguments = [
+                    register for register in range(8)
+                    if register in truncated_field_refs
+                ]
+                if truncated_arguments:
+                    field_info_truncated_argument_direct_call_count += 1
                 if arguments:
                     field_info_argument_direct_call_count += 1
                     labels = _ordered_method_labels(targets.get(direct_target, ()))
@@ -355,12 +393,14 @@ def summarize_field_info_call_arguments(
                 for register in _CALLER_SAVED_REGISTERS:
                     addresses.pop(register, None)
                     field_refs.pop(register, None)
+                    truncated_field_refs.pop(register, None)
                 continue
 
             if _is_indirect_call(word):
                 for register in _CALLER_SAVED_REGISTERS:
                     addresses.pop(register, None)
                     field_refs.pop(register, None)
+                    truncated_field_refs.pop(register, None)
                 continue
 
             if (
@@ -374,9 +414,11 @@ def summarize_field_info_call_arguments(
             # Unknown instructions may overwrite any tracked register.
             addresses.clear()
             field_refs.clear()
+            truncated_field_refs.clear()
 
         outgoing_addresses[block_index] = addresses
         outgoing_field_refs[block_index] = field_refs
+        outgoing_truncated_field_refs[block_index] = truncated_field_refs
 
     return {
         "analysis_kind": "bounded_cfg_field_info_call_argument_provenance",
@@ -384,6 +426,9 @@ def summarize_field_info_call_arguments(
         "direct_call_instruction_count": total_direct_calls,
         "statically_reachable_direct_call_count": reachable_direct_calls,
         "field_info_argument_direct_call_count": field_info_argument_direct_call_count,
+        "field_info_truncated_argument_direct_call_count": (
+            field_info_truncated_argument_direct_call_count
+        ),
         "unattributed_direct_call_count": unattributed_direct_call_count,
         "ambiguous_target_direct_call_count": ambiguous_target_direct_call_count,
         "callsite_count": observation_count,
@@ -394,8 +439,10 @@ def summarize_field_info_call_arguments(
         "interpretation": (
             "A FieldRef coordinate is reported only when a value was loaded by "
             "an exact 64-bit integer load from a caller-supplied FieldInfo usage "
-            "cell and remained in x0-x7 through supported MOV-register copies "
-            "until a uniquely resolved direct BL. The report separately counts "
+            "cell and remained in x0-x7 through value-preserving 64-bit MOV-register "
+            "copies until a uniquely resolved direct BL. 32-bit MOV truncation is "
+            "tracked separately in field_info_truncated_argument_direct_call_count "
+            "and is not emitted as exact FieldInfo provenance. The report separately counts "
             "FieldInfo-bearing direct calls whose target is missing or ambiguous; "
             "those calls are not attributed or emitted as observations. This is "
             "static register provenance, not runtime execution, managed owner/name resolution, "
