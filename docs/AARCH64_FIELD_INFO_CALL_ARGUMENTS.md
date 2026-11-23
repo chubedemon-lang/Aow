@@ -104,9 +104,16 @@ For each resolved LoginRequest entry window, the separate summary includes
 resolved direct/indirect method-call observations and the
 FieldInfo-to-call-argument provenance pass. When a statically loaded FieldInfo usage cell can be joined
 to a validated FieldRef coordinate and that value remains in x0-x7 at a
-uniquely resolved direct BL, the report emits the usage position, FieldRef
-index, TypeIndex, local field index, relative instruction index and symbolic
-target method label.
+uniquely resolved direct BL or uniquely resolved BLR-family target, the report
+emits the usage position, FieldRef index, TypeIndex, local field index,
+relative instruction index and symbolic target method label.
+
+The BLR-family target resolver accepts only a tracked target-register address
+that maps to one unique metadata-backed method entry. Its synthetic tests
+cover PC-relative relocation loads and relocation-backed pointer-slot loads,
+plus unresolved/ambiguous targets and pointer-authentication input exclusion.
+This is a tool-capability change only: no new APK analysis was run and no new
+LoginRequest callsite count or wire-contract observation is claimed.
 
 This is a new static-analysis bridge for prioritizing private offline review.
 It does not resolve the declaring managed field name, prove the call
