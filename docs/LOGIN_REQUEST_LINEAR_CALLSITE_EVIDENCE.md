@@ -121,3 +121,25 @@ established. The real AOW transport adapter remains disabled until an
 authorized, redacted client-to-server byte fixture and end-to-end local test
 confirm the complete contract. The APK, native library, raw instructions,
 addresses, packet bytes, and private symbols remain outside this repository.
+
+
+## Exact LoginRequest control-flow path comparison — 2026-11-24
+
+The redacted network-callsite tool now includes a bounded control-flow path
+summary for the exact `LoginRequestSTSerializer.serialize` and
+`LoginRequestSTDeserializer.deserialize` entrypoints. It uses metadata-backed
+direct-call targets and keeps the LoginRequest pair separate from transport
+roots. The report pairs the two methods only when each resolves uniquely;
+otherwise it returns `unpaired_or_ambiguous`.
+
+The paired comparison normalizes primitive helper names to their family
+(`serializeInt` / `deserializeInt` → `Int`) and reports bounded path-shape
+overlap, unresolved observations, and truncation. Conditional edges remain
+possible rather than evaluated, simple paths are enumerated without unrolling
+cycles, and truncated entry windows force a `partial` result.
+
+This is a static CFG path-shape comparison, not symbolic execution, runtime
+execution, getter-to-field mapping, payload order, field count, a wire schema,
+or a handshake/login proof. `field_order_inferred` remains false. The new
+capability is validated with synthetic metadata/ELF/instruction fixtures; it
+does not claim a new APK disassembly or packet observation.
