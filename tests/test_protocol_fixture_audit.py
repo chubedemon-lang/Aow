@@ -1,4 +1,5 @@
 """Tests for the private, redacted-output stream fixture inspector."""
+import hashlib
 import json
 import os
 import tempfile
@@ -370,10 +371,39 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertNotIn(private_payload.hex(), serialized)
         self.assertNotIn(content.decode("utf-8"), serialized)
         self.assertNotIn("fixture_path", result)
+        self.assertEqual(result["fixture_sha256"], hashlib.sha256(content).hexdigest())
+        self.assertEqual(result["fixture_size_bytes"], len(content))
+        self.assertNotEqual(result["fixture_sha256"], APK_SHA256)
         self.assertFalse(result["raw_bytes_emitted"])
         self.assertFalse(result["wire_contract_verified"])
         self.assertFalse(result["apk_compatible"])
         self.assertFalse(result["authorization_independently_verified"])
+
+    def test_fixture_digest_identifies_exact_input_bytes_not_normalized_json(self):
+        compact = fixture_bytes([frame(b"same-payload")])
+        whitespace_variant = compact + b" \n"
+
+        compact_result = self.audit(compact)
+        whitespace_result = self.audit(whitespace_variant)
+
+        self.assertEqual(
+            compact_result["fixture_sha256"],
+            hashlib.sha256(compact).hexdigest(),
+        )
+        self.assertEqual(
+            whitespace_result["fixture_sha256"],
+            hashlib.sha256(whitespace_variant).hexdigest(),
+        )
+        self.assertNotEqual(
+            compact_result["fixture_sha256"],
+            whitespace_result["fixture_sha256"],
+        )
+        self.assertEqual(
+            compact_result["server_to_client"],
+            whitespace_result["server_to_client"],
+        )
+        self.assertFalse(compact_result["wire_contract_verified"])
+        self.assertFalse(whitespace_result["apk_compatible"])
 
     def test_private_file_reader_accepts_regular_file(self):
         with tempfile.TemporaryDirectory() as directory:
