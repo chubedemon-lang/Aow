@@ -31,6 +31,7 @@ from tools.il2cpp_codegen_inventory import (
 )
 from tools.aarch64_call_return_evidence import summarize_immediate_call_result_zero_tests
 from tools.aarch64_call_argument_evidence import (
+    _method_name_from_label,
     summarize_small_argument_constants,
 )
 from tools.aarch64_memory_access_evidence import (
@@ -223,6 +224,172 @@ def _summarize_login_request_path_comparison(callsite_summary):
         **comparison,
         "field_order_inferred": False,
     }
+
+
+def _correlate_field_info_arguments_with_control_flow_paths(
+    control_flow_path_summary, field_info_summary
+):
+    """Join exact FieldInfo argument provenance to matching CFG path callsites.
+
+    The join requires the same instruction index within one bounded method
+    window and the same canonical metadata method label. It annotates only
+    uniquely matched direct calls; duplicate indexes, unresolved labels and
+    mismatches remain unassigned. This is static register provenance, not a
+    managed getter interpretation or serializer field order.
+    """
+    if type(control_flow_path_summary) is not dict:
+        raise ValueError("control-flow path summary must be a built-in dict")
+    if type(field_info_summary) is not dict:
+        raise ValueError("FieldInfo provenance summary must be a built-in dict")
+
+    paths = control_flow_path_summary.get("control_flow_paths")
+    path_count = control_flow_path_summary.get("control_flow_path_count")
+    paths_truncated = control_flow_path_summary.get(
+        "control_flow_paths_truncated"
+    )
+    path_status = control_flow_path_summary.get(
+        "control_flow_path_analysis_status"
+    )
+    if type(paths) is not list:
+        raise ValueError("control-flow paths must be a built-in list")
+    if type(path_count) is not int or path_count != len(paths):
+        raise ValueError("control-flow path count does not match its list")
+    if type(paths_truncated) is not bool:
+        raise ValueError("control-flow path truncation flag must be a boolean")
+    if type(path_status) is not str:
+        raise ValueError("control-flow path status must be a string")
+
+    field_observations = field_info_summary.get("callsite_observations")
+    field_count = field_info_summary.get("callsite_count")
+    field_truncated = field_info_summary.get(
+        "callsite_observations_truncated"
+    )
+    if type(field_observations) is not list:
+        raise ValueError("FieldInfo callsite observations must be a list")
+    if (
+        type(field_count) is not int
+        or field_count < len(field_observations)
+    ):
+        raise ValueError("FieldInfo callsite count is inconsistent")
+    if type(field_truncated) is not bool:
+        raise ValueError("FieldInfo observation truncation flag must be a boolean")
+    if field_truncated != (field_count > len(field_observations)):
+        raise ValueError("FieldInfo observation truncation flag is inconsistent")
+
+    field_by_index = {}
+    duplicate_indexes = set()
+    for observation in field_observations:
+        if type(observation) is not dict:
+            raise ValueError("FieldInfo callsite entries must be built-in dicts")
+        instruction_index = observation.get("instruction_index")
+        target_method = observation.get("target_method")
+        arguments = observation.get("field_info_arguments")
+        if type(instruction_index) is not int or instruction_index < 0:
+            raise ValueError("FieldInfo instruction index must be non-negative")
+        if type(target_method) is not str or not target_method:
+            raise ValueError("FieldInfo target method must be a non-empty string")
+        if type(arguments) is not dict or not arguments:
+            raise ValueError("FieldInfo arguments must be a non-empty built-in dict")
+        for register, reference in arguments.items():
+            if register not in {f"x{index}" for index in range(8)}:
+                raise ValueError("FieldInfo argument register is invalid")
+            if type(reference) is not dict or set(reference) != {
+                "usage_occurrence_position",
+                "field_ref_index",
+                "type_index",
+                "field_index_within_type",
+            }:
+                raise ValueError("FieldInfo reference coordinates are malformed")
+            if any(
+                type(value) is not int or value < 0
+                for value in reference.values()
+            ):
+                raise ValueError("FieldInfo reference coordinates must be non-negative")
+        if instruction_index in field_by_index:
+            duplicate_indexes.add(instruction_index)
+            field_by_index.pop(instruction_index, None)
+        elif instruction_index not in duplicate_indexes:
+            field_by_index[instruction_index] = observation
+
+    annotated_paths = []
+    matched_indexes = set()
+    path_observation_match_count = 0
+    path_method_mismatch_count = 0
+    ambiguous_path_observation_count = 0
+    for path in paths:
+        if type(path) is not dict:
+            raise ValueError("control-flow path entries must be built-in dicts")
+        observations = path.get("helper_callsite_observations")
+        if type(observations) is not list:
+            raise ValueError("path callsite observations must be a built-in list")
+        annotated_observations = []
+        for observation in observations:
+            if type(observation) is not dict:
+                raise ValueError("path callsite entries must be built-in dicts")
+            annotated = dict(observation)
+            instruction_index = observation.get("instruction_index")
+            if (
+                observation.get("kind") == "direct_call"
+                and type(instruction_index) is int
+            ):
+                if instruction_index in duplicate_indexes:
+                    ambiguous_path_observation_count += 1
+                else:
+                    field_observation = field_by_index.get(instruction_index)
+                    if field_observation is not None:
+                        path_method = _method_name_from_label(
+                            observation.get("method")
+                        )
+                        if path_method != field_observation["target_method"]:
+                            path_method_mismatch_count += 1
+                        else:
+                            annotated["field_info_arguments"] = dict(
+                                field_observation["field_info_arguments"]
+                            )
+                            annotated["field_info_provenance"] = (
+                                "static_field_info_cell_to_direct_call_arguments"
+                            )
+                            matched_indexes.add(instruction_index)
+                            path_observation_match_count += 1
+            annotated_observations.append(annotated)
+        annotated_path = dict(path)
+        annotated_path["helper_callsite_observations"] = annotated_observations
+        annotated_paths.append(annotated_path)
+
+    complete_path_statuses = {"bounded", "bounded_with_cycles", "empty"}
+    unmatched_count = len(set(field_by_index) - matched_indexes)
+    status = (
+        "partial"
+        if (
+            field_truncated
+            or paths_truncated
+            or path_status not in complete_path_statuses
+            or duplicate_indexes
+            or path_method_mismatch_count
+            or unmatched_count
+        )
+        else "bounded"
+    )
+    annotated_summary = dict(control_flow_path_summary)
+    annotated_summary["control_flow_paths"] = annotated_paths
+    correlation = {
+        "analysis_kind": "same_method_instruction_index_and_method_label_join",
+        "status": status,
+        "reported_field_info_callsite_count": field_count,
+        "observed_field_info_callsite_count": len(field_observations),
+        "matched_unique_field_info_callsite_count": len(matched_indexes),
+        "unmatched_observed_field_info_callsite_count": unmatched_count,
+        "ambiguous_field_info_callsite_count": len(duplicate_indexes),
+        "path_observation_match_count": path_observation_match_count,
+        "path_method_mismatch_observation_count": path_method_mismatch_count,
+        "ambiguous_path_observation_count": ambiguous_path_observation_count,
+        "field_info_callsite_observations_truncated": field_truncated,
+        "control_flow_paths_truncated": paths_truncated,
+        "field_names_emitted": False,
+        "native_addresses_emitted": False,
+        "field_order_inferred": False,
+    }
+    return annotated_summary, correlation
 
 
 def inspect_bytes(
@@ -547,6 +714,18 @@ def inspect_bytes(
         control_flow_path_summary = _summarize_control_flow_helper_paths(
             control_flow_summary
         )
+        field_info_provenance = summarize_field_info_call_arguments(
+            code,
+            target,
+            method_targets,
+            field_info_cell_references,
+            relocation_targets=relative_relocation_targets,
+        )
+        control_flow_path_summary, field_info_path_correlation = (
+            _correlate_field_info_arguments_with_control_flow_paths(
+                control_flow_path_summary, field_info_provenance
+            )
+        )
         login_request_callsite_summary.append({
             "type": method["type"],
             "method": method["method"],
@@ -558,15 +737,8 @@ def inspect_bytes(
             **indirect_summary,
             **control_flow_summary,
             **control_flow_path_summary,
-            "field_info_call_argument_provenance": (
-                summarize_field_info_call_arguments(
-                    code,
-                    target,
-                    method_targets,
-                    field_info_cell_references,
-                    relocation_targets=relative_relocation_targets,
-                )
-            ),
+            "field_info_call_argument_provenance": field_info_provenance,
+            "field_info_path_correlation": field_info_path_correlation,
         })
     login_request_callsite_summary.sort(
         key=lambda item: (item["type"], item["method"], item["image"])
