@@ -1,6 +1,7 @@
 """Tests for metadata-only offline evidence validation."""
 import unittest
 from dataclasses import FrozenInstanceError
+from urllib.parse import quote
 
 from server.offline_evidence_validation import EvidenceError, validate_record
 
@@ -158,6 +159,20 @@ class EvidenceValidationTests(unittest.TestCase):
                 with self.subTest(field=field, value=value):
                     with self.assertRaises(EvidenceError):
                         validate_record({**self.valid, field: value})
+
+    def test_rejects_sensitive_values_with_escapes_remaining_after_decode_limit(self):
+        examples = (
+            "../private/capture.pcap",
+            "token=sample-secret",
+            "packet_bytes=deadbeef",
+        )
+        for value in examples:
+            encoded = value
+            for _ in range(4):
+                encoded = quote(encoded, safe="")
+            for field in ("source", "observation"):
+                with self.subTest(field=field, value=value), self.assertRaises(EvidenceError):
+                    validate_record({**self.valid, field: encoded})
 
     def test_rejects_whitespace_only_even_if_unverified(self):
         for field in ("source", "observation"):

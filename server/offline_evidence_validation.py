@@ -66,6 +66,7 @@ _PACKET_BYTES = re.compile(
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.IGNORECASE
 )
+_PERCENT_ESCAPE = re.compile(r"%[0-9a-f]{2}", re.IGNORECASE)
 
 
 class EvidenceError(ValueError):
@@ -125,7 +126,10 @@ def _contains_sensitive_material(value):
         if decoded == candidate:
             return False
         candidate = decoded
-    return _contains_sensitive_material_once(candidate)
+    return (
+        _contains_sensitive_material_once(candidate)
+        or _PERCENT_ESCAPE.search(candidate) is not None
+    )
 
 
 def validate_record(record):
