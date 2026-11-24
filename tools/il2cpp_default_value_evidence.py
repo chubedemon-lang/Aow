@@ -281,10 +281,25 @@ def _read_heap_string(heap, index):
         raise DefaultValueEvidenceError("metadata string is not valid UTF-8") from exc
 
 
+def _validate_apk_sha256(apk_sha256):
+    """Validate the shape of an optional caller-supplied artifact fingerprint."""
+    if apk_sha256 is None:
+        return
+    if (
+        type(apk_sha256) is not str
+        or len(apk_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in apk_sha256)
+    ):
+        raise DefaultValueEvidenceError(
+            "APK SHA-256 must be 64 lowercase hexadecimal characters or None"
+        )
+
+
 def inspect_bytes(metadata: bytes, elf: bytes, apk_sha256=None) -> dict:
-    """Inspect only the allowlisted NetworkSettings integer default values."""
+    """Inspect allowlisted defaults; the optional digest is a caller-supplied label."""
     if type(metadata) is not bytes or type(elf) is not bytes:
         raise DefaultValueEvidenceError("metadata and ELF inputs must be exact bytes")
+    _validate_apk_sha256(apk_sha256)
     if len(metadata) < HEADER_MIN_BYTES:
         raise DefaultValueEvidenceError("metadata header is truncated")
     magic, version = struct.unpack_from("<II", metadata, 0)

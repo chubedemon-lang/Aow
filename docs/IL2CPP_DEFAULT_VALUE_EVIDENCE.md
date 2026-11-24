@@ -24,6 +24,18 @@ The native type-pointer table contains 124,985 entries. The report emits the tab
 
 All requested field and default type indexes resolve independently to the native IL2CPP I4 enum. The public regression fixture now covers all 20 allowlisted field names with synthetic values, including one-, two- and four-byte compressed encodings. Other tests cover zigzag negatives, truncated/non-canonical encodings, native-table ambiguity and a complete synthetic APK container.
 
+## Fingerprint input boundary
+
+`inspect_apk()` computes the APK SHA-256 while reading the metadata
+and ARM64 members through one stable, no-follow file descriptor. In contrast,
+`inspect_bytes()` receives already-extracted byte strings and cannot independently
+prove that a caller-supplied digest belongs to those two members or to an
+original APK container. It therefore accepts only `None` or an exact
+64-character lowercase hexadecimal string and preserves that value as a
+caller-supplied label. Use `inspect_apk()` when the report must be bound to
+the actual APK artifact; a shape-valid digest passed to `inspect_bytes()`
+is not a recomputed integrity result.
+
 ## Interpretation boundary
 
 The HeaderLength default of 4 is a new static metadata finding. It is consistent with the previously observed Receiver.Cycle path that initially reads four bytes and uses the non-HTTP-marker integer as a subsequent read count. This is stronger corroboration for a four-byte receive-prefix hypothesis, but it is not proof that the static field is applied at runtime, read by the active Receiver path, or defines the complete frame boundary.
