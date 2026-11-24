@@ -8,7 +8,8 @@ player snapshot and durable map-position snapshot inside one BEGIN IMMEDIATE
 transaction.
 
 The service also provides enter_and_get_snapshot,
-move_and_get_snapshot and leave_and_get_snapshot. Each operation:
+move_and_get_snapshot, move_validated_and_get_snapshot and
+leave_and_get_snapshot. Each operation:
 
 - validates the durable session and character ownership first;
 - applies the map-position transition using the caller's expected revision;
@@ -27,6 +28,16 @@ receipt data for the character's current position.
 
 A missing player or map snapshot fails closed. Reads and movement operations do
 not create missing per-character snapshots or repair incomplete state.
+
+The optional move_validated_and_get_snapshot path applies the existing
+transport-independent MovementValidator before a new durable move. Its
+max_speed is a synthetic coordinate-units-per-second policy supplied by the
+server. elapsed_seconds must be measured by a trusted server-side monotonic
+clock; it must never come from a client timestamp. A rejected move rolls back
+without advancing the revision or writing a receipt. Exact idempotent retries
+return the original receipt and current world snapshot without re-running the
+movement policy. This is a reusable server-side guard, not an AOW speed, physics,
+collision or movement-packet contract.
 
 ## Scope
 

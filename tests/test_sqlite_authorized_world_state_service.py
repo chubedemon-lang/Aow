@@ -6,6 +6,7 @@ import threading
 import unittest
 
 from server.sessions import SessionError
+from server.movement_validation import MovementError
 from server.sqlite_authorized_character_service import (
     SqliteAuthorizedCharacterService,
 )
@@ -439,6 +440,88 @@ class SqliteAuthorizedWorldStateServiceTests(unittest.TestCase):
         self.assertEqual(tables, {"accounts", "characters", "wallets"})
         db.rollback()
 
+
+    def test_speed_limited_move_accepts_exact_server_time_boundary(self):
+        self.service.enter_and_get_snapshot(
+            self.owner_token, self.character_id, "speed-enter", 0, 23, 0, 0
+        )
+        moved = self.service.move_validated_and_get_snapshot(
+            self.owner_token, self.character_id, "speed-move", 1, 23, 3, 4,
+            max_speed=5, elapsed_seconds=1.0,
+        )
+        self.assertFalse(moved.mutation.replayed)
+        self.assertEqual(moved.mutation.snapshot, MapPosition(23, Position(3, 4), 2))
+        self.assertEqual(moved.snapshot.map_position, moved.mutation.snapshot)
+        self.assertFalse(self.db.in_transaction)
+
+    def test_speed_limited_move_rejects_excess_and_writes_no_receipt(self):
+        self.service.enter_and_get_snapshot(
+            self.owner_token, self.character_id, "speed-enter", 0, 23, 0, 0
+        )
+        with self.assertRaises(MovementError):
+            self.service.move_validated_and_get_snapshot(
+                self.owner_token, self.character_id, "speed-too-far",
+                1, 23, 6, 0, max_speed=5, elapsed_seconds=1.0,
+            )
+        self.assertEqual(
+            self.service.get_snapshot(
+                self.owner_token, self.character_id
+            ).map_position,
+            MapPosition(23, Position(0, 0), 1),
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_mutations"
+            ).fetchone()[0],
+            1,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_speed_limited_move_rejects_invalid_server_elapsed_without_mutation(self):
+        self.service.enter_and_get_snapshot(
+            self.owner_token, self.character_id, "speed-enter", 0, 23, 0, 0
+        )
+        with self.assertRaises(MovementError):
+            self.service.move_validated_and_get_snapshot(
+                self.owner_token, self.character_id, "speed-no-time",
+                1, 23, 1, 0, max_speed=5, elapsed_seconds=0,
+            )
+        self.assertEqual(
+            self.service.get_snapshot(
+                self.owner_token, self.character_id
+            ).map_position,
+            MapPosition(23, Position(0, 0), 1),
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_mutations"
+            ).fetchone()[0],
+            1,
+        )
+
+    def test_speed_limited_idempotent_retry_keeps_original_receipt_and_current_state(self):
+        self.service.enter_and_get_snapshot(
+            self.owner_token, self.character_id, "speed-enter", 0, 23, 0, 0
+        )
+        first = self.service.move_validated_and_get_snapshot(
+            self.owner_token, self.character_id, "speed-first", 1, 23, 3, 4,
+            max_speed=5, elapsed_seconds=1.0,
+        )
+        self.service.move_validated_and_get_snapshot(
+            self.owner_token, self.character_id, "speed-second", 2, 23, 6, 8,
+            max_speed=5, elapsed_seconds=1.0,
+        )
+        replay = self.service.move_validated_and_get_snapshot(
+            self.owner_token, self.character_id, "speed-first", 1, 23, 3, 4,
+            max_speed=0, elapsed_seconds=0,
+        )
+        self.assertTrue(replay.mutation.replayed)
+        self.assertEqual(replay.mutation.snapshot, first.mutation.snapshot)
+        self.assertEqual(
+            replay.snapshot.map_position,
+            MapPosition(23, Position(6, 8), 3),
+        )
+        self.assertFalse(self.db.in_transaction)
 
 if __name__ == "__main__":
     unittest.main()
