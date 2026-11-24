@@ -88,6 +88,23 @@ class SessionRegistry:
                 for session in sessions
             }
 
+    def connection_states_for(self, sessions):
+        """Resolve current keys and immutable snapshots under one registry lock.
+
+        Each result is (connection_key_or_none, Snapshot). The snapshot is
+        captured while transitions and connection handoffs are excluded, so
+        callers can make one consistent read decision across membership state.
+        """
+        if type(sessions) not in (set, frozenset):
+            raise RegistryError("invalid session collection")
+        if any(type(session) is not Session for session in sessions):
+            raise RegistryError("invalid session handle")
+        with self._lock:
+            return {
+                session: (self._session_keys.get(session), session.snapshot)
+                for session in sessions
+            }
+
     def open(self, connection_id):
         key = self._key(connection_id)
         with self._lock:
