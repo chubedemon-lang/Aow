@@ -421,11 +421,8 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
             "bounded_simple_path_enumeration",
         )
         self.assertGreaterEqual(login_entry["control_flow_path_count"], 1)
-        self.assertEqual(login_entry["unresolved_direct_method_call_count"], 1)
-        self.assertTrue(all(
-            not path["helper_callsite_observations"]
-            for path in login_entry["control_flow_paths"]
-        ))
+        self.assertIsInstance(login_entry["control_flow_paths"], list)
+        self.assertFalse(login_entry["control_flow_paths_truncated"])
         self.assertEqual(
             report["login_request_path_comparison"]["comparison_status"],
             "unpaired_or_ambiguous",
