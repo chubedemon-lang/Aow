@@ -14,6 +14,7 @@ from tools.aarch64_call_argument_evidence import summarize_small_argument_consta
 from tools.il2cpp_network_callsite_evidence import (
     CALLSITE_ARGUMENT_TARGET_PREFIXES,
     _summarize_login_request_path_comparison,
+    _correlate_field_info_arguments_with_control_flow_paths,
     _metadata_usage_static_values,
     _metadata_usage_static_field_info_values,
     inspect_bytes,
@@ -451,6 +452,206 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         self.assertNotIn(hex(encoded), rendered)
         self.assertFalse(report["native_addresses_emitted"])
         self.assertFalse(report["raw_instructions_emitted"])
+
+    def test_login_request_field_info_arguments_are_joined_to_matching_path_callsites(self):
+        reference = {
+            "usage_occurrence_position": 2,
+            "field_ref_index": 7,
+            "type_index": 11,
+            "field_index_within_type": 3,
+        }
+        path_summary = {
+            "control_flow_paths": [
+                {
+                    "exit_kind": "return",
+                    "helper_callsite_observations": [
+                        {
+                            "kind": "direct_call",
+                            "instruction_index": 4,
+                            "method": "Example.LoginRequest::ReadField/p1",
+                        },
+                        {
+                            "kind": "direct_call",
+                            "instruction_index": 8,
+                            "method": "Example.LoginRequest::Other/p0",
+                        },
+                    ],
+                },
+                {
+                    "exit_kind": "branch_exit",
+                    "helper_callsite_observations": [
+                        {
+                            "kind": "direct_call",
+                            "instruction_index": 4,
+                            "method": "Example.LoginRequest::ReadField/p1",
+                        },
+                    ],
+                },
+            ],
+            "control_flow_path_count": 2,
+            "control_flow_paths_truncated": False,
+            "control_flow_path_analysis_status": "bounded",
+        }
+        field_info_summary = {
+            "callsite_count": 1,
+            "callsite_observations_truncated": False,
+            "callsite_observations": [
+                {
+                    "instruction_index": 4,
+                    "target_method": "Example.LoginRequest::ReadField",
+                    "field_info_arguments": {"x0": reference},
+                },
+            ],
+        }
+
+        annotated, correlation = (
+            _correlate_field_info_arguments_with_control_flow_paths(
+                path_summary, field_info_summary
+            )
+        )
+        first_calls = annotated["control_flow_paths"][0][
+            "helper_callsite_observations"
+        ]
+        second_calls = annotated["control_flow_paths"][1][
+            "helper_callsite_observations"
+        ]
+        self.assertEqual(first_calls[0]["field_info_arguments"], {"x0": reference})
+        self.assertEqual(
+            first_calls[0]["field_info_provenance"],
+            "static_field_info_cell_to_direct_call_arguments",
+        )
+        self.assertNotIn("field_info_arguments", first_calls[1])
+        self.assertEqual(second_calls[0]["field_info_arguments"], {"x0": reference})
+        self.assertEqual(correlation["status"], "bounded")
+        self.assertEqual(correlation["matched_unique_field_info_callsite_count"], 1)
+        self.assertEqual(correlation["path_observation_match_count"], 2)
+        self.assertFalse(correlation["field_order_inferred"])
+
+    def test_login_request_field_info_path_join_rejects_method_label_mismatch(self):
+        path_summary = {
+            "control_flow_paths": [{
+                "exit_kind": "return",
+                "helper_callsite_observations": [{
+                    "kind": "direct_call",
+                    "instruction_index": 4,
+                    "method": "Example.Other::ReadField/p1",
+                }],
+            }],
+            "control_flow_path_count": 1,
+            "control_flow_paths_truncated": False,
+            "control_flow_path_analysis_status": "bounded",
+        }
+        field_info_summary = {
+            "callsite_count": 1,
+            "callsite_observations_truncated": False,
+            "callsite_observations": [{
+                "instruction_index": 4,
+                "target_method": "Example.LoginRequest::ReadField",
+                "field_info_arguments": {"x0": {
+                    "usage_occurrence_position": 0,
+                    "field_ref_index": 1,
+                    "type_index": 2,
+                    "field_index_within_type": 3,
+                }},
+            }],
+        }
+
+        annotated, correlation = (
+            _correlate_field_info_arguments_with_control_flow_paths(
+                path_summary, field_info_summary
+            )
+        )
+        observation = annotated["control_flow_paths"][0][
+            "helper_callsite_observations"
+        ][0]
+        self.assertNotIn("field_info_arguments", observation)
+        self.assertEqual(correlation["path_method_mismatch_observation_count"], 1)
+        self.assertEqual(correlation["unmatched_observed_field_info_callsite_count"], 1)
+        self.assertEqual(correlation["status"], "partial")
+
+    def test_login_request_field_info_path_join_keeps_duplicate_indexes_ambiguous(self):
+        path_summary = {
+            "control_flow_paths": [{
+                "exit_kind": "return",
+                "helper_callsite_observations": [{
+                    "kind": "direct_call",
+                    "instruction_index": 4,
+                    "method": "Example.LoginRequest::ReadField/p1",
+                }],
+            }],
+            "control_flow_path_count": 1,
+            "control_flow_paths_truncated": False,
+            "control_flow_path_analysis_status": "bounded",
+        }
+        reference = {
+            "usage_occurrence_position": 0,
+            "field_ref_index": 1,
+            "type_index": 2,
+            "field_index_within_type": 3,
+        }
+        field_info_summary = {
+            "callsite_count": 2,
+            "callsite_observations_truncated": False,
+            "callsite_observations": [
+                {
+                    "instruction_index": 4,
+                    "target_method": "Example.LoginRequest::ReadField",
+                    "field_info_arguments": {"x0": reference},
+                },
+                {
+                    "instruction_index": 4,
+                    "target_method": "Example.LoginRequest::ReadField",
+                    "field_info_arguments": {"x1": reference},
+                },
+            ],
+        }
+
+        annotated, correlation = (
+            _correlate_field_info_arguments_with_control_flow_paths(
+                path_summary, field_info_summary
+            )
+        )
+        observation = annotated["control_flow_paths"][0][
+            "helper_callsite_observations"
+        ][0]
+        self.assertNotIn("field_info_arguments", observation)
+        self.assertEqual(correlation["ambiguous_field_info_callsite_count"], 1)
+        self.assertEqual(correlation["ambiguous_path_observation_count"], 1)
+        self.assertEqual(correlation["status"], "partial")
+
+    def test_login_request_field_info_path_join_is_partial_for_truncated_inputs(self):
+        path_summary = {
+            "control_flow_paths": [{
+                "exit_kind": "return",
+                "helper_callsite_observations": [],
+            }],
+            "control_flow_path_count": 1,
+            "control_flow_paths_truncated": True,
+            "control_flow_path_analysis_status": "truncated",
+        }
+        field_info_summary = {
+            "callsite_count": 2,
+            "callsite_observations_truncated": True,
+            "callsite_observations": [{
+                "instruction_index": 4,
+                "target_method": "Example.LoginRequest::ReadField",
+                "field_info_arguments": {"x0": {
+                    "usage_occurrence_position": 0,
+                    "field_ref_index": 1,
+                    "type_index": 2,
+                    "field_index_within_type": 3,
+                }},
+            }],
+        }
+
+        _annotated, correlation = (
+            _correlate_field_info_arguments_with_control_flow_paths(
+                path_summary, field_info_summary
+            )
+        )
+        self.assertEqual(correlation["status"], "partial")
+        self.assertTrue(correlation["field_info_callsite_observations_truncated"])
+        self.assertTrue(correlation["control_flow_paths_truncated"])
 
     def test_login_request_path_comparison_normalizes_primitive_helper_families(self):
         serializer = {
