@@ -44,6 +44,7 @@ class OfflineFrameAuditTests(unittest.TestCase):
             chunk_size=3,
         )
         self.assertEqual(result.source_sha256, SOURCE_SHA256)
+        self.assertEqual(result.fixture_sha256, hashlib.sha256(wire).hexdigest())
         self.assertEqual(result.frame_count, 2)
         self.assertEqual(result.wire_bytes, len(wire))
         self.assertEqual(result.header_bytes, 4)
@@ -102,6 +103,10 @@ class OfflineFrameAuditTests(unittest.TestCase):
         self.assertEqual(
             (result.frame_count, result.wire_bytes, result.payload_bytes),
             (0, 0, 0),
+        )
+        self.assertEqual(
+            result.fixture_sha256,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         )
         self.assertEqual(result.payload_sizes, ())
         self.assertEqual(result.payload_sha256, ())
