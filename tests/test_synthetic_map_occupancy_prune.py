@@ -82,20 +82,32 @@ class OccupancyPruneTests(unittest.TestCase):
 
         # Prune must not combine a session snapshot with a separately acquired
         # connection key: a transition could occur between those two reads.
-        with patch.object(
-            self.registry,
-            "connection_states_for",
-            wraps=self.registry.connection_states_for,
-        ) as snapshot_reader:
+        captured_sessions = []
+
+        def capture_states(sessions):
+            captured_sessions.append(frozenset(sessions))
+            return self.registry.connection_states_for_original(sessions)
+
+        original_reader = self.registry.connection_states_for
+        self.registry.connection_states_for_original = original_reader
+        try:
             with patch.object(
                 self.registry,
-                "connection_id_for",
-                side_effect=AssertionError("prune must use an atomic state snapshot"),
-            ):
-                self.assertEqual(self.maps.prune(), 1)
+                "connection_states_for",
+                side_effect=capture_states,
+            ) as snapshot_reader:
+                with patch.object(
+                    self.registry,
+                    "connection_id_for",
+                    side_effect=AssertionError("prune must use an atomic state snapshot"),
+                ):
+                    self.assertEqual(self.maps.prune(), 1)
 
-            snapshot_reader.assert_called_once()
-            self.assertEqual(snapshot_reader.call_args.args[0], {session})
+                snapshot_reader.assert_called_once()
+        finally:
+            del self.registry.connection_states_for_original
+
+        self.assertEqual(captured_sessions, [frozenset({session})])
 
         self.assertFalse(self.maps.members(42))
         self.assertIsNone(self.maps.join_epoch("a"))
