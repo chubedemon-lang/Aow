@@ -332,6 +332,29 @@ class DefaultValueIntegrationTests(unittest.TestCase):
                 DEFAULT_FIELD_VALUES,
             )
 
+    def test_inspect_bytes_rejects_malformed_caller_fingerprint_before_metadata_parse(self):
+        class HostileFingerprint(str):
+            def __len__(self):
+                raise AssertionError("custom length hook must not run")
+
+        invalid_fingerprints = (
+            "a" * 63,
+            "A" * 64,
+            "g" * 64,
+            bytearray(b"a" * 64),
+            HostileFingerprint("a" * 64),
+        )
+        for fingerprint in invalid_fingerprints:
+            with self.subTest(fingerprint_type=type(fingerprint).__name__):
+                with self.assertRaisesRegex(
+                    DefaultValueEvidenceError, "64 lowercase hexadecimal"
+                ):
+                    inspect_bytes(b"", b"", fingerprint)
+
+    def test_inspect_bytes_allows_an_absent_fingerprint(self):
+        report = inspect_bytes(make_metadata(), make_elf(), None)
+        self.assertIsNone(report["apk_sha256"])
+
 
 if __name__ == "__main__":
     unittest.main()
