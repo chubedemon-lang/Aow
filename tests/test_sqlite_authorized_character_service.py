@@ -9,10 +9,12 @@ from server.sessions import SessionError
 from server.sqlite_authorized_map_service import SqliteAuthorizedMapService
 from server.sqlite_map_position_store import (
     MapPositionAlreadyExists,
+    MapPositionNotFound,
     SqliteMapPositionStore,
 )
 from server.sqlite_player_state_store import (
     PlayerAlreadyExists,
+    PlayerNotFound,
     PlayerStoreError,
     SqlitePlayerStateStore,
 )
@@ -159,6 +161,116 @@ class SqliteAuthorizedCharacterServiceTests(unittest.TestCase):
         self.assertEqual(
             self.db.execute("SELECT count(*) FROM player_state_snapshots").fetchone()[0],
             1,
+        )
+
+    def test_get_with_initial_state_reads_current_player_and_map_snapshots(self):
+        created = self.service.create_with_initial_state(
+            self.owner_token, "Alice", level=3, experience=27
+        )
+        map_service = SqliteAuthorizedMapService(
+            self.db, ttl_seconds=30, clock=lambda: self.now[0]
+        )
+        map_service.enter(
+            self.owner_token, created.character.character_id,
+            "bootstrap-map-entry", 0, 12, 4, -9,
+        )
+
+        loaded = self.service.get_with_initial_state(
+            self.owner_token, created.character.character_id
+        )
+        self.assertEqual(loaded.character, created.character)
+        self.assertEqual(loaded.player_state, created.player_state)
+        self.assertEqual(
+            loaded.map_position, MapPosition(12, Position(4, -9), 1)
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_get_with_initial_state_hides_foreign_and_unknown_character_ids(self):
+        created = self.service.create_with_initial_state(
+            self.owner_token, "Alice"
+        )
+        messages = []
+        for character_id in (created.character.character_id, 999):
+            with self.assertRaises(SessionError) as caught:
+                self.service.get_with_initial_state(
+                    self.other_token, character_id
+                )
+            messages.append(str(caught.exception))
+        self.assertEqual(messages[0], messages[1])
+        self.assertFalse(self.db.in_transaction)
+
+    def test_get_with_initial_state_fails_closed_when_player_snapshot_is_missing(self):
+        created = self.service.create_with_initial_state(
+            self.owner_token, "Alice"
+        )
+        self.db.execute(
+            "DELETE FROM player_state_snapshots WHERE character_id=?",
+            (str(created.character.character_id),),
+        )
+        with self.assertRaises(PlayerNotFound):
+            self.service.get_with_initial_state(
+                self.owner_token, created.character.character_id
+            )
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 1
+        )
+
+    def test_get_with_initial_state_fails_closed_when_map_snapshot_is_missing(self):
+        created = self.service.create_with_initial_state(
+            self.owner_token, "Alice"
+        )
+        self.db.execute(
+            "DELETE FROM map_position_snapshots WHERE character_id=?",
+            (str(created.character.character_id),),
+        )
+        with self.assertRaises(MapPositionNotFound):
+            self.service.get_with_initial_state(
+                self.owner_token, created.character.character_id
+            )
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 1
+        )
+
+    def test_get_with_initial_state_rejects_expired_and_revoked_sessions(self):
+        created = self.service.create_with_initial_state(
+            self.owner_token, "Alice"
+        )
+        revoked = self.service.sessions.issue(1)
+        self.assertTrue(self.service.sessions.revoke(revoked))
+        with self.assertRaises(SessionError):
+            self.service.get_with_initial_state(
+                revoked, created.character.character_id
+            )
+
+        expired = self.service.sessions.issue(1)
+        self.now[0] += 30
+        with self.assertRaises(SessionError):
+            self.service.get_with_initial_state(
+                expired, created.character.character_id
+            )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_get_with_initial_state_rejects_caller_owned_transaction(self):
+        created = self.service.create_with_initial_state(
+            self.owner_token, "Alice"
+        )
+        self.db.execute("BEGIN IMMEDIATE")
+        self.db.execute(
+            "UPDATE accounts SET username='pending' WHERE id=1"
+        )
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            self.service.get_with_initial_state(
+                self.owner_token, created.character.character_id
+            )
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT username FROM accounts WHERE id=1"
+            ).fetchone()[0],
+            "alice",
         )
 
     def test_bootstrap_rolls_back_character_wallet_and_map_if_player_insert_fails(self):
