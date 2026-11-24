@@ -432,11 +432,29 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
             report["login_request_path_comparison"]["field_order_inferred"]
         )
 
+        field_info_path = login_entry["field_info_path_correlation"]
+        self.assertEqual(field_info_path["status"], "bounded")
+        self.assertEqual(
+            field_info_path["matched_unique_field_info_callsite_count"], 1
+        )
+        self.assertEqual(field_info_path["path_observation_match_count"], 1)
+        path_matches = [
+            path_observation
+            for path in login_entry["control_flow_paths"]
+            for path_observation in path["helper_callsite_observations"]
+            if "field_info_arguments" in path_observation
+        ]
+        self.assertEqual(len(path_matches), 1)
+
         provenance = report["login_request_callsite_summary"][0][
             "field_info_call_argument_provenance"
         ]
         self.assertEqual(provenance["callsite_count"], 1)
         observation = provenance["callsite_observations"][0]
+        self.assertEqual(
+            path_matches[0]["field_info_arguments"],
+            observation["field_info_arguments"],
+        )
         self.assertEqual(
             observation["field_info_arguments"]["x1"],
             {
