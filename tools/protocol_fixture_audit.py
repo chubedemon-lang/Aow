@@ -5,6 +5,7 @@ not reassemble PCAPs, prove capture authorization, establish sender symmetry,
 or verify APK compatibility. Keep fixture files outside the repository.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -829,6 +830,8 @@ def audit_fixture_bytes(
         raise FixtureAuditError("fixture size limit is invalid")
     if len(content) > max_fixture_bytes:
         raise FixtureAuditError("fixture exceeds the configured size limit")
+    # Identify the exact private JSON artifact, separately from its asserted APK fingerprint.
+    fixture_sha256 = hashlib.sha256(content).hexdigest()
     if (
         type(expected_apk_sha256) is not str
         or _SHA256.fullmatch(expected_apk_sha256) is None
@@ -1039,6 +1042,8 @@ def audit_fixture_bytes(
             if candidate_status == "candidate_frames_recovered"
             else "candidate_not_recovered"
         ),
+        "fixture_sha256": fixture_sha256,
+        "fixture_size_bytes": len(content),
         "apk_sha256": fixture_hash,
         "apk_fingerprint_match": True,
         "capture_kind": capture_kind,
