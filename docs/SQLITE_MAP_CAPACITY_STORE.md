@@ -34,6 +34,10 @@ causes the operation to fail closed before modifying the projection.
   the durable position snapshot. It inserts, moves, or removes the membership
   projection. An unconfigured map is not capacity-managed.
 - members(map_id) and capacity(map_id) expose the current synthetic projection.
+  Both read methods recheck that foreign-key and CHECK enforcement remain enabled
+  on the caller-owned connection before returning data; disabling either pragma
+  after construction makes reads fail closed rather than exposing a projection
+  that may have been written while constraints were bypassed.
 - verify_integrity() checks SQLite quick_check, foreign keys, persisted map/
   capacity and character-identifier value boundaries, membership/position
   agreement, missing memberships on configured maps, memberships on
