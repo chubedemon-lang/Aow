@@ -104,10 +104,19 @@ def _contains_network_locator(value):
         except UnicodeError:
             continue
     for candidate in candidates:
-        match = _HOSTNAME.fullmatch(candidate)
-        if match is None:
+        # IDNA output may contain xn-- labels, which the deliberately
+        # conservative ASCII prose detector does not accept as a final TLD.
+        # Validate DNS label syntax separately, then preserve known local
+        # filename suffixes (for example docs/PROTOCOL.md).
+        labels = candidate.rstrip(".").split(".")
+        if len(labels) < 2 or any(
+            not label
+            or len(label) > 63
+            or re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) is None
+            for label in labels
+        ):
             continue
-        suffix = match.group(0).rsplit(".", 1)[-1].split(":", 1)[0].lower()
+        suffix = labels[-1].lower()
         if suffix not in _LOCAL_FILE_SUFFIXES:
             return True
     return False
