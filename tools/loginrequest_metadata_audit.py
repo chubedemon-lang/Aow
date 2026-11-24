@@ -1,8 +1,7 @@
-"""Redacted IL2CPP v31 metadata-shape audit for the AOW LoginRequest types.
+"""Redacted IL2CPP v31 metadata-shape audit for AOW LoginRequest.
 
-This tool reads metadata only. It reports counts and validates table ranges;
-it deliberately does not emit field names, field type indexes, field order,
-wire IDs, native addresses, or packet semantics.
+The report contains counts only. It never emits field names, type indexes,
+native addresses, raw metadata, endpoints, or packet data.
 """
 import argparse
 import hashlib
@@ -10,254 +9,201 @@ import json
 import os
 import re
 import stat
+import struct
 import zipfile
 from pathlib import Path
 
-
 MAGIC = 0xFAB11BAF
 VERSION = 31
-STRING_PAIR_OFFSET = 0x18
-METHOD_PAIR_OFFSET = 0x30
-FIELD_PAIR_OFFSET = 0x60
-TYPE_PAIR_OFFSET = 0xA0
-METHOD_RECORD_SIZE = 0x24
-FIELD_RECORD_SIZE = 0x0C
-TYPE_RECORD_SIZE = 0x58
-
-TARGET_NAMESPACE = "com.geargames.aow.messages"
-TARGET_TYPE = "LoginRequest"
-SERIALIZER_NAMESPACE = "com.geargames.serialization.serializers"
-SERIALIZER_TYPE = "LoginRequestSTSerializer"
-DESERIALIZER_TYPE = "LoginRequestSTDeserializer"
+STRING_PAIR = 0x18
+METHOD_PAIR = 0x30
+FIELD_PAIR = 0x60
+TYPE_PAIR = 0xA0
+METHOD_SIZE = 0x24
+FIELD_SIZE = 0x0C
+TYPE_SIZE = 0x58
+METADATA_MEMBER = "assets/bin/Data/Managed/Metadata/global-metadata.dat"
+TARGET_NS = "com.geargames.aow.messages"
+SERIALIZER_NS = "com.geargames.serialization.serializers"
 
 
 class LoginRequestMetadataError(ValueError):
-    """Malformed or ambiguous IL2CPP metadata for the LoginRequest audit."""
+    """Malformed or ambiguous LoginRequest metadata."""
 
 
 def _table(data, pair_offset, record_size, label):
     if len(data) < pair_offset + 8:
-        raise LoginRequestMetadataError("metadata header is truncated")
-    offset = int.from_bytes(data[pair_offset:pair_offset + 4], "little")
-    size = int.from_bytes(data[pair_offset + 4:pair_offset + 8], "little")
-    if size % record_size:
-        raise LoginRequestMetadataError(label + " table has a partial record")
-    if offset > len(data) or size > len(data) - offset:
-        raise LoginRequestMetadataError(label + " table is outside metadata")
+        raise LoginRequestMetadataError("truncated metadata header")
+    offset, size = struct.unpack_from("<II", data, pair_offset)
+    if size % record_size or offset > len(data) or size > len(data) - offset:
+        raise LoginRequestMetadataError(label + " table is malformed or out of bounds")
     return offset, size // record_size
 
 
-def _read_string(heap, index):
-    if type(index) is not int or not 0 <= index < len(heap):
-        raise LoginRequestMetadataError("string index is outside the metadata heap")
+def _string(heap, index):
+    if index < 0 or index >= len(heap):
+        raise LoginRequestMetadataError("string index is out of bounds")
     end = heap.find(b"\0", index)
     if end < 0:
-        raise LoginRequestMetadataError("metadata string is not terminated")
+        raise LoginRequestMetadataError("unterminated metadata string")
     try:
         return heap[index:end].decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise LoginRequestMetadataError("metadata string is not valid UTF-8") from exc
+        raise LoginRequestMetadataError("invalid UTF-8 metadata string") from exc
 
 
-def _find_type(data, type_offset, type_count, heap, namespace, name):
+def _find_type(data, offset, count, heap, namespace, name):
     matches = []
-    for index in range(type_count):
-        record = type_offset + index * TYPE_RECORD_SIZE
-        name_index = int.from_bytes(data[record:record + 4], "little", signed=True)
-        namespace_index = int.from_bytes(
-            data[record + 4:record + 8], "little", signed=True
-        )
-        type_name = _read_string(heap, name_index)
-        type_namespace = _read_string(heap, namespace_index)
-        if type_name == name and type_namespace == namespace:
-            matches.append(record)
+    for i in range(count):
+        pos = offset + i * TYPE_SIZE
+        name_index, namespace_index = struct.unpack_from("<ii", data, pos)
+        if _string(heap, name_index) == name and _string(heap, namespace_index) == namespace:
+            matches.append(pos)
     if len(matches) != 1:
-        raise LoginRequestMetadataError(
-            "expected exactly one metadata type for " + name
-        )
+        raise LoginRequestMetadataError("expected exactly one metadata type: " + name)
     return matches[0]
 
 
-def _range_from_type(data, record, start_offset, count_offset, total, label):
-    start = int.from_bytes(
-        data[record + start_offset:record + start_offset + 4],
-        "little", signed=True,
-    )
-    count = int.from_bytes(
-        data[record + count_offset:record + count_offset + 2],
-        "little",
-    )
-    if start < 0 or start > total or count > total - start:
+def _type_range(data, record, start_offset, count_offset, table_count, label):
+    start = struct.unpack_from("<i", data, record + start_offset)[0]
+    count = struct.unpack_from("<H", data, record + count_offset)[0]
+    if start < 0 or start > table_count or count > table_count - start:
         raise LoginRequestMetadataError(label + " range is outside its table")
     return start, count
 
 
-def _method_summary(data, heap, method_offset, method_count, type_record,
-                    expected_method, label):
-    start, count = _range_from_type(
-        data, type_record, 0x24, 0x40, method_count, label + " method"
+def _method_count_and_parameters(data, heap, method_offset, method_total,
+                                 type_record, expected_name, label):
+    start, count = _type_range(
+        data, type_record, 0x24, 0x40, method_total, label + " method"
     )
-    names = []
-    matching_parameter_counts = []
-    for index in range(start, start + count):
-        record = method_offset + index * METHOD_RECORD_SIZE
-        name_index = int.from_bytes(
-            data[record:record + 4], "little", signed=True
-        )
-        name = _read_string(heap, name_index)
-        names.append(name)
-        if name == expected_method:
-            parameter_count = int.from_bytes(
-                data[record0+0x22:record+0x24], "little"
-            )
-            matching_parameter_counts.append(parameter_count)
-    if len(matching_parameter_counts) != 1:
+    parameter_counts = []
+    for i in range(start, start + count):
+        pos = method_offset + i * METHOD_SIZE
+        name_index = struct.unpack_from("<i", data, pos)[0]
+        if _string(heap, name_index) == expected_name:
+            parameter_counts.append(struct.unpack_from("<H", data, pos + 0x22)[0])
+    if len(parameter_counts) != 1:
         raise LoginRequestMetadataError(
-            "expected exactly one " + expected_method + " metadata method"
+            "expected exactly one " + expected_name + " method in " + label
         )
-    return count, matching_parameter_counts[0]
+    return count, parameter_counts[0]
 
 
 def inspect_metadata_bytes(metadata):
-    """Validate v31 LoginRequest metadata and return a redacted count summary."""
+    """Validate the v31 metadata ranges and return a redacted count summary."""
     if type(metadata) is not bytes:
         raise TypeError("metadata must be immutable bytes")
     if len(metadata) < 0xB0:
-        raise LoginRequestMetadataError("metadata header is truncated")
-    magic = int.from_bytes(metadata[0:4], "little")
-    version = int.from_bytes(metadata[4:8], "little")
+        raise LoginRequestMetadataError("truncated metadata header")
+    magic, version = struct.unpack_from("<II", metadata, 0)
     if magic != MAGIC or version != VERSION:
         raise LoginRequestMetadataError("expected IL2CPP metadata version 31")
 
-    string_offset, string_size = _table(metadata, STRING_PAIR_OFFSET, 1, "string")
-    method_offset, method_count = _table(
-        metadata, METHOD_PAIR_OFFSET, METHOD_RECORD_SIZE, "method"
-    )
-    field_offset, field_count = _table(
-        metadata, FIELD_PAIR_OFFSET, FIELD_RECORD_SIZE, "field"
-    )
-    type_offset, type_count = _table(
-        metadata, TYPE_PAIR_OFFSET, TYPE_RECORD_SIZE, "type"
-    )
+    string_offset, string_size = _table(metadata, STRING_PAIR, 1, "string")
+    method_offset, method_total = _table(metadata, METHOD_PAIR, METHOD_SIZE, "method")
+    field_offset, field_total = _table(metadata, FIELD_PAIR, FIELD_SIZE, "field")
+    type_offset, type_total = _table(metadata, TYPE_PAIR, TYPE_SIZE, "type")
     heap = metadata[string_offset:string_offset + string_size]
 
-    request_record = _find_type(
-        metadata, type_offset, type_count, heap, TARGET_NAMESPACE, TARGET_TYPE
+    request = _find_type(
+        metadata, type_offset, type_total, heap, TARGET_NS, "LoginRequest"
     )
-    serializer_record = _find_type(
-        metadata, type_offset, type_count, heap,
-        SERIALIZER_NAMESPACE, SERIALIZER_TYPE,
+    serializer = _find_type(
+        metadata, type_offset, type_total, heap,
+        SERIALIZER_NS, "LoginRequestSTSerializer",
     )
-    deserializer_record = _find_type(
-        metadata, type_offset, type_count, heap,
-        SERIALIZER_NAMESPACE, DESERIALIZER_TYPE,
+    deserializer = _find_type(
+        metadata, type_offset, type_total, heap,
+        SERIALIZER_NS, "LoginRequestSTDeserializer",
     )
 
-    field_start, request_field_count = _range_from_type(
-        metadata, request_record, 0x20, 0x44, field_count, "LoginRequest field"
+    field_start, field_count = _type_range(
+        metadata, request, 0x20, 0x44, field_total, "LoginRequest field"
     )
     field_names = set()
-    for index in range(field_start, field_start + request_field_count):
-        record = field_offset + index * FIELD_RECORD_SIZE
-        name_index = int.from_bytes(
-            metadata[record:record + 4], "little", signed=True
-        )
-        type_index = int.from_bytes(
-            metadata[record + 4:record + 8], "little", signed=True
-        )
-        field_names.add(_read_string(heap, name_index))
+    for i in range(field_start, field_start + field_count):
+        pos = field_offset + i * FIELD_SIZE
+        name_index, type_index = struct.unpack_from("<ii", metadata, pos)
+        field_names.add(_string(heap, name_index))
         if type_index < 0:
-            raise LoginRequestMetadataError("LoginRequest field has a negative type index")
+            raise LoginRequestMetadataError("negative LoginRequest field type index")
 
-    _request_method_start, request_method_count = _range_from_type(
-        metadata, request_record, 0x24, 0x40, method_count,
-        "LoginRequest method",
+    _request_method_start, request_method_count = _type_range(
+        metadata, request, 0x24, 0x40, method_total, "LoginRequest method"
     )
-    serializer_method_count, serialize_parameter_count = _method_summary(
-        metadata, heap, method_offset, method_count,
-        serializer_record, "serialize", "LoginRequest serializer",
+    serializer_methods, serializer_parameters = _method_count_and_parameters(
+        metadata, heap, method_offset, method_total, serializer,
+        "serialize", "LoginRequest serializer",
     )
-    deserializer_method_count, deserialize_parameter_count = _method_summary(
-        metadata, heap, method_offset, method_count,
-        deserializer_record, "deserialize", "LoginRequest deserializer",
+    deserializer_methods, deserializer_parameters = _method_count_and_parameters(
+        metadata, heap, method_offset, method_total, deserializer,
+        "deserialize", "LoginRequest deserializer",
     )
-
     return {
         "metadata_version": version,
-        "login_request_metadata_field_count": request_field_count,
+        "login_request_metadata_field_count": field_count,
         "login_request_unique_field_name_count": len(field_names),
         "login_request_metadata_method_count": request_method_count,
-        "login_request_serializer_metadata_method_count": serializer_method_count,
-        "login_request_deserializer_metadata_method_count": deserializer_method_count,
-        "serializer_metadata_parameter_count": serialize_parameter_count,
-        "deserializer_metadata_parameter_count": deserialize_parameter_count,
+        "login_request_serializer_metadata_method_count": serializer_methods,
+        "login_request_deserializer_metadata_method_count": deserializer_methods,
+        "serializer_metadata_parameter_count": serializer_parameters,
+        "deserializer_metadata_parameter_count": deserializer_parameters,
         "field_names_emitted": False,
         "field_type_indexes_emitted": False,
         "field_order_inferred": False,
         "wire_schema_verified": False,
         "interpretation": (
-            "Counts and table-range validation only. Metadata field order is not "
-            "serializer execution order, method parameter counts are not payload "
-            "field counts, and no LoginRequest wire schema or compatibility is inferred."
+            "Metadata counts only. Field-table order is not serializer execution "
+            "order; metadata parameter counts are not payload field counts. No "
+            "wire schema, handshake, framing, or compatibility is inferred."
         ),
     }
 
 
 def _read_apk_metadata(path):
-    """Read metadata and fingerprint from one stable, no-follow APK descriptor."""
+    """Read one ZIP member and hash the same stable, no-follow APK descriptor."""
     path = Path(path)
     try:
         before = os.lstat(path)
     except OSError as exc:
         raise LoginRequestMetadataError("invalid or inaccessible APK path") from exc
-    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 1024 * 1024 * 1024:
+    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 1024**3:
         raise LoginRequestMetadataError("APK must be a bounded regular file")
-
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_BINARY", 0)
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
-        raise LoginRequestMetadataError("unable to open APK safely") from exc
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise LoginRequestMetadataError("platform lacks no-follow file opening")
+    flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(path, flags)
 
     def identity(info):
-        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
     try:
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode) or identity(before) != identity(opened):
-            raise LoginRequestMetadataError("APK path changed before open")
+            raise LoginRequestMetadataError("APK changed before open")
         with os.fdopen(descriptor, "rb") as stream:
             descriptor = None
             try:
                 with zipfile.ZipFile(stream) as archive:
-                    matches = [
-                        item for item in archive.infolist()
-                        if item.filename == "assets/bin/Data/Managed/Metadata/global-metadata.dat"
-                    ]
+                    matches = [item for item in archive.infolist()
+                               if item.filename == METADATA_MEMBER]
                     if len(matches) != 1:
                         raise LoginRequestMetadataError(
-                            "expected exactly one IL2CPP metadata member"
+                            "expected exactly one IL2CPP metadata ZIP member"
                         )
                     info = matches[0]
-                    if info.flag_bits & 0x1 or info.file_size > 64 * 1024 * 1024:
+                    if info.flag_bits & 1 or info.file_size > 64 * 1024 * 1024:
                         raise LoginRequestMetadataError("metadata member is encrypted or oversized")
                     with archive.open(info) as member:
                         metadata = member.read(64 * 1024 * 1024 + 1)
                     if len(metadata) != info.file_size:
                         raise LoginRequestMetadataError("metadata member size mismatch")
             except (zipfile.BadZipFile, zipfile.LargeZipFile, RuntimeError, OSError) as exc:
-                if isinstance(exc, LoginRequestMetadataError):
-                    raise
                 raise LoginRequestMetadataError("APK is not a readable ZIP archive") from exc
 
-            after_archive = os.fstat(stream.fileno())
-            if identity(opened) != identity(after_archive):
+            if identity(opened) != identity(os.fstat(stream.fileno())):
                 raise LoginRequestMetadataError("APK changed while reading metadata")
             stream.seek(0)
             digest = hashlib.sha256()
@@ -267,18 +213,15 @@ def _read_apk_metadata(path):
                 if total > opened.st_size:
                     raise LoginRequestMetadataError("APK grew while hashing")
                 digest.update(chunk)
-            after_hash = os.fstat(stream.fileno())
-            if total != opened.st_size or identity(opened) != identity(after_hash):
+            if total != opened.st_size or identity(opened) != identity(os.fstat(stream.fileno())):
                 raise LoginRequestMetadataError("APK changed while hashing")
             try:
-                path_after = os.lstat(path)
+                after = os.lstat(path)
             except OSError as exc:
                 raise LoginRequestMetadataError("APK path changed while reading") from exc
-            if not stat.S_ISREG(path_after.st_mode) or identity(opened) != identity(path_after):
+            if not stat.S_ISREG(after.st_mode) or identity(opened) != identity(after):
                 raise LoginRequestMetadataError("APK path changed while reading")
             return metadata, digest.hexdigest()
-    except OSError as exc:
-        raise LoginRequestMetadataError("unable to read APK safely") from exc
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -290,9 +233,9 @@ def inspect_apk(apk_path, expected_sha256=None):
         or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
     ):
         raise ValueError("expected_sha256 must be 64 lowercase hexadecimal characters")
-    metadata, digest = _read_apk_metadata(Path(apk_path))
+    metadata, digest = _read_apk_metadata(apk_path)
     if expected_sha256 is not None and digest != expected_sha256:
-        raise LoginRequestMetadataError("APK SHA-256 does not match expected fingerprint")
+        raise LoginRequestMetadataError("APK SHA-256 mismatch")
     report = inspect_metadata_bytes(metadata)
     report["apk_sha256"] = digest
     report["native_addresses_emitted"] = False
@@ -302,9 +245,9 @@ def inspect_apk(apk_path, expected_sha256=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Redacted offline IL2CPP v31 LoginRequest metadata-shape audit"
+        description="Redacted offline IL2CPP v31 LoginRequest metadata audit"
     )
-    parser.add_argument("apk", help="path to an authorized local APK")
+    parser.add_argument("apk", help="authorized local APK path")
     parser.add_argument("--expected-sha256")
     parser.add_argument("--output")
     args = parser.parse_args(argv)
