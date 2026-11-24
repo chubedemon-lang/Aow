@@ -386,6 +386,12 @@ class SqliteMapCapacityStore:
             self.db.execute("BEGIN")
             try:
                 self._validate_connection_constraints()
+                # Pin one SQLite read snapshot before integrity checks and
+                # projection queries. A concurrent writer must not commit
+                # between quick_check and the later consistency comparisons.
+                self.db.execute(
+                    "SELECT name FROM sqlite_master LIMIT 1"
+                ).fetchone()
                 if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
                     raise MapCapacityStoreError("SQLite quick_check failed")
                 if self.db.execute("PRAGMA foreign_key_check").fetchall():
