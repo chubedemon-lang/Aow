@@ -104,6 +104,17 @@ current one. This prevents a concurrent update from bypassing the mixed-build
 guard. The lock provides process-local consistency only; it is not a durable
 store, authorization proof, or fixture-authenticity check.
 
+## Legacy offline evidence-record metadata
+
+The separate `server/offline_evidence_validation.py` record validator applies
+the same bounded percent-decoding policy to its `source` and `observation`
+fields: it checks the literal value and up to three decoding rounds. If a
+valid percent escape remains after that bound, it rejects the value rather
+than allowing deeper nested encoding to conceal a locator, credential,
+private path, or raw-byte marker. A single-layer encoded repository reference
+that becomes safe within the bound remains accepted. This is a conservative
+metadata publication guard, not a general-purpose DLP scanner.
+
 ## Validation
 
 ```sh
