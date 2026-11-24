@@ -11,7 +11,7 @@ from server.offline_frame_probe import FrameSpec, LengthFrameDecoder
 from server.offline_packet_fixture import validate_packet_fixture
 
 
-_SHA256 = re.compile(r"[0-9a-f]{64}\\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class OfflineFrameAuditError(ValueError):
