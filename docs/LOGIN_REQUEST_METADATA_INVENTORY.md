@@ -2,7 +2,38 @@
 
 ## Scope
 
-This report records a read-only, offline metadata audit of the user-authorized
-AOW APK. The APKY]Y]H]\Ë]]HX\Y\ËY[[Y\Ë\H[^\Ë]]HY\ÜÙ\Ë[Ú[[Y\Ë[XÚÙ]]H[XZ[]]KÈTÈÜ^XÝY\ÜÙ]\È\ÙH\ÜÚ]ÜKÈÈ\ÙXÙYY]Y]HXÝÂHØØ[]Y]\YYYHTÈ[Ù\[YØZ[ÝH][Ý\ÛHXÛÜYÒKLM[\ÙYHSÔÌHY]Y]HX\ÈÚ]^XÝ[ÙHÚXÚÜË][H\Ý[KK_KKNTÈÒKLMÌÌXYØÌMNXØNØMNXÌLNLMÎMLÌLMÍÍÍXY]Y]H\Ú[ÛÌHÙÚ[\]Y\ÝY]Y]HY[ÈÌH[\]YHY[[Y\ÈÌHÙÚ[\]Y\ÝY]Y]HY]ÙÈHÙÚ[\]Y\ÝÕÙ\X[^\Y]Y]HY]ÙÈÙÚ[\]Y\ÝÕ\Ù\X[^\Y]Y]HY]ÙÈÙ\X[^\Y]Y]H\[Y]\ÛÝ[\Ù\X[^\Y]Y]H\[Y]\ÛÝ[ÈHY[[Y\È[Y[\H[^\È\H[X\][HÝ[Z]YBÙ\X[^\Ù\Ù\X[^\\[Y]\ÛÝ[È\ØÜXHY]Y]HÚYÛ]\\ÈÛNÂ^H\HÝ^[ØYY[ÛÝ[ËÈÈ[\]][Û[Z]Â\ÈÛÜÙ\ÈH\ÝÈY]Y]K]XH[Y][ÛØ\]Ù\È
-Ý
-\ÝX\ÚÙ\X[^\^XÝ][ÛÜ\ÙÚ[\]Y\ÝÚ\HY[Ü\Ü[Û[]KY\ÜØYÙHQË[ÚZÙHÙ\]Y[ÙK]][XØ][ÛÙ[X[XÜË[Z[ËÛÛ\\ÜÚ[ÛXÙ[Y[Ü[Ú[ÙYPTÈÛÛ\]X[]KHÌHY]Y]HY[Â]\ÝÝHX]Y\ÈÌHÙ\X[^Y^[ØYY[ËH]Y]ÛÛXYÈÛHHY]Y]HTY[X\ÝYÚÛHÝXKËYÛÝÈTÈ\ØÜ\Ü\YY\È[Ü[Û[^XÝYÒKLM[[Z]ÂÛÝ[ÈÛK]\Ü\ÈÈ]ÛÜÈ\]Y\ÝÈ[]\[ÙYY\ÈHTËÈÈ\ÙXÝ[ÛÚ]Û[HÛÛËÙÚ[\]Y\ÝÛY]Y]WØ]Y]Ü]]KÜ]Ø[ÝË\ÈKY^XÝY\ÚLMÌÌXYØÌMNXØNØMNXÌLNLMÎMLÌLMÍÍÍHK[Ý]]Ü]]KÜ]ÛÙÚ[\]Y\Ý[Y]Y]K\Ý[[X\KÛÛHÝ]]\ÈHYXÝYØØ[Ý[[X\KÙY\]]]H[[]Y]ÙY
+This report records a read-only, offline metadata audit of the user-authorized AOW APK. The APK, metadata bytes, native libraries, field names, type indexes, native addresses, endpoint values, and packet data remain private. No APK or extracted asset is part of the repository.
+
+## Reproduced metadata facts
+
+The local audit verified the APK fingerprint against the previously recorded SHA-256 and parsed the IL2CPP v31 metadata tables with exact range checks.
+
+| Item | Result |
+|---|---:|
+| APK SHA-256 | \`c00bd00d30f625b85dfcc0159b3b058ca459c10f9917844a5301163480c7624e\` |
+| Metadata version | 31 |
+| \`LoginRequest\` metadata fields | 31 |
+| Unique field names | 31 |
+| \`LoginRequest\` metadata methods | 65 |
+| \`LoginRequestSTSerializer\` metadata methods | 2 |
+| \`LoginRequestSTDeserializer\` metadata methods | 2 |
+| Serializer metadata parameter count | 4 |
+| Deserializer metadata parameter count | 3 |
+
+The field names and field type indexes are deliberately not emitted. The serializer/deserializer parameter counts describe metadata signatures only; they are not payload field counts.
+
+## Interpretation limits
+
+This closes a narrow metadata-table validation gap. It does **not** establish serializer execution order, LoginRequest wire field order, optionality, message IDs, handshake sequence, authentication semantics, framing, compression placement, or unchanged-APK compatibility. The 31 metadata fields must not be treated as 31 serialized payload fields.
+
+The audit tool reads only the metadata ZIP member through one stable, no-follow APK descriptor, verifies an optional expected SHA-256, and emits counts only. It performs no network requests and never modifies the APK.
+
+## Reproduction
+
+\`\`\`sh
+python -m tools.loginrequest_metadata_audit /private/path/aow.apk \\
+  --expected-sha256 c00bd00d30f625b85dfcc0159b3b058ca459c10f9917844a5301163480c7624e \\
+  --output /private/path/loginrequest-metadata-summary.json
+\`\`\`
+
+The output is a redacted local summary. Keep it private until reviewed.
