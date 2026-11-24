@@ -75,13 +75,18 @@ class MapOccupancy:
                 return closed
 
     def join_epoch(self, connection_id):
-        """Local occupancy incarnation; never an APK protocol field."""
+        """Return the local occupancy incarnation only for a current member."""
         with self._lock:
             try:
-                session = self.registry.get(connection_id)
+                with self.registry.locked_session(connection_id) as session:
+                    snapshot = session.snapshot
+                    if snapshot.phase is not Phase.IN_MAP or snapshot.map_id is None:
+                        return None
+                    if session not in self._members.get(snapshot.map_id, set()):
+                        return None
+                    return self._join_epochs.get(session)
             except RegistryError:
                 return None
-            return self._join_epochs.get(session)
 
     def prune(self):
         """Reconcile occupancy after sessions closed outside MapOccupancy.
@@ -109,16 +114,22 @@ class MapOccupancy:
             raise ValueError("invalid map identifier")
         with self._lock:
             members = self._members.get(map_id, set())
-            current_keys = self.registry.connection_keys_for(members)
+            current_states = self.registry.connection_states_for(members)
             resolved = set()
-            for session, current_key in current_keys.items():
+            for session, (current_key, snapshot) in current_states.items():
                 if current_key is not None:
-                    self._member_keys[session] = current_key
-                    resolved.add(current_key)
-                else:
-                    last_key = self._member_keys.get(session)
-                    if last_key is not None:
-                        resolved.add(last_key)
+                    # A live session that left or changed maps outside this
+                    # index is not an occupant, even before prune removes its
+                    # stale index entry.
+                    if snapshot.phase is Phase.IN_MAP and snapshot.map_id == map_id:
+                        self._member_keys[session] = current_key
+                        resolved.add(current_key)
+                    continue
+                # Preserve the last-known key only for closed stale entries;
+                # this is diagnostic compatibility, not live occupancy.
+                last_key = self._member_keys.get(session)
+                if last_key is not None:
+                    resolved.add(last_key)
             return frozenset(resolved)
 
     def close_all(self):
