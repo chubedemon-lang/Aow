@@ -97,10 +97,13 @@ class MapOccupancy:
         with self._lock:
             removed = 0
             for map_id, members in tuple(self._members.items()):
-                for session in tuple(members):
-                    snap = session.snapshot
+                # Resolve every retained handle in one registry-locked batch.
+                # Separate key and snapshot reads could straddle a concurrent
+                # leave, close, or verified connection transfer.
+                current_states = self.registry.connection_states_for(members)
+                for session, (current_key, snap) in current_states.items():
                     valid = (
-                        self.registry.connection_id_for(session) is not None
+                        current_key is not None
                         and snap.phase is Phase.IN_MAP
                         and snap.map_id == map_id
                     )
