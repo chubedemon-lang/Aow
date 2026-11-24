@@ -41,6 +41,7 @@ class SqliteMapCapacityAuditSnapshotTests(unittest.TestCase):
                 if not writer_update_started.wait(5):
                     observations["writer_reached_update"] = False
                     return
+                observations["writer_reached_update"] = True
                 observations["writer_blocked_by_snapshot"] = not writer_done.wait(0.25)
 
         self.db.set_trace_callback(audit_trace)
