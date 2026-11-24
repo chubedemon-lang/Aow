@@ -421,14 +421,10 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
             "bounded_simple_path_enumeration",
         )
         self.assertGreaterEqual(login_entry["control_flow_path_count"], 1)
-        path_observations = [
-            observation
+        self.assertEqual(login_entry["unresolved_direct_method_call_count"], 1)
+        self.assertTrue(all(
+            not path["helper_callsite_observations"]
             for path in login_entry["control_flow_paths"]
-            for observation in path["helper_callsite_observations"]
-        ]
-        self.assertTrue(any(
-            observation.get("method", "").endswith("::SyntheticHelper")
-            for observation in path_observations
         ))
         self.assertEqual(
             report["login_request_path_comparison"]["comparison_status"],
