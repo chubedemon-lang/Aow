@@ -70,7 +70,7 @@ _PERCENT_ESCAPE = re.compile(r"%[0-9a-f]{2}", re.IGNORECASE)
 
 # Unicode DNS names can bypass the ASCII hostname expression.
 _UNICODE_HOST_CANDIDATE = re.compile(
-    r"(?<![\\w-])(?:[\\w-]+[.\\u3002\\uff0e\\uff61])+[\\w-]+(?![\\w-])", re.UNICODE
+    r"(?<![\w-])(?:[\w-]+[.\u3002\uff0e\uff61])+[\w-]+(?![\w-])", re.UNICODE
 )
 
 
