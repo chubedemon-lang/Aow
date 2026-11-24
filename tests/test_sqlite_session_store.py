@@ -1016,6 +1016,39 @@ class SqliteSessionStoreTests(unittest.TestCase):
         )
         self.assertFalse(self.db.in_transaction)
 
+    def test_constructor_rejects_missing_check_constraints_when_expiry_index_is_missing(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.execute(
+            """CREATE TABLE durable_sessions (
+                token_hash BLOB PRIMARY KEY,
+                account_id INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL
+            )"""
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "missing required durable session CHECK constraint"
+        ):
+            SqliteSessionStore(connection, clock=lambda: self.now)
+
+        self.assertFalse(connection.in_transaction)
+        self.assertEqual(
+            connection.execute(
+                "SELECT type, tbl_name FROM sqlite_master "
+                "WHERE name='durable_sessions_expiry'"
+            ).fetchone(),
+            None,
+        )
+        self.assertEqual(
+            connection.execute(
+                "SELECT type FROM sqlite_master "
+                "WHERE name='durable_sessions'"
+            ).fetchone(),
+            ("table",),
+        )
+
     def test_constructor_rejects_existing_expiry_index_on_wrong_column(self):
         connection = sqlite3.connect(":memory:", isolation_level=None)
         self.addCleanup(connection.close)
