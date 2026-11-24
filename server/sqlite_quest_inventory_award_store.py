@@ -348,7 +348,9 @@ class SqliteQuestInventoryAwardStore:
 
             reserved_mutations = self.db.execute(
                 """SELECT COUNT(*) FROM inventory_mutations
-                   WHERE substr(request_id, 1, 6) = 'quest-'"""
+                   WHERE length(request_id)=70
+                     AND substr(request_id, 1, 6)='quest-'
+                     AND substr(request_id, 7) NOT GLOB '*[^0-9a-f]*'"""
             ).fetchone()[0]
             if type(reserved_mutations) is not int or reserved_mutations != award_count:
                 raise QuestInventoryAwardError(
@@ -432,7 +434,7 @@ class SqliteQuestInventoryAwardStore:
                     "quest item reward already granted"
                 )
 
-            mutation = self.inventory.apply(
+            mutation = self.inventory._apply_quest_award(
                 character_id,
                 self._mutation_id(request_id),
                 expected_inventory_revision,

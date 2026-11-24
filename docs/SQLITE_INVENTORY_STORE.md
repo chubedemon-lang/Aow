@@ -13,6 +13,7 @@
 - An exact retry returns the original committed snapshot, even after later mutations.
 - Before replay, receipt JSON is schema-checked: duplicate keys, non-finite values, booleans in integer fields, malformed item rows, non-canonical item ordering, and character/revision mismatches are rejected as inventory corruption.
 - Reusing a request ID for a different character, expected revision or payload is rejected.
+- Reserves the exact `quest-` plus 64-lowercase-hex request-ID shape for the trusted quest-award store; ordinary IDs such as `quest-manual-operation` remain valid.
 - Rejects underflow, stack overflow, capacity overflow, empty net mutations and oversized batches without changing state.
 - Supports reopening the same private SQLite database file.
 
@@ -54,6 +55,15 @@ rows, and quantities outside the configured stack bound are rejected rather
 than truncated or stringified by Python coercion. A rejected mutation performs
 no item, revision, or receipt write. This is synthetic persistence hardening,
 not an AOW item or packet contract.
+
+## Reserved quest-award receipt namespace
+
+The public `apply()` method rejects only the exact internal quest-award receipt
+shape (`quest-` followed by 64 lowercase hexadecimal characters). The trusted
+quest-award store uses a private internal entry point for that shape. Other
+caller-selected IDs that merely share the `quest-` prefix remain valid. This
+lets the quest audit identify its own receipts without treating an ordinary
+inventory request such as `quest-manual-operation` as an orphaned reward.
 
 ## Integration boundary
 

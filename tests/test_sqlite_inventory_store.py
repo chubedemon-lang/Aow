@@ -213,6 +213,27 @@ class SqliteInventoryStoreTests(unittest.TestCase):
             self.store.apply("hero", "cancel", 0, [("potion", 2), ("potion", -2)])
         self.assertEqual(self.store.get("hero").revision, 0)
 
+    def test_quest_prefixed_manual_ids_do_not_collide_with_reserved_awards(self):
+        self.store.create("hero")
+        ordinary = self.store.apply(
+            "hero", "quest-manual-operation", 0, [("potion", 1)]
+        )
+        self.assertEqual(ordinary.snapshot.revision, 1)
+        reserved = "quest-" + ("a" * 64)
+        with self.assertRaisesRegex(
+            InventoryStoreError, "reserved inventory request identifier"
+        ):
+            self.store.apply("hero", reserved, 1, [("potion", 1)])
+        self.assertEqual(self.store.get("hero").revision, 1)
+        self.assertEqual(self.store.get("hero").count("potion"), 1)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM inventory_mutations WHERE request_id=?",
+                (reserved,),
+            ).fetchone()[0],
+            0,
+        )
+
     def test_invalid_inputs_do_not_mutate(self):
         self.store.create("hero")
         invalid = [
