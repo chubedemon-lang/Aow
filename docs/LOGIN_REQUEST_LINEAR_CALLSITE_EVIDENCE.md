@@ -143,3 +143,21 @@ execution, getter-to-field mapping, payload order, field count, a wire schema,
 or a handshake/login proof. `field_order_inferred` remains false. The new
 capability is validated with synthetic metadata/ELF/instruction fixtures; it
 does not claim a new APK disassembly or packet observation.
+
+
+## LoginRequest FieldInfo-to-path callsite correlation — 2026-11-24
+
+The LoginRequest report now joins the existing static FieldInfo-to-argument
+observations to the bounded control-flow path observations for the same method
+window. A join requires both the same relative instruction index and the same
+canonical metadata method label. Matching direct-call observations are annotated
+on each path with the FieldRef coordinates present in x0-x7 at that call.
+
+Duplicate instruction indexes, method-label mismatches, unresolved callsites,
+and truncated inputs remain unassigned or explicitly partial. The report emits
+only FieldRef coordinates, symbolic method labels, and relative instruction
+indexes; it does not emit field names, native addresses, or raw instructions.
+
+This is a static register-provenance join. It does not identify a managed
+getter's semantic meaning or owner, infer serializer field order, recover a
+payload schema, establish runtime execution, or prove APK/server compatibility.
