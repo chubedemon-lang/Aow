@@ -135,9 +135,13 @@ assertion rather than independent protocol evidence.
 The receive candidate still models only the static four-byte signed
 big-endian count branch and rejects the HTTP marker branch. It does not verify
 the active runtime branch, full outer frame, compression/encryption placement,
-message IDs, handshake, or login. The output contains stream/chunk counts and
-at most 4,096 candidate frame sizes; it never emits fixture bytes or the local
-file path. If a stream exceeds this
+message IDs, handshake, or login. The report still includes stream/chunk counts
+and at most 4,096 candidate frame sizes. The redacted output also includes
+`fixture_sha256` and `fixture_size_bytes` for the exact input JSON bytes,
+separately from `apk_sha256`, which is an asserted client-build fingerprint.
+The fixture digest helps identify the precise private artifact used for a
+repeatable local audit; it does not authenticate capture provenance or prove
+authorization. The report never emits fixture bytes or the local file path. If a stream exceeds this
 fixed report cap, candidate analysis stops and the result marks the reported
 frame count as a lower bound with `frame_sizes_truncated: true`. When the
 cap is reached, the reader may consume one additional complete frame to
@@ -268,7 +272,7 @@ flags.
 
 ## Provenance and limits
 
-The fixture hash and `client_unchanged` value are assertions in the input. The
+The `apk_sha256` and `client_unchanged` values are assertions in the input. The
 tool compares the asserted APK hash with the operator-supplied expected hash,
 but it cannot authenticate the capture source, prove authorization, or
 independently verify that the client was unchanged. Human review of the local
