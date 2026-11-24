@@ -1,0 +1,12 @@
+*.apk
+*.aab
+*.obb
+*.pcap
+*.pcapng
+*secrets*
+*candidates.json
+__pycache__/
+.pytest_cache/
+*.sqlite3
+*.db
+.env

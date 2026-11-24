@@ -1,0 +1,303 @@
+# AOW protocol evidence ledger
+
+**Current status: incomplete.** Unity IL2CPP and Addressables are present. Offline metadata and native inspection identify a client message serializer/deserializer layer, primitive payload operations, and socket sender/receiver abstractions. A static four-byte big-endian length-prefix candidate is now supported by a bounded receive-side data-flow trace, but no complete verified outer frame, active wire transport, server host, authentication flow, or client packet capture is available here.
+
+| Component | Verified evidence | Status |
+|---|---|---|
+| Endpoint discovery | Address configuration type names only; no values published | Unknown |
+| Transport | Socket/TCP-related metadata identifiers | Active transport unverified |
+| Framing | Receiver.Cycle makes a fixed four-byte initial read, decodes it through SimpleDeserializer.deserializeInt, compares it with static marker `0x48545450` (ASCII `HTTP`), and on the non-marker branch uses the decoded value as the next read count; Sender.Cycle has integer serialization and stream-write callsites | Receive-side candidate only; HTTP response branch identified statically, but complete outer frame, active path, `HeaderLength` effective value/use and sender symmetry remain unverified |
+| Primitive serialization | Native helper bodies indicate big-endian 16/32/64-bit values, UTF-16 code-unit strings and one-byte boolean/byte operations; isolated codec and synthetic vectors exist | Primitive payload layer only |
+| Message schema | Message type registry and paired serializer/deserializer type definitions | Field order, optionality and wire IDs unknown |
+| Handshake | Login/registration/session type names | Application handshake sequence unknown |
+| Compression/encryption | The 2026-11-15 bounded helper-body/FDE and static-state cross-reference strongly attribute the Receiver membership collection to `NetworkSettings.m_zippetMessageTypes`; the 2026-11-19 pass again observes the second integer flowing to a later helper but does not independently resolve its owner | Strong static attribution only; no runtime confirmation, stable numeric wire-ID mapping, branch outcome, compression range/placement or encryption rules |
+| Login/session | Login, registration, and session-restore fields/methods identified | Wire semantics unknown |
+| Player initialization | Not established | Unknown |
+| World synchronization | Battle, lobby, map, and movement message names identified | Wire semantics unknown |
+
+Add each discovery with APK version/hash, observation method, confidence, redacted evidence and a reproducible local test. Never publish tokens or other users' data.
+
+## Offline candidate scanner safety and limits
+
+Run `python -m tools.protocol_candidates /path/to/authorized.apk --output /private/local/report.json` on a locally held, authorized APK. This command reads the APK ZIP offline and makes **no network requests**. Reports must stay local and be reviewed before sharing.
+
+The scanner intentionally emits only normalized URL **origins** (scheme, hostname and optional port) or host strings; it discards URL paths, queries, fragments, and userinfo, and suppresses strings containing credential-related keywords. This reduces accidental disclosure of embedded tokens, user identifiers and private paths. It is not a proof of safe publication: a hostname itself can still be sensitive, and a third-party analytics SDK can produce false positives.
+
+The candidate output **cannot** establish which endpoint is used for gameplay, whether a hostname is active, or whether any particular transport or packet layout is supported. Never attempt to contact extracted hosts as part of this tool. Keep raw reports and APK bytes out of the public repository.
+
+Before implementing an actual adapter, require independently verified and authorized evidence of client-facing transport/framing/handshake and a synthetic redacted test fixture with explicit provenance.
+
+## Static IL2CPP metadata identifiers — 2026-11-10
+
+An authorized, read-only offline pass inspected the user-provided APK without modifying it or extracting game assets.
+
+- APK size: `256468647` bytes.
+- APK SHA-256: `c00bd00d30f625b85dfcc0159b3b058ca459c10f9917844a5301163480c7624e`.
+- ZIP entries: `7368`; a full `ZipFile.testzip()` pass reported no CRC failure.
+- IL2CPP metadata member: `assets/bin/Data/Managed/Metadata/global-metadata.dat`, `26021348` bytes.
+- Metadata magic: `0xfab11baf`; metadata version: `31`.
+- Metadata string heap: offset `0x128444`, size `0x331dec` (`3349996` bytes).
+- The heap contains `1336` unique `*STSerializer` identifier strings and `1336` unique `*STDeserializer` identifier strings; `1336` base identifiers have both suffix forms.
+
+Observed namespace tokens include `com.geargames.aow.messages`, `com.geargames.common.network`, `com.geargames.unity.network`, and `com.geargames.aow.config`.
+
+Observed network-related identifier strings include `NetworkSocket`, `NetworkSocketStream`, `NetworkSettings`, `MessageDispatcher`, `MessageHelper`, `MessageMeta`, `MessageTypes`, `IClientMessageSerializer`, `IClientMessageDeserializer`, `RemoteServerAddresses`, `ServerAddressHelper`, `ClientServerAddressConfiguration`, `ClientServerPreset`, `TransportType`, `CSEstablishConnection`, and `CSHttpSendRequestAndReceiveResponse`.
+
+Observed message-related identifier strings include `LoginRequest`, `LoginAnswer`, `SessionRestoreRequest`, `SessionRestoreAnswer`, `LoginToBattleRequest`, `LoginToBattleAnswer`, `RegistrationRequest`, `RegistrationAnswer`, `BattleSessionRestoreRequest`, `BattleSessionRestoreAnswer`, `CheckSocket`, and `Ping`. Each has matching serializer/deserializer identifier suffix strings.
+
+**Interpretation limit:** these are static metadata strings and table associations, not recovered method bodies or a wire specification. They do not establish message IDs, field layouts, payload encoding, framing, byte order, transport choice, endpoint selection, application handshake order, authentication semantics, or compatibility with the APK. In particular, names such as `NetworkSocket` and `TransportType` do not prove a specific active protocol. No extracted host/IP values are published and no remote host was contacted.
+
+See [the detailed offline type/field/method inventory](IL2CPP_PROTOCOL_IDENTIFIER_INVENTORY.md) for table counts, login/session field names, and framing-related identifiers. Keep APK bytes and local reports outside this public repository.
+
+## Raw IL2CPP signature indexes — 2026-11-10
+
+The offline type inventory now preserves raw field, method-return, and parameter type indexes plus metadata tokens from the version-31 tables. This narrows the next investigation to the native type-registration data in `libil2cpp.so`, but does not resolve those indexes into managed type names. Metadata tokens are not wire message IDs. No field order, payload layout, framing rule, or active transport is inferred from these values.
+
+## MessageTypes default metadata — 2026-11-10
+
+The v31 metadata contains field-default records for the `MessageTypes` definition. In a private offline pass, the matching arm64 native type-registration array resolved the field and default-value type references to IL2CPP type code `I4` (32-bit integer). This identifies the static metadata storage type only. It does not prove that these constants are used as wire message IDs or establish their byte order/framing in transmitted packets. Numeric candidates remain private and are not committed.
+
+## MessageTypes default-value aggregate cross-check — 2026-11-10
+
+A further private offline pass over the same APK fingerprint found 761/761 MessageTypes field definitions have corresponding field-default records. The authorized arm64 native type-registration mapping used for this pass resolves both the field type and default-value type references to IL2CPP I4 (32-bit integer). Reading the bounded default-data records as 32-bit values yields 761 distinct raw bit patterns. The exact numeric candidates remain private and are not included in this public repository.
+
+This is a stronger static metadata observation, but it still does **not** prove that these values are active wire message IDs, nor does it establish message-header byte order, serialization, framing, or dispatch behavior. The NetworkSettings metadata also has default records for HeaderLength and several buffer-capacity fields; their raw patterns are not treated as effective runtime lengths until the native initialization/read path is traced.
+
+Next investigation target: the native execution path that populates MessageHelper's class/type dictionaries, the NetworkSettings initializer and the serializer/deserializer dispatch. No extracted endpoint was contacted.
+
+## Native dispatch and codec signature leads — 2026-11-10
+
+The version-31 method table provides additional name/parameter associations for the next native-code trace:
+
+- MessageHelper declares InternalGetMessageType(type) and GetMessageType overloads; its reverse lookup helpers are GetMessageTypeName and GetMessageClassName.
+- MessageDispatcher declares TypeRegister(type, listener), Register(type, listener), Dispatch(message), and global/unhandled message handler registration methods.
+- Sender's constructor parameter names include socket, receiverMessageQueue, senderMessageQueue and messageSerializer. It also declares SetCryptoProvider and TrySendHeartbeat.
+- Receiver's constructor parameter names include socket, receiverMessageQueue, senderMessageQueue and messageDeserializer. It declares SetCryptoProvider, DoStreamReadedBytes, GetHttpMessageResponse(header, streamBuffer), and ReadStreamBufferToEnd(streamBuffer).
+- LoginRequestSTSerializer declares serialize(messageObject, buffer, context, logger); LoginRequestSTDeserializer declares deserialize(buffer, context, logger).
+
+These are metadata method names and parameter-name associations only. They do not expose method bodies, prove invocation order, identify active transport, or define the bytes written to the socket. The next step is to map these metadata methods to native method pointers and inspect the code paths without publishing proprietary binaries or private captures.
+
+## Native method-pointer mapping — 2026-11-10
+
+The offline codegen inventory tool now matches metadata image names to native codegen module records in the authorized arm64 IL2CPP library:
+
+- 165/165 metadata images match native codegen modules.
+- The 197,631 metadata method definitions match 197,631 native method-pointer slots.
+- 164,023 slots have AArch64 relative relocations to executable sections.
+- Relevant module counts: ScriptsAssembly.dll 56,481; ConvertedAssembly.dll 25,442; NetworkBase.dll 18; ResourceDispatcher.dll 2,970.
+
+A private local mapping associates native pointer-table slots with the previously identified methods in MessageHelper, MessageDispatcher, NetworkSettings, Receiver, Sender, and the LoginRequest serializer/deserializer. Raw native addresses and detailed disassembly remain private. Some pointer slots have no relative relocation; they may be null, shared, or represented by another registration path, so the count is not a count of unique method bodies.
+
+This supersedes the earlier “next step” statement that native method-pointer mapping was still pending. The mapping is now established statically, but method-body semantics and invocation order are not yet fully recovered.
+
+### Protocol conclusions remain unchanged
+
+- MessageTypes fields/defaults are stored as IL2CPP I4 values, but their active use as wire message IDs is not yet proven.
+- The NetworkSettings header/buffer metadata and Receiver stream-buffer methods are identified, but the effective header length, header fields, framing, compression/encryption order and message field serialization order remain unknown.
+- TCP/socket-related identifiers and a stream abstraction are present, but the active transport path and endpoint selection are not yet proven.
+- LoginRequest and SessionRestore serializer/deserializer native entry points are mapped, but no complete request/response byte sequence or handshake order has been reproduced.
+
+## Primitive payload encoding — 2026-11-10
+
+Private read-only inspection of the native `SimpleSerializer` and `SimpleDeserializer` method bodies provides static evidence for primitive payload operations:
+
+- `serializeChar` writes the high byte before the low byte; `deserializeChar`/`deserializeShort` combine two bytes high-first.
+- `serializeInt` emits the high 16-bit half before the low half; `deserializeInt` reconstructs the value in the same order.
+- `serializeLong` emits four 16-bit chunks from most-significant to least-significant; `deserializeLong` combines two 32-bit halves high-first.
+- `serializeString` writes a 16-bit UTF-16 code-unit count followed by code units. Null is emitted as `0xFFFF`; lengths `>= 0x8000` are rejected. The deserializer treats any length with bit 15 set as null.
+- `serializeBoolean` writes the low bit as one byte; `deserializeBoolean` is true only when the byte equals `1`. Byte operations use a one-byte path.
+
+The isolated `server/aow_primitive_codec.py` implementation has synthetic known-vector tests and is intentionally not connected to network handlers. These findings describe primitive payload helpers only. They do not establish LoginRequest field order, optionality, outer framing/header, message IDs, compression/encryption, active transport, handshake sequence or APK compatibility.
+
+No APK bytes, native addresses, raw instructions, endpoint values or packet captures are committed.
+
+
+## Synthetic credential authentication boundary — 2026-11-10
+
+The repository now contains a local-only PBKDF2-HMAC-SHA256 credential verifier that can issue a durable synthetic session after rechecking the credential in the same SQLite write transaction. This is a server-domain security primitive, **not** evidence of the APK's password encoding, hash/challenge algorithm, login message fields, handshake, or token format. It is not exposed as an HTTP route and must not be connected to an APK adapter until those client-facing semantics are established from authorized offline evidence and a redacted reproducible fixture.
+
+
+## Conservative relocation-backed indirect-call analysis — 2026-11-11
+
+The offline native-method analyzer now has an additional **tool capability** for a narrow AArch64 pattern: a conservative ADRP/optional 64-bit ADD/64-bit unsigned-offset LDR sequence with optional unshifted 64-bit MOV-register aliases (`MOV Xd, Xm`) before BLR or BR. The loaded pointer is accepted only when the corresponding ELF relocation is R_AARCH64_RELATIVE, and the target must also match a unique metadata-backed executable method entry before a method label is reported.
+
+The scanner clears its tracked register state on any unrecognized instruction (except NOP). Missing/non-relative relocations, ambiguous metadata targets, ordinary virtual calls and runtime-computed pointers remain unresolved. Output contains method labels and aggregate counts only; no native addresses or instruction words are emitted.
+
+This change adds synthetic instruction/relocation tests only. **No new APK analysis was run for this change**, so existing unresolved indirect-call counts (including the previously recorded LoginRequest serializer/deserializer counts) are unchanged until the tool is run successfully against the exact authorized APK fingerprint. This narrow resolver is not a general AArch64 decompiler and does not establish field order, framing, message IDs, handshake, or APK compatibility.
+
+
+## Framing candidate update — 2026-11-11
+
+A read-only disassembly pass over the exact APK fingerprint recorded in docs/NATIVE_NETWORK_CALLSITE_EVIDENCE.md found a receive-side four-byte read followed by deserializeInt and a second read count derived from the returned integer. The send-side entry window contains serializeInt, compression and stream-write callsites. This is consistent with a four-byte big-endian length-prefix path, but remains a static candidate: no authorized wire fixture or runtime trace confirms the field relationship, active branch, or complete frame. In particular, do not equate the candidate with NetworkSettings.HeaderLength until its value and use are traced. The actual APK adapter remains blocked.
+
+
+The resolver also tracks the exact unshifted 64-bit `MOV Xd, Xm` alias when
+it copies a previously tracked value. It treats XZR as zero, ignores writes
+to XZR, and does not accept shifted ORR, W-register aliases, or unknown source
+values as pointer evidence. This is synthetic analyzer coverage only; it does
+not add a new APK observation or change the framing/login confidence level.
+
+
+## Native data-flow re-verification — 2026-11-12
+
+The exact user-provided APK fingerprint already recorded above was rechecked in a private, read-only workspace: the SHA-256 matched, all 7,368 ZIP entries passed CRC validation, and the arm64 IL2CPP library was confirmed as ELF64 little-endian AArch64. No APK, native library, raw instruction bytes, packet capture or endpoint value was added to this repository.
+
+The bounded native `Receiver.Cycle` entry window provides a stronger static chain than the earlier callsite-only observation:
+
+1. The initial `ClientNetworkStreamBuffer.SetDataAvailable` call receives the immediate count **4**.
+2. `AbstractClientBuffer.Write` receives the same count **4**.
+3. `SimpleDeserializer.deserializeInt` reads the four-byte value.
+4. The value is compared with an HTTP marker. In the non-marker branch, the returned integer is reused as the next `SetDataAvailable` and buffer-write count.
+5. The same bounded window contains a later integer read, `ZipDecompress`, message-metadata construction and receiver-queue handoff.
+
+The primitive native helpers independently show high-byte/high-word-first composition for 16-bit and 32-bit integer operations. This supports a **four-byte big-endian length-prefix candidate**, with the decoded integer used as the subsequent read count on that branch.
+
+The bounded `Sender.Cycle` window contains two `serializeInt` callsites, `ZipCompression`, buffer-length setup and two stream-buffer writes. The two integer calls are not assigned semantics because the bounded window includes branches and the complete control-flow/data relationship has not been proven.
+
+The LoginRequest serializer/deserializer windows contain direct primitive-helper call counts of:
+
+| Operation | Serializer | Deserializer |
+|---|---:|---:|
+| Integer | 19 | 14 |
+| String | 16 | 16 |
+| Long | 2 | 2 |
+| Boolean | 1 | 1 |
+
+These are direct callsite counts in bounded native entry windows, not a field schema or execution trace. The five-call integer discrepancy is unresolved; no LoginRequest field order is inferred.
+
+**Remaining proof gates:** the effective runtime value/use of `NetworkSettings.HeaderLength`; the complete send/receive framing relationship; compression/encryption activation and placement; message-ID mapping; handshake order; LoginRequest field order; and an authorized, redacted client-side byte fixture or local runtime trace. The adapter remains disabled. No official endpoint was contacted.
+
+
+See [connection-bootstrap dispatcher registration evidence](LOGIN_DISPATCH_REGISTRATION_EVIDENCE.md) for the newly mapped local registration keys and the explicit distinction from wire message IDs.
+
+
+## Fresh private offline revalidation — 2026-11-13
+
+The original authorized APK was readable in the isolated workspace again. The APK was not modified, no files were committed from it, and no endpoint was contacted.
+
+- APK size: 256,468,647 bytes.
+- SHA-256: `c00bd00d30f625b85dfcc0159b3b058ca459c10f9917844a5301163480c7624e` (matches the existing private-analysis ledger).
+- ZIP: 7,368 entries; aggregate uncompressed member size 673,423,443 bytes; no duplicate names, encrypted entries, or Unix symlink entries.
+- A bounded full `ZipFile.testzip()` pass completed with no CRC failure.
+- IL2CPP metadata: 26,021,348 bytes, valid magic, version 31; string heap 3,349,996 bytes.
+- The bounded printable-string inventory found 177,548 unique strings and 1,336 paired serializer/deserializer base identifiers.
+- ARM64 `libil2cpp.so`: 166,150,720 bytes; ELF64 little-endian AArch64.
+- Exact metadata/codegen matching again produced 165/165 image modules and 197,631/197,631 method-pointer slots. Of these, 164,023 slots have relative relocations to executable sections.
+
+A fresh method-entry mapping resolved the allowlisted `Receiver.Cycle`, `Sender.Cycle`, `NetworkSettings::.cctor`, `MessageDispatcher` registration methods, and LoginRequest serializer/deserializer entrypoints to executable sections. Direct helper-callsite counts in their bounded windows were:
+
+| Method window | Direct helper callsites |
+|---|---|
+| `Receiver.Cycle` | 2 × `deserializeInt` |
+| `Sender.Cycle` | 2 × `serializeInt` |
+| `LoginRequestSTSerializer.serialize` | 19 integer, 16 string, 2 long, 1 boolean |
+| `LoginRequestSTDeserializer.deserialize` | 14 integer, 16 string, 2 long, 1 boolean |
+
+A fresh bounded CFG constant analysis of `<StartConnectToServer>d__12.MoveNext` again resolved two direct calls to `MessageDispatcher.SafeRegister`, with the second integer argument in x1 equal to 5004 and 5005. These remain **client-side dispatcher registration keys**, not confirmed wire message IDs. Delegate callback targets remain unresolved.
+
+**Interpretation limits:** direct callsite counts are static occurrences in bounded method-entry windows, not a runtime execution trace or a LoginRequest field schema. The integer-call discrepancy between serializer and deserializer remains unexplained. The analysis still does not establish the active transport, complete Sender/Receiver frame contract, effective `NetworkSettings.HeaderLength` use, HTTP marker value, compression/encryption placement, wire message IDs, handshake order, or APK-to-server compatibility. No packet fixture was available, and the real APK adapter remains disabled. Raw native addresses, instruction bytes, APK contents, and extracted assets remain private.
+
+
+## Receiver HTTP-marker static branch — 2026-11-13
+
+A fresh, read-only offline disassembly was performed against the authorized APK
+with SHA-256 `c00bd00d30f625b85dfcc0159b3b058ca459c10f9917844a5301163480c7624e`.
+The APK remained unchanged; no extracted binary, address, instruction bytes,
+packet capture or endpoint was added to this repository.
+
+The bounded `Receiver.Cycle` method window provides these static observations:
+
+- The initial read request is four bytes.
+- The returned value is passed through `SimpleDeserializer.deserializeInt`.
+- The resulting 32-bit value is compared with `0x48545450`, the big-endian
+  integer representation of the four ASCII bytes `HTTP`.
+- The equality branch passes the same marker value to
+  `Receiver.GetHttpMessageResponse`.
+- The non-marker branch uses the decoded integer as the next stream-buffer
+  read count.
+- A second `deserializeInt` call is present later in the bounded method
+  window, but its field/message semantics are not assigned.
+- The primitive helper body was rechecked: it combines the first 16-bit read
+  as the high half and the second 16-bit read as the low half.
+
+This establishes the static marker constant and branch structure in this APK
+build. It does **not** establish that the HTTP branch is active for gameplay,
+that the non-marker branch is the only active transport, that the full outer
+frame is always `4 + count`, or that Sender.Cycle emits a symmetric structure.
+The `NetworkSettings.HeaderLength` metadata field exists, but its effective
+runtime value and use remain unresolved. No authorized client-side byte
+fixture or end-to-end exchange is available, so the AOW adapter remains
+disabled.
+
+
+## Receiver zipped-message membership — strong static attribution, not runtime proof
+
+The 2026-11-15 bounded native pass documented in
+[NATIVE_NETWORK_CALLSITE_EVIDENCE.md](NATIVE_NETWORK_CALLSITE_EVIDENCE.md)
+identified a HashSet-style membership helper and strongly attributed its
+collection to `NetworkSettings.m_zippetMessageTypes`. The attribution uses
+the helper's bucket-array traversal plus a shared class-reference/static-state
+cross-reference with `NetworkSettings::.cctor` and the metadata field
+inventory. This is the strongest current static owner hypothesis; it is not
+a runtime observation.
+
+The independent 2026-11-19 entry-window re-verification again observed the
+second decoded integer flowing to a subsequent helper, but did not
+independently resolve that helper's owner or semantics in that bounded pass.
+That limited recheck does not falsify the earlier static cross-reference, and
+it does not add a new independent owner confirmation. Keep the confidence
+label at **strong static attribution only** until the owner path is reproduced
+again from the exact APK build.
+
+The integer is a candidate membership key, not a confirmed numeric wire
+message ID. Runtime branch outcome, compression flag semantics, decompression
+range/placement, complete frame layout, Sender.Cycle symmetry and APK/server
+compatibility remain unverified. The adapter remains disabled pending
+authorized unchanged-client runtime evidence.
+
+
+## Private local stream-fixture audit tooling — 2026-11-17
+
+The new `tools.protocol_fixture_audit` command accepts a private, operator-supplied
+fixture containing ordered, already-reassembled stream chunks for both
+directions. It checks the asserted unchanged-APK fingerprint against an
+operator-selected expected hash, applies strict JSON/hex/resource limits, and
+uses a no-follow stable file read. Only the server-to-client stream is passed
+through the isolated receive-length candidate. Client-to-server bytes are
+summarized but not decoded because Sender/Receiver symmetry remains unproven.
+
+The report contains counts and candidate frame sizes only; it does not emit
+stream bytes or the local fixture path. The input file must remain outside this
+public repository. The fixture's authorization and unchanged-client claims are
+not cryptographically authenticated by the tool and still require human review.
+A successful parse is candidate evidence only, not a complete frame contract,
+handshake/login proof, or APK compatibility result. See
+[LOCAL_STREAM_FIXTURE_AUDIT.md](LOCAL_STREAM_FIXTURE_AUDIT.md).
+
+
+## Fresh offline receive-path re-verification — 2026-11-17
+
+The authorized unchanged APK was re-read privately with a matching established SHA-256, 7,368 ZIP entries, no duplicate names and a passing full ZIP CRC check. A fresh bounded native pass revalidated the receive-side callsite pattern: a fixed count of 4 is supplied to the initial `ClientNetworkStreamBuffer.SetDataAvailable` and `AbstractClientBuffer.Write` calls, then `SimpleDeserializer.deserializeInt` is called at offset zero. Its result is compared with the HTTP marker; on the non-marker branch that result is reused as the next read/copy count. This supports the existing receive-side four-byte big-endian length-prefix candidate, but does not establish a complete frame or runtime behavior.
+
+The sender window still has two integer serializer callsites, compression and stream-write callsites, without proven symmetry. LoginRequest serializer/deserializer primitive-helper counts were rechecked, but field order remains unknown. The `NetworkSettings.HeaderLength` field-to-read-site relationship, handshake sequence, authentication semantics and unchanged-APK end-to-end compatibility remain unverified. The real APK adapter stays disabled pending an authorized client-side byte fixture or local runtime trace. No APK, native asset or capture was committed, and no official endpoint was contacted.
+
+## Opt-in client-to-server length hypothesis audit — 2026-11-19
+
+The private stream fixture auditor now has an optional, operator-selected
+generic signed big-endian 32-bit length hypothesis for the client-to-server
+stream. It can test a length field at byte offset 0, or at byte offset 4 after
+four opaque bytes. The default remains summary-only; no client-to-server
+decoding is performed unless the operator explicitly selects one candidate.
+
+This is a **tool capability**, not a new APK observation. A full candidate
+parse only means the supplied private bytes fit the selected generic
+interpretation under the chosen resource bounds. It does not identify the
+opaque prefix, prove that either integer is a message ID or length, establish
+Sender/Receiver symmetry, verify compression placement, or authenticate
+fixture provenance. The report always leaves
+`sender_symmetry_verified`, `wire_contract_verified`, and
+`apk_compatible` false. A failed candidate does not disprove other layouts.
+
+Keep the fixture private. Do not commit APK bytes, native assets, packet
+captures, endpoints, credentials, or player data. No official endpoint is
+contacted by this offline tool.

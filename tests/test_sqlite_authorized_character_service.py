@@ -1,0 +1,524 @@
+"""Tests for authenticated synthetic character creation and selection."""
+import os
+import sqlite3
+import tempfile
+import threading
+import unittest
+
+from server.sessions import SessionError
+from server.sqlite_authorized_map_service import SqliteAuthorizedMapService
+from server.sqlite_map_position_store import (
+    MapPositionAlreadyExists,
+    MapPositionNotFound,
+    SqliteMapPositionStore,
+)
+from server.sqlite_player_state_store import (
+    PlayerAlreadyExists,
+    PlayerNotFound,
+    PlayerStoreError,
+    SqlitePlayerStateStore,
+)
+from server.synthetic_map_position import MapPosition, Position
+from server.synthetic_player_state import PlayerSnapshot
+from server.sqlite_authorized_character_service import (
+    CharacterAlreadyExists,
+    CharacterSnapshot,
+    SqliteAuthorizedCharacterService,
+)
+
+
+class HostileString(str):
+    """A string subclass whose overridable operations must never be called."""
+
+    @staticmethod
+    def _blocked(*_args, **_kwargs):
+        raise AssertionError("string subclass hook was executed")
+
+    __len__ = _blocked
+    __iter__ = _blocked
+    __contains__ = _blocked
+    __eq__ = _blocked
+    __ne__ = _blocked
+    strip = _blocked
+    encode = _blocked
+    isascii = _blocked
+    isalnum = _blocked
+
+
+class SqliteAuthorizedCharacterServiceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = os.path.join(self.temp.name, "characters.sqlite3")
+        self.db = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, check_same_thread=False
+        )
+        self.addCleanup(self.db.close)
+        self.db.execute("PRAGMA foreign_keys = ON")
+        self.db.executescript(
+            """CREATE TABLE accounts (
+                   id INTEGER PRIMARY KEY,
+                   username TEXT NOT NULL UNIQUE
+               );
+               CREATE TABLE characters (
+                   id INTEGER PRIMARY KEY,
+                   account_id INTEGER NOT NULL UNIQUE,
+                   name TEXT NOT NULL,
+                   map_id TEXT NOT NULL,
+                   x INTEGER NOT NULL,
+                   y INTEGER NOT NULL,
+                   FOREIGN KEY(account_id) REFERENCES accounts(id)
+               );
+               CREATE TABLE wallets (
+                   character_id INTEGER PRIMARY KEY,
+                   balance INTEGER NOT NULL CHECK(balance >= 0),
+                   FOREIGN KEY(character_id) REFERENCES characters(id)
+               );
+               INSERT INTO accounts(id, username) VALUES (1, 'alice'), (2, 'bob');"""
+        )
+        self.now = [5_000.0]
+        self.service = SqliteAuthorizedCharacterService(
+            self.db, ttl_seconds=30, clock=lambda: self.now[0]
+        )
+        self.owner_token = self.service.sessions.issue(1)
+        self.other_token = self.service.sessions.issue(2)
+
+    def test_owner_can_create_list_and_read_character(self):
+        created = self.service.create(self.owner_token, "Alice")
+        self.assertEqual(
+            created, CharacterSnapshot(1, "Alice", "test_map", 0, 0)
+        )
+        self.assertEqual(self.service.list_for_account(self.owner_token), (created,))
+        self.assertEqual(self.service.get(self.owner_token, created.character_id), created)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT balance FROM wallets WHERE character_id = ?",
+                (created.character_id,),
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_duplicate_character_creation_is_rejected(self):
+        self.service.create(self.owner_token, "Alice")
+        with self.assertRaises(CharacterAlreadyExists):
+            self.service.create(self.owner_token, "Second")
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters WHERE account_id=1").fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM wallets").fetchone()[0],
+            1,
+        )
+
+    def test_bootstrap_creates_player_and_unplaced_map_state_for_later_entry(self):
+        bootstrap = self.service.create_with_initial_state(
+            self.owner_token, "Alice", level=2, experience=17
+        )
+        self.assertEqual(
+            bootstrap.character,
+            CharacterSnapshot(1, "Alice", "test_map", 0, 0),
+        )
+        self.assertEqual(
+            bootstrap.player_state,
+            PlayerSnapshot("1", 2, 17, 0, 0),
+        )
+        self.assertEqual(bootstrap.map_position, MapPosition())
+        self.assertEqual(
+            self.db.execute(
+                "SELECT balance FROM wallets WHERE character_id=1"
+            ).fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM player_state_snapshots WHERE character_id='1'"
+            ).fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM map_position_snapshots WHERE character_id='1'"
+            ).fetchone()[0],
+            1,
+        )
+
+        map_service = SqliteAuthorizedMapService(
+            self.db, ttl_seconds=30, clock=lambda: self.now[0]
+        )
+        entered = map_service.enter(
+            self.owner_token, 1, "first-entry", 0, 7, 10, -4
+        )
+        self.assertEqual(
+            entered.snapshot, MapPosition(7, Position(10, -4), 1)
+        )
+
+        with self.assertRaises(CharacterAlreadyExists):
+            self.service.create_with_initial_state(self.owner_token, "Second")
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 1
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM player_state_snapshots").fetchone()[0],
+            1,
+        )
+
+    def test_get_with_initial_state_reads_current_player_and_map_snapshots(self):
+        created = self.service.create_with_initial_state(
+            self.owner_token, "Alice", level=3, experience=27
+        )
+        map_service = SqliteAuthorizedMapService(
+            self.db, ttl_seconds=30, clock=lambda: self.now[0]
+        )
+        map_service.enter(
+            self.owner_token, created.character.character_id,
+            "bootstrap-map-entry", 0, 12, 4, -9,
+        )
+
+        loaded = self.service.get_with_initial_state(
+            self.owner_token, created.character.character_id
+        )
+        self.assertEqual(loaded.character, created.character)
+        self.assertEqual(loaded.player_state, created.player_state)
+        self.assertEqual(
+            loaded.map_position, MapPosition(12, Position(4, -9), 1)
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_get_with_initial_state_hides_foreign_and_unknown_character_ids(self):
+        created = self.service.create_with_initial_state(
+            self.owner_token, "Alice"
+        )
+        messages = []
+        for character_id in (created.character.character_id, 999):
+            with self.assertRaises(SessionError) as caught:
+                self.service.get_with_initial_state(
+                    self.other_token, character_id
+                )
+            messages.append(str(caught.exception))
+        self.assertEqual(messages[0], messages[1])
+        self.assertFalse(self.db.in_transaction)
+
+    def test_get_with_initial_state_fails_closed_when_player_snapshot_is_missing(self):
+        created = self.service.create_with_initial_state(
+            self.owner_token, "Alice"
+        )
+        self.db.execute(
+            "DELETE FROM player_state_snapshots WHERE character_id=?",
+            (str(created.character.character_id),),
+        )
+        with self.assertRaises(PlayerNotFound):
+            self.service.get_with_initial_state(
+                self.owner_token, created.character.character_id
+            )
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 1
+        )
+
+    def test_get_with_initial_state_fails_closed_when_map_snapshot_is_missing(self):
+        created = self.service.create_with_initial_state(
+            self.owner_token, "Alice"
+        )
+        self.db.execute(
+            "DELETE FROM map_position_snapshots WHERE character_id=?",
+            (str(created.character.character_id),),
+        )
+        with self.assertRaises(MapPositionNotFound):
+            self.service.get_with_initial_state(
+                self.owner_token, created.character.character_id
+            )
+        self.assertFalse(self.db.in_transaction)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 1
+        )
+
+    def test_get_with_initial_state_rejects_expired_and_revoked_sessions(self):
+        created = self.service.create_with_initial_state(
+            self.owner_token, "Alice"
+        )
+        revoked = self.service.sessions.issue(1)
+        self.assertTrue(self.service.sessions.revoke(revoked))
+        with self.assertRaises(SessionError):
+            self.service.get_with_initial_state(
+                revoked, created.character.character_id
+            )
+
+        expired = self.service.sessions.issue(1)
+        self.now[0] += 30
+        with self.assertRaises(SessionError):
+            self.service.get_with_initial_state(
+                expired, created.character.character_id
+            )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_get_with_initial_state_rejects_caller_owned_transaction(self):
+        created = self.service.create_with_initial_state(
+            self.owner_token, "Alice"
+        )
+        self.db.execute("BEGIN IMMEDIATE")
+        self.db.execute(
+            "UPDATE accounts SET username='pending' WHERE id=1"
+        )
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            self.service.get_with_initial_state(
+                self.owner_token, created.character.character_id
+            )
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT username FROM accounts WHERE id=1"
+            ).fetchone()[0],
+            "alice",
+        )
+
+    def test_bootstrap_rolls_back_character_wallet_and_map_if_player_insert_fails(self):
+        SqlitePlayerStateStore(self.db)
+        SqliteMapPositionStore(self.db)
+        self.db.execute(
+            """CREATE TRIGGER reject_bootstrap_player
+               BEFORE INSERT ON player_state_snapshots
+               BEGIN SELECT RAISE(ABORT, 'player snapshot unavailable'); END"""
+        )
+        with self.assertRaises(PlayerAlreadyExists):
+            self.service.create_with_initial_state(self.owner_token, "Alice")
+        for table in (
+            "characters", "wallets", "player_state_snapshots",
+            "map_position_snapshots",
+        ):
+            self.assertEqual(
+                self.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0],
+                0,
+                table,
+            )
+
+    def test_bootstrap_rolls_back_all_rows_if_map_insert_fails(self):
+        SqlitePlayerStateStore(self.db)
+        SqliteMapPositionStore(self.db)
+        self.db.execute(
+            """CREATE TRIGGER reject_bootstrap_map
+               BEFORE INSERT ON map_position_snapshots
+               BEGIN SELECT RAISE(ABORT, 'map snapshot unavailable'); END"""
+        )
+        with self.assertRaises(MapPositionAlreadyExists):
+            self.service.create_with_initial_state(self.owner_token, "Alice")
+        for table in (
+            "characters", "wallets", "player_state_snapshots",
+            "map_position_snapshots",
+        ):
+            self.assertEqual(
+                self.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0],
+                0,
+                table,
+            )
+
+    def test_invalid_initial_player_values_roll_back_character_and_wallet(self):
+        with self.assertRaises(PlayerStoreError):
+            self.service.create_with_initial_state(
+                self.owner_token, "Alice", level=0
+            )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 0
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM wallets").fetchone()[0], 0
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM player_state_snapshots").fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM map_position_snapshots").fetchone()[0],
+            0,
+        )
+
+    def test_bootstrap_rejects_an_existing_caller_transaction_without_committing_it(self):
+        self.db.execute("BEGIN IMMEDIATE")
+        self.db.execute(
+            "INSERT INTO accounts(id, username) VALUES (3, 'carol')"
+        )
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            self.service.create_with_initial_state(self.owner_token, "Alice")
+        self.assertTrue(self.db.in_transaction)
+        self.db.rollback()
+        self.assertIsNone(
+            self.db.execute(
+                "SELECT id FROM accounts WHERE id=3"
+            ).fetchone()
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 0
+        )
+
+    def test_foreign_and_unknown_character_ids_share_one_error(self):
+        created = self.service.create(self.owner_token, "Alice")
+        messages = []
+        for character_id in (created.character_id, 999):
+            with self.assertRaises(SessionError) as caught:
+                self.service.get(self.other_token, character_id)
+            messages.append(str(caught.exception))
+        self.assertEqual(messages[0], messages[1])
+        self.assertEqual(self.service.list_for_account(self.other_token), ())
+
+    def test_expired_and_revoked_sessions_cannot_create_or_list(self):
+        self.now[0] += 30
+        with self.assertRaises(SessionError):
+            self.service.create(self.owner_token, "Alice")
+        with self.assertRaises(SessionError):
+            self.service.list_for_account(self.owner_token)
+
+        fresh = self.service.sessions.issue(1)
+        self.assertTrue(self.service.sessions.revoke(fresh))
+        with self.assertRaises(SessionError):
+            self.service.create(fresh, "Alice")
+
+    def test_invalid_names_are_rejected_without_database_changes(self):
+        for name in ("", " Alice", "Alice ", "\x00", "x" * 65, None, True):
+            with self.subTest(name=repr(name)), self.assertRaises(ValueError):
+                self.service.create(self.owner_token, name)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 0
+        )
+
+    def test_character_name_rejects_string_subclass_before_custom_hooks(self):
+        hostile = HostileString("Alice")
+        with self.assertRaisesRegex(ValueError, "invalid character name"):
+            self.service.create(self.owner_token, hostile)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 0
+        )
+
+    def test_default_map_id_rejects_string_subclass_before_custom_hooks(self):
+        hostile = HostileString("synthetic_map")
+        with self.assertRaisesRegex(ValueError, "invalid synthetic map identifier"):
+            SqliteAuthorizedCharacterService(self.db, default_map_id=hostile)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM sqlite_master WHERE name='durable_sessions'"
+            ).fetchone()[0],
+            1,
+        )
+
+    def test_invalid_default_map_id_is_rejected(self):
+        for map_id in ("", "map/../x", "map name", "x" * 65, None):
+            with self.subTest(map_id=repr(map_id)), self.assertRaises(ValueError):
+                SqliteAuthorizedCharacterService(self.db, default_map_id=map_id)
+
+    def test_wallet_failure_rolls_back_character_insert(self):
+        self.db.execute(
+            """CREATE TRIGGER reject_wallet BEFORE INSERT ON wallets
+               BEGIN SELECT RAISE(ABORT, 'wallet unavailable'); END"""
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.service.create(self.owner_token, "Alice")
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters").fetchone()[0], 0
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM wallets").fetchone()[0], 0
+        )
+
+    def test_service_rejects_missing_schema_without_creating_session_tables(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        with self.assertRaisesRegex(ValueError, "schema"):
+            SqliteAuthorizedCharacterService(connection)
+        self.assertEqual(
+            connection.execute(
+                "SELECT count(*) FROM sqlite_master WHERE name='durable_sessions'"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_service_requires_unique_and_foreign_key_constraints(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.executescript(
+            """CREATE TABLE accounts(id INTEGER PRIMARY KEY, username TEXT);
+               CREATE TABLE characters(
+                   id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL,
+                   name TEXT NOT NULL, map_id TEXT NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL
+               );
+               CREATE TABLE wallets(character_id INTEGER, balance INTEGER);"""
+        )
+        with self.assertRaisesRegex(ValueError, "unique"):
+            SqliteAuthorizedCharacterService(connection)
+        self.assertEqual(
+            connection.execute(
+                "SELECT count(*) FROM sqlite_master WHERE name='durable_sessions'"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_concurrent_creation_across_connections_has_one_winner(self):
+        worker_count = 6
+        barrier = threading.Barrier(worker_count)
+        results = []
+        errors = []
+
+        def worker():
+            connection = sqlite3.connect(
+                self.path, timeout=10, isolation_level=None
+            )
+            try:
+                service = SqliteAuthorizedCharacterService(
+                    connection, ttl_seconds=30, clock=lambda: self.now[0]
+                )
+                barrier.wait(timeout=10)
+                try:
+                    results.append(service.create(self.owner_token, "Alice"))
+                except CharacterAlreadyExists:
+                    errors.append("duplicate")
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=worker) for _ in range(worker_count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(errors, ["duplicate"] * (worker_count - 1))
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM characters WHERE account_id=1").fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM wallets").fetchone()[0], 1
+        )
+
+
+    def test_partial_unique_index_does_not_enforce_one_character_per_account(self):
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(connection.close)
+        connection.executescript(
+            """CREATE TABLE accounts(id INTEGER PRIMARY KEY, username TEXT);
+               CREATE TABLE characters(
+                   id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL,
+                   name TEXT NOT NULL, map_id TEXT NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL,
+                   FOREIGN KEY(account_id) REFERENCES accounts(id)
+               );
+               CREATE UNIQUE INDEX character_account_positive
+                   ON characters(account_id) WHERE account_id > 0;
+               CREATE TABLE wallets(
+                   character_id INTEGER PRIMARY KEY, balance INTEGER NOT NULL,
+                   FOREIGN KEY(character_id) REFERENCES characters(id)
+               );"""
+        )
+        with self.assertRaisesRegex(ValueError, "characters.account_id must be unique"):
+            SqliteAuthorizedCharacterService(connection)
+        self.assertEqual(
+            connection.execute(
+                "SELECT count(*) FROM sqlite_master WHERE name='durable_sessions'"
+            ).fetchone()[0],
+            0,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,413 @@
+import threading
+import unittest
+
+from server.protocol_evidence_registry import Evidence, EvidenceError, EvidenceRegistry
+
+
+class EvidenceRegistryTests(unittest.TestCase):
+    def setUp(self):
+        self.sha = EvidenceRegistry.digest(b"offline fixture")
+
+    def test_digest(self):
+        self.assertEqual(len(self.sha), 64)
+        with self.assertRaises(EvidenceError):
+            EvidenceRegistry.digest("not bytes")
+
+    def test_unverified_does_not_claim_compatibility(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence("framing", self.sha, "synthetic fixture", "synthetic_test"))
+        self.assertEqual(registry.summary()["framing"], {"observations": 1, "verified": 0})
+
+    def test_verified_explicit_only_with_reproducible_local_test(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence(
+            "login", self.sha, "offline observation", "il2cpp_offline", True,
+            "tests/test_protocol_evidence_registry.py",
+            "python -m unittest discover -s tests -p test_protocol_evidence_registry.py -v",
+        ))
+        self.assertEqual(registry.summary()["login"], {"observations": 1, "verified": 1})
+
+    def test_verified_requires_test_reference_and_reproduction(self):
+        with self.assertRaisesRegex(EvidenceError, "local test reference"):
+            Evidence("login", self.sha, "offline observation", "il2cpp_offline", True)
+        with self.assertRaisesRegex(EvidenceError, "provided together"):
+            Evidence(
+                "login", self.sha, "offline observation", "il2cpp_offline", True,
+                "tests/test_protocol_evidence_registry.py", None,
+            )
+
+    def test_synthetic_only_method_cannot_mark_protocol_evidence_verified(self):
+        with self.assertRaisesRegex(EvidenceError, "offline or authorized method"):
+            Evidence(
+                "framing", self.sha, "synthetic fixture observation", "synthetic_test", True,
+                "tests/test_protocol_evidence_registry.py",
+                "python -m unittest discover -s tests -p test_protocol_evidence_registry.py -v",
+            )
+
+    def test_rejects_sensitive_observation_and_method_text(self):
+        for field in ("observation", "method"):
+            values = {
+                "observation": "offline observation",
+                "method": "il2cpp_offline",
+            }
+            values[field] = "captured endpoint game.example.invalid"
+            with self.subTest(field=field), self.assertRaises(EvidenceError):
+                Evidence("transport", self.sha, values["observation"], values["method"])
+
+    def test_rejects_absolute_and_parent_traversing_public_metadata(self):
+        invalid = (
+            "/mnt/data/private/aow.apk",
+            "~/private/capture.pcap",
+            r"C:\Users\Operator\capture.pcap",
+            "C:/Users/Operator/capture.pcap",
+            r"\Users\Operator\capture.pcap",
+            r"\\fileserver\private\capture.pcap",
+            "docs/../private/capture.pcap",
+            r"docs\..\private\capture.pcap",
+        )
+        for observation in invalid:
+            with self.subTest(observation=observation), self.assertRaises(EvidenceError):
+                Evidence("transport", self.sha, observation, "il2cpp_offline")
+
+    def test_rejects_percent_encoded_sensitive_observation_and_method(self):
+        invalid_observations = (
+            "%2Fmnt%2Fdata%2Fprivate%2Faow.apk",
+            "%2e%2e%2fprivate%2fcapture.pcap",
+            "docs%5c..%5cprivate%5ccapture.pcap",
+            "https%3A%2F%2Fexample.invalid%2Fcapture",
+            "token%3Dsample-secret",
+            "https%253A%252F%252Fexample.invalid%252Fcapture",
+            "token%2525253Dsample-secret",
+        )
+        for observation in invalid_observations:
+            with self.subTest(observation=observation), self.assertRaises(EvidenceError):
+                Evidence("transport", self.sha, observation, "il2cpp_offline")
+
+        invalid_methods = (
+            "offline%20https%3A%2F%2Fexample.invalid",
+            "token%3Dsample-secret",
+        )
+        for method in invalid_methods:
+            with self.subTest(method=method), self.assertRaises(EvidenceError):
+                Evidence("transport", self.sha, "offline observation", method)
+
+    def test_accepts_safe_percent_encoded_repository_reference_in_observation(self):
+        record = Evidence(
+            "transport",
+            self.sha,
+            "review docs%2FPROTOCOL.md%23framing",
+            "offline native inspection",
+        )
+        self.assertEqual(
+            record.observation,
+            "review docs%2FPROTOCOL.md%23framing",
+        )
+
+    def test_rejects_absolute_paths_in_reproduction_commands(self):
+        for reproduction in (
+            "python C:/Users/Operator/capture.py",
+            "python /mnt/private/capture.py",
+            r"python \\fileserver\private\capture.py",
+        ):
+            with self.subTest(reproduction=reproduction), self.assertRaises(EvidenceError):
+                Evidence(
+                    "transport", self.sha, "offline observation", "il2cpp_offline",
+                    False, "tests/test_protocol_evidence_registry.py", reproduction,
+                )
+
+    def test_rejects_non_local_test_references(self):
+        invalid = (
+            "https://example.invalid/capture",
+            "game.example.invalid",
+            "/tmp/capture.pcap",
+            "tests/../private.py",
+            "private/capture.pcap",
+            "issue:0",
+        )
+        for reference in invalid:
+            with self.subTest(reference=reference), self.assertRaises(EvidenceError):
+                Evidence(
+                    "transport", self.sha, "offline observation", "il2cpp_offline",
+                    False, reference,
+                    "python -m unittest discover -s tests -p test_protocol_evidence_registry.py -v",
+                )
+
+    def test_rejects_sensitive_reproduction_commands(self):
+        for reproduction in (
+            "python -m unittest https://example.invalid",
+            "python -m unittest token=secret",
+            "/tmp/private/capture.pcap",
+            "python ../outside.py",
+        ):
+            with self.subTest(reproduction=reproduction), self.assertRaises(EvidenceError):
+                Evidence(
+                    "transport", self.sha, "offline observation", "il2cpp_offline",
+                    False, "tests/test_protocol_evidence_registry.py", reproduction,
+                )
+
+    def test_duplicate_rejected(self):
+        registry = EvidenceRegistry()
+        entry = Evidence("transport", self.sha, "note", "offline")
+        registry.add(entry)
+        with self.assertRaises(EvidenceError):
+            registry.add(entry)
+
+    def test_invalid_fields(self):
+        bad = [
+            ("unknown", self.sha, "a", "b", False),
+            ("login", "abc", "a", "b", False),
+            ("login", self.sha, "", "b", False),
+            ("login", self.sha, "a", "", False),
+            ("login", self.sha, "a", "b", 1),
+        ]
+        for fields in bad:
+            with self.assertRaises(EvidenceError):
+                Evidence(*fields)
+
+    def test_player_and_map_topics_are_registered(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence("player", self.sha, "player init evidence", "offline test"))
+        registry.add(Evidence("map", self.sha, "map join evidence", "offline test"))
+        summary = registry.summary()
+        self.assertEqual(summary["player"]["observations"], 1)
+        self.assertEqual(summary["map"]["observations"], 1)
+
+    def test_primitive_serialization_is_a_distinct_topic(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence(
+            "serialization", self.sha,
+            "primitive helper method-body observation",
+            "authorized offline native inspection",
+        ))
+        self.assertEqual(
+            registry.summary()["serialization"],
+            {"observations": 1, "verified": 0},
+        )
+
+    def test_summary_empty(self):
+        self.assertEqual(EvidenceRegistry().summary()["handshake"]["verified"], 0)
+
+
+    def test_summary_rejects_mixed_artifacts_without_explicit_selector(self):
+        other_sha = EvidenceRegistry.digest(b"another APK build")
+        registry = EvidenceRegistry()
+        registry.add(Evidence(
+            "transport", self.sha, "offline observation", "il2cpp_offline", True,
+            "tests/test_protocol_evidence_registry.py",
+            "python -m unittest discover -s tests -p test_protocol_evidence_registry.py -v",
+        ))
+        registry.add(Evidence(
+            "framing", other_sha, "offline observation", "il2cpp_offline", True,
+            "tests/test_protocol_evidence_registry.py",
+            "python -m unittest discover -s tests -p test_protocol_evidence_registry.py -v",
+        ))
+
+        with self.assertRaisesRegex(EvidenceError, "multiple artifacts"):
+            registry.summary()
+
+        first = registry.summary(artifact_sha256=self.sha)
+        second = registry.summary(artifact_sha256=other_sha)
+        self.assertEqual(first["transport"], {"observations": 1, "verified": 1})
+        self.assertEqual(first["framing"], {"observations": 0, "verified": 0})
+        self.assertEqual(second["transport"], {"observations": 0, "verified": 0})
+        self.assertEqual(second["framing"], {"observations": 1, "verified": 1})
+
+    def test_summary_uses_one_snapshot_during_concurrent_registry_updates(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence(
+            "transport", self.sha, "first build observation", "il2cpp_offline"
+        ))
+        other_sha = EvidenceRegistry.digest(b"concurrent second APK build")
+        second_build = Evidence(
+            "framing", other_sha, "second build observation", "il2cpp_offline"
+        )
+
+        snapshot_ready = threading.Event()
+        resume_summary = threading.Event()
+        original_snapshot = registry._snapshot_records
+
+        def paused_snapshot():
+            snapshot = original_snapshot()
+            snapshot_ready.set()
+            if not resume_summary.wait(timeout=2):
+                raise AssertionError("summary snapshot was not released")
+            return snapshot
+
+        registry._snapshot_records = paused_snapshot
+        results = []
+        errors = []
+
+        def summarize():
+            try:
+                results.append(registry.summary())
+            except BaseException as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(target=summarize)
+        worker.start()
+        try:
+            self.assertTrue(snapshot_ready.wait(timeout=2))
+            registry.add(second_build)
+        finally:
+            resume_summary.set()
+            worker.join(timeout=2)
+            registry._snapshot_records = original_snapshot
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(
+            results[0]["transport"], {"observations": 1, "verified": 0}
+        )
+        self.assertEqual(
+            results[0]["framing"], {"observations": 0, "verified": 0}
+        )
+        with self.assertRaisesRegex(EvidenceError, "multiple artifacts"):
+            registry.summary()
+
+    def test_summary_validates_explicit_artifact_selector(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence("transport", self.sha, "offline observation", "il2cpp_offline"))
+
+        for digest in ("BAD", "A" * 64, "b" * 64):
+            with self.subTest(digest=digest), self.assertRaises(EvidenceError):
+                registry.summary(artifact_sha256=digest)
+
+
+    def test_artifact_digest_rejects_string_subclass(self):
+        class Digest(str):
+            pass
+
+        with self.assertRaisesRegex(EvidenceError, "invalid sha256"):
+            Evidence(
+                "transport", Digest(self.sha), "offline observation", "il2cpp_offline"
+            )
+
+    def test_digest_rejects_bytes_subclass(self):
+        class Payload(bytes):
+            pass
+
+        with self.assertRaisesRegex(EvidenceError, "bytes required"):
+            EvidenceRegistry.digest(Payload(b"offline fixture"))
+
+    def test_registry_rejects_evidence_subclass_before_custom_access(self):
+        class HostileEvidence(Evidence):
+            def __post_init__(self):
+                # Deliberately bypass base validation to exercise the registry
+                # boundary, which must reject the subtype before reading fields.
+                pass
+
+            def __getattribute__(self, name):
+                if name in {"topic", "artifact_sha256", "verified"}:
+                    raise AssertionError("custom evidence accessor must not run")
+                return super().__getattribute__(name)
+
+        record = HostileEvidence(
+            "transport", self.sha, "offline observation", "il2cpp_offline"
+        )
+        with self.assertRaisesRegex(EvidenceError, "invalid record"):
+            EvidenceRegistry().add(record)
+
+
+    def test_registry_revalidates_mutated_frozen_record_before_acceptance(self):
+        record = Evidence(
+            "transport", self.sha, "offline observation", "synthetic_test"
+        )
+        # frozen=True prevents normal assignment, but object.__setattr__ can
+        # bypass it. The registry must re-run Evidence validation on insertion.
+        object.__setattr__(record, "verified", 1)
+
+        with self.assertRaisesRegex(EvidenceError, "invalid record"):
+            EvidenceRegistry().add(record)
+
+    def test_registry_rejects_frozen_record_with_deleted_field_before_acceptance(self):
+        record = Evidence(
+            "transport", self.sha, "offline observation", "synthetic_test"
+        )
+        # Bypass frozen=True by deleting a required dataclass attribute.
+        object.__delattr__(record, "observation")
+
+        with self.assertRaisesRegex(EvidenceError, "invalid record"):
+            EvidenceRegistry().add(record)
+
+    def test_summary_rejects_registry_record_with_deleted_field(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence(
+            "transport", self.sha, "offline observation", "synthetic_test"
+        ))
+        object.__delattr__(registry._records[0], "observation")
+
+        with self.assertRaisesRegex(EvidenceError, "invalid evidence record"):
+            registry.summary()
+
+    def test_registry_defensively_copies_records_on_add(self):
+        registry = EvidenceRegistry()
+        record = Evidence(
+            "transport", self.sha, "offline observation", "synthetic_test"
+        )
+        registry.add(record)
+
+        other_sha = EvidenceRegistry.digest(b"mutated caller-owned record")
+        object.__setattr__(record, "topic", "login")
+        object.__setattr__(record, "artifact_sha256", other_sha)
+        object.__setattr__(record, "method", "authorized_local_test")
+        object.__setattr__(record, "verified", True)
+        object.__setattr__(
+            record, "test_reference", "tests/test_protocol_evidence_registry.py"
+        )
+        object.__setattr__(
+            record,
+            "reproduction",
+            "python -m unittest discover -s tests -p test_protocol_evidence_registry.py -v",
+        )
+
+        summary = registry.summary()
+        self.assertEqual(
+            summary["transport"], {"observations": 1, "verified": 0}
+        )
+        self.assertEqual(
+            summary["login"], {"observations": 0, "verified": 0}
+        )
+        with self.assertRaisesRegex(EvidenceError, "no evidence records"):
+            registry.summary(artifact_sha256=other_sha)
+
+
+    def test_snapshot_records_are_detached_from_registry_owned_instances(self):
+        registry = EvidenceRegistry()
+        original = Evidence(
+            "transport", self.sha, "offline observation", "synthetic_test"
+        )
+        registry.add(original)
+
+        snapshot = registry._snapshot_records()
+        self.assertEqual(len(snapshot), 1)
+        self.assertIsNot(snapshot[0], original)
+
+        # Even bypassing frozen=True on the returned copy must not mutate the
+        # registry's private stored record.
+        object.__setattr__(snapshot[0], "topic", "login")
+        object.__setattr__(snapshot[0], "verified", True)
+
+        summary = registry.summary()
+        self.assertEqual(
+            summary["transport"], {"observations": 1, "verified": 0}
+        )
+        self.assertEqual(
+            summary["login"], {"observations": 0, "verified": 0}
+        )
+
+    def test_summary_rejects_corrupted_registry_owned_record(self):
+        registry = EvidenceRegistry()
+        registry.add(Evidence(
+            "transport", self.sha, "offline observation", "synthetic_test"
+        ))
+        # Simulate corruption of private state; a detached snapshot must
+        # revalidate the stored record rather than trusting frozen=True.
+        object.__setattr__(registry._records[0], "topic", "unknown")
+
+        with self.assertRaisesRegex(EvidenceError, "invalid evidence record"):
+            registry.summary()
+
+
+if __name__ == "__main__":
+    unittest.main()

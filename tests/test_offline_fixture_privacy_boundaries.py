@@ -1,0 +1,121 @@
+"""Regression tests for private offline fixture batch boundaries; synthetic bytes only."""
+import hashlib
+import unittest
+
+from server.offline_fixture_batch import validate_fixture_batch
+from server.offline_packet_fixture import FixtureValidationError
+
+
+def fixture(payload, source=b"synthetic source"):
+    return {
+        "source_sha256": hashlib.sha256(source).hexdigest(),
+        "payload_hex": payload.hex(),
+        "payload_sha256": hashlib.sha256(payload).hexdigest(),
+        "verified": True,
+    }
+
+
+def validate(records, **kwargs):
+    # Test convenience only. Real callers must supply digests from a trusted
+    # private inventory independently of the fixture records.
+    kwargs.setdefault(
+        "expected_source_sha256s",
+        {
+            item["source_sha256"]
+            for item in records
+            if isinstance(item, dict) and "source_sha256" in item
+        },
+    )
+    return validate_fixture_batch(records, **kwargs)
+
+
+class OfflineFixturePrivacyBoundaryTests(unittest.TestCase):
+    def test_summary_does_not_return_payload_or_hex(self):
+        payload = b"PRIVATE_SYNTHETIC_PACKET_MARKER"
+        summary = validate([fixture(payload)])
+        self.assertEqual(summary["total_bytes"], len(payload))
+        self.assertEqual(summary["count"], 1)
+        self.assertEqual(summary["payload_sha256"], (hashlib.sha256(payload).hexdigest(),))
+        self.assertNotIn(payload.hex(), repr(summary))
+        self.assertNotIn(payload.decode(), repr(summary))
+
+    def test_reject_duplicate_same_source_and_payload(self):
+        item = fixture(b"abc")
+        with self.assertRaisesRegex(FixtureValidationError, "duplicate fixture"):
+            validate([item, dict(item)])
+
+    def test_same_payload_from_distinct_sources_is_not_duplicate(self):
+        summary = validate([
+            fixture(b"abc", b"source 1"), fixture(b"abc", b"source 2")
+        ])
+        self.assertEqual(summary["count"], 2)
+        self.assertEqual(summary["total_bytes"], 6)
+
+    def test_exact_total_budget_and_one_byte_over(self):
+        items = [fixture(b"ab"), fixture(b"c", b"source 2")]
+        self.assertEqual(validate(items, max_total_bytes=3)["total_bytes"], 3)
+        with self.assertRaises(FixtureValidationError):
+            validate(items, max_total_bytes=2)
+
+    def test_invalid_later_record_does_not_return_partial_summary(self):
+        good = fixture(b"good")
+        bad = fixture(b"bad", b"other")
+        bad["payload_sha256"] = "0" * 64
+        with self.assertRaises(FixtureValidationError):
+            validate([good, bad])
+
+    def test_reject_boolean_limits(self):
+        item = fixture(b"x")
+        for kwargs in ({"max_records": True}, {"max_total_bytes": True},
+                       {"max_records": False}, {"max_total_bytes": False}):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(FixtureValidationError):
+                    validate([item], **kwargs)
+
+    def test_reject_unverified_and_malformed_hex_without_leaking(self):
+        item = fixture(b"secret")
+        item["verified"] = False
+        with self.assertRaises(FixtureValidationError):
+            validate([item])
+        item["verified"] = True
+        item["payload_hex"] = "secret_not_hex"
+        with self.assertRaises(FixtureValidationError):
+            validate([item])
+
+    def test_rejects_payload_string_subclass_before_length_hook(self):
+        class ExplosiveString(str):
+            def __len__(self):
+                raise AssertionError("custom length hook must not run")
+
+        item = fixture(b"x")
+        item["payload_hex"] = ExplosiveString(item["payload_hex"])
+        with self.assertRaises(FixtureValidationError):
+            validate([item])
+
+    def test_rejects_string_subclass_keys_before_hash_or_equality_hooks(self):
+        class GuardedKey(str):
+            armed = False
+
+            def __hash__(self):
+                if self.armed:
+                    raise AssertionError("custom hash hook must not run")
+                return super().__hash__()
+
+            def __eq__(self, other):
+                if self.armed:
+                    raise AssertionError("custom equality hook must not run")
+                return super().__eq__(other)
+
+        item = fixture(b"x")
+        source_digest = item.pop("source_sha256")
+        key = GuardedKey("source_sha256")
+        item[key] = source_digest
+        key.armed = True
+        with self.assertRaises(FixtureValidationError):
+            validate_fixture_batch(
+                [item], expected_source_sha256s={source_digest}
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

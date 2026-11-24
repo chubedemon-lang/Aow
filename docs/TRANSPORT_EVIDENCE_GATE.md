@@ -1,0 +1,64 @@
+# Evidence-gated transport boundary
+
+`server/transport.py` is an **offline interface only**. It does not open sockets, parse AOW frames, claim that the original APK connects, or contact official services. Default behavior raises `UnverifiedProtocolError`.
+
+A future codec must be backed by an authorized offline APK analysis report with a SHA-256 source identifier, a specific observation, and a review reference. The evidence object is metadata, **not proof** that the codec matches the APK; the `configured` property currently means only that evidence metadata and both codec callbacks were supplied. Compatibility must be demonstrated separately through authorized, local end-to-end tests with the unchanged APK.
+
+Review references are deliberately restricted to short, sanitized local locators such as `issue:2` or `docs/PROTOCOL.md#framing`. The transport boundary reuses the evidence-registry validators for both observation prose and local references, rejecting URI schemes, DNS hostnames, IPv4/IPv6 literals, localhost, host:port values, absolute POSIX/shell-home/Windows/UNC paths, parent-directory traversal, secret-like assignments, raw-byte markers, private-key markers and unbounded values. The separate legacy evidence ledger also rejects absolute and traversing paths in its reference field. The protocol evidence registry now screens the original text plus up to three URL-decoding rounds and rejects any valid percent escape that remains after the bound, preventing deeper nested encoding from bypassing the public-metadata check. Local references and reproduction commands retain their stricter repository-local syntax. These are conservative guardrails, not general-purpose DLP scanners. Do not place endpoint strings, credentials, raw packet bytes or private capture paths in evidence metadata.
+
+**Byte-boundary validation:** `TransportAdapter.receive()` and the encoder result from `send()` accept only an exact built-in immutable `bytes` object. Subclasses are rejected before `len()` or the decoder is invoked because a subclass may override `__len__()` and execute arbitrary code. This is input hardening only; it does not change the codec, wire format, or evidence readiness.
+
+Before a real codec can be implemented, document: transport selection; message framing; primitive serialization; handshake order; authentication ownership; request/response identifiers; encryption/compression if present; errors and reconnect semantics. Each fact needs a reproducible source reference and negative test. Keep original APKs, assets, tokens, endpoints with private paths, and raw traffic out of public commits.
+
+Synthetic test fixtures in `tests/test_transport.py` exercise fail-closed behavior, input validation, hostile byte-subclass rejection and codec boundaries. They are not evidence of an original wire format.
+
+The evidence readiness sequence is transport → framing → serialization → handshake → login → session → player initialization → map join → movement → inventory → shop → combat → quest. Each stage requires its own verified evidence record; a later record cannot bypass a missing prerequisite. These gates track evidence coverage only and do not claim APK compatibility.
+
+**Input snapshot consistency:** `evaluate_evidence()` accepts only exact built-in record and approval collections, then snapshots both once into immutable tuples before size/type validation, fingerprint selection, and topic aggregation. This prevents a caller mutating its original record list between those passes and silently changing the evidence set being evaluated. The snapshot is a process-local consistency boundary, not an authorization proof or cryptographic attestation.
+
+**Fingerprint isolation:** `evaluate_evidence()` requires all records in one evaluation to refer to a single artifact SHA-256. If multiple fingerprints are present, the caller must pass `artifact_sha256` explicitly; the gate then filters to that artifact before evaluating prerequisites. Evidence from different APK builds must never be combined to make a stage appear ready. This is a bookkeeping safeguard, not a compatibility test.
+
+**Reproducibility requirement:** records in `server.protocol_evidence_registry.Evidence` marked `verified=True` must include both a sanitized repository-local `test_reference` and a reproducible local `reproduction` command. Verified records must identify an offline APK-analysis or authorized-local-test method; a `synthetic_test` method alone cannot unlock a protocol stage. The command/reference are provenance metadata, not proof by themselves, and the registry still does not establish wire compatibility.
+
+Primitive serializer findings from the authorized offline APK pass are not by themselves a complete message schema or proof that a specific serializer is used by the active transport. The serialization gate is deliberately separate from framing and handshake.
+
+## Public evidence ledger locator policy
+
+`server/evidence_ledger.py` stores public provenance metadata only. It accepts short local references such as `issue:2`, `docs/PROTOCOL.md#framing`, `metadata/type:123`, and test paths. It rejects URI schemes, hostnames, IP literals, localhost and host:port locators so private endpoints are not accidentally published. This is a conservative metadata filter, not a general-purpose data-loss-prevention system.
+
+## Absolute filesystem path redaction
+
+The offline evidence metadata validator also rejects absolute POSIX paths (including POSIX double-slash roots), shell-home paths (`~/...` and `~\\...`), drive-letter paths, single-rooted Windows paths, UNC network-share paths, and parent-directory traversal using either slash style in public `source` and `observation` text. These can reveal usernames, private workspace layout, or locations of APKs and packet captures even when they contain no URL, host or credential. Sanitized repository-relative references such as `docs/PROTOCOL.md#framing` remain accepted. This is an additional conservative check, not a complete DLP scanner; keep private artifact paths and bytes out of public evidence records. Percent-encoded text is also screened after up to three URL-decoding rounds, including encoded separators, traversal segments, network locators, and credential hints. This bounded normalization is a metadata safeguard, not a general-purpose decoder or complete DLP scanner.
+
+**Registry summary fingerprint isolation:** the evidence registry refuses to aggregate observations when it contains multiple APK SHA-256 values unless the caller selects one explicitly. The returned topic counts then include only records for that selected artifact. This mirrors the ordered readiness gate and prevents evidence from different builds being combined in a summary. It is a bookkeeping safeguard, not a compatibility test.
+
+
+## Ordered codec activation wrapper
+
+`EvidenceGatedTransportAdapter` is the stricter wrapper for any future codec
+that is intended to consume client bytes. It requires an explicit APK SHA-256,
+exact `Evidence` records, and an operator-reviewed allowlist of the records'
+stable digests. By default it requires the ordered prefix through
+`serialization`: transport, framing, and primitive/message serialization.
+A caller may request a later boundary such as `handshake`, `login`, or
+`map`; every preceding stage must also be ready for the same APK fingerprint.
+
+The wrapper snapshots the caller-supplied record and approval collections
+into immutable tuples before evaluating readiness. The same snapshots are used
+for gate evaluation, terminal-record selection and retained evidence metadata,
+so a later mutation of the caller's original lists cannot change the basis on
+which the adapter was configured. Non-built-in approval collections are
+rejected before iteration.
+
+The wrapper does not infer or implement any wire format. It does not open a
+socket, enable a listener, or prove that injected callbacks match the APK.
+`TransportAdapter` remains a low-level dependency-injection boundary used by
+synthetic tests; metadata plus callbacks alone must not be treated as AOW
+readiness. The new wrapper makes the ordered evidence gate an explicit
+constructor precondition and reports the missing stage names when it fails.
+
+A passing constructor means only that the supplied evidence records passed
+the repository's operator-reviewed readiness gate through the requested
+stage. It is not an end-to-end compatibility claim, and a synthetic test
+cannot unlock a stage because the gate accepts only approved
+`authorized_local_test` records.

@@ -1,0 +1,800 @@
+"""Ownership, persistence and replay tests for synthetic durable combat."""
+import json
+import os
+import sqlite3
+import tempfile
+import threading
+import unittest
+from concurrent.futures import ThreadPoolExecutor
+
+from server.combat import Battle, Fighter
+from server.sessions import SessionError
+from server.sqlite_session_store import SqliteSessionStore
+from server.sqlite_authorized_combat_service import (
+    CombatAlreadyExists,
+    CombatNotFound,
+    CombatOperationConflict,
+    CombatRevisionConflict,
+    CombatStoreError,
+    SqliteAuthorizedCombatService,
+)
+
+
+class HostileString(str):
+    """String subclass whose length hook must never run during validation."""
+
+    def __len__(self):
+        raise AssertionError("hostile string length hook executed")
+
+
+class SqliteAuthorizedCombatServiceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = os.path.join(self.temp.name, "combat.sqlite3")
+        self.db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        self.addCleanup(self.db.close)
+        self.db.execute(
+            """CREATE TABLE characters (
+                id INTEGER PRIMARY KEY,
+                account_id INTEGER NOT NULL
+            )"""
+        )
+        self.db.executemany(
+            "INSERT INTO characters(id, account_id) VALUES (?, ?)",
+            ((101, 1), (202, 2), (303, 1)),
+        )
+        self.db.commit()
+        self.now = [5000.0]
+        self.service = SqliteAuthorizedCombatService(
+            self.db, ttl_seconds=30, clock=lambda: self.now[0]
+        )
+        self.owner_token = self.service.sessions.issue(1)
+        self.other_token = self.service.sessions.issue(2)
+
+    @staticmethod
+    def battle():
+        return Battle(
+            Fighter(101, 20, 7, 2),
+            Fighter(9001, 10, 3, 4),
+            101,
+        )
+
+    def create_battle(self, battle_id="battle-1"):
+        return self.service.create(
+            self.owner_token, 101, battle_id, self.battle()
+        )
+
+    def test_create_and_read_owned_battle(self):
+        created = self.create_battle()
+        loaded = self.service.get(self.owner_token, 101, "battle-1")
+        self.assertEqual(created, loaded)
+        self.assertEqual(loaded.revision, 0)
+        self.assertEqual(loaded.battle.first.hp, 20)
+
+    def test_duplicate_battle_id_is_rejected(self):
+        self.create_battle()
+        with self.assertRaises(CombatAlreadyExists):
+            self.create_battle()
+
+    def test_create_rejects_battle_subclass_before_attribute_access(self):
+        class HostileBattle(Battle):
+            def __post_init__(self):
+                # Bypass base validation only to construct the hostile test value.
+                pass
+
+            def __getattribute__(self, name):
+                if name == "turn":
+                    raise AssertionError(
+                        "custom battle attribute hook must not run"
+                    )
+                return super().__getattribute__(name)
+
+        hostile = HostileBattle(
+            Fighter(101, 20, 7, 2),
+            Fighter(9001, 10, 3, 4),
+            101,
+        )
+        with self.assertRaisesRegex(
+            CombatStoreError, "battle snapshot required"
+        ):
+            self.service.create(
+                self.owner_token, 101, "hostile-battle", hostile
+            )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM combat_battles").fetchone()[0],
+            0,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_character_must_be_a_battle_participant(self):
+        battle = Battle(Fighter(9002, 20, 7, 2), Fighter(9001, 10, 3, 4), 9002)
+        with self.assertRaises(SessionError):
+            self.service.create(self.owner_token, 101, "not-owned", battle)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM combat_battles").fetchone()[0],
+            0,
+        )
+
+    def test_new_battle_must_start_with_living_fighters(self):
+        battle = Battle(
+            Fighter(101, 0, 7, 2),
+            Fighter(9001, 10, 3, 4),
+            9001,
+            turn=1,
+        )
+        with self.assertRaises(CombatStoreError):
+            self.service.create(self.owner_token, 101, "finished", battle)
+
+    def test_foreign_or_other_owned_character_cannot_read_battle(self):
+        self.create_battle()
+        with self.assertRaises(SessionError):
+            self.service.get(self.other_token, 101, "battle-1")
+        with self.assertRaises(SessionError):
+            self.service.get(self.owner_token, 303, "battle-1")
+        with self.assertRaises(CombatNotFound):
+            self.service.get(self.owner_token, 101, "missing")
+
+    def test_turn_transition_is_persisted(self):
+        self.create_battle()
+        first = self.service.attack(
+            self.owner_token, 101, "battle-1", "turn-1", 0, 101
+        )
+        self.assertFalse(first.replayed)
+        self.assertEqual(
+            (first.event.damage, first.event.target_hp, first.snapshot.revision),
+            (3, 7, 1),
+        )
+        second = self.service.attack(
+            self.owner_token, 101, "battle-1", "turn-2", 1, 9001
+        )
+        self.assertEqual(
+            (second.event.damage, second.event.target_hp, second.snapshot.revision),
+            (1, 19, 2),
+        )
+        self.assertEqual(
+            self.service.get(self.owner_token, 101, "battle-1"),
+            second.snapshot,
+        )
+
+    def test_exact_retry_returns_original_result_after_later_turn(self):
+        self.create_battle()
+        first = self.service.attack(
+            self.owner_token, 101, "battle-1", "turn-1", 0, 101
+        )
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "turn-2", 1, 9001
+        )
+        replay = self.service.attack(
+            self.owner_token, 101, "battle-1", "turn-1", 0, 101
+        )
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.snapshot, first.snapshot)
+        self.assertEqual(replay.event, first.event)
+        self.assertEqual(
+            self.service.get(self.owner_token, 101, "battle-1").revision, 2
+        )
+
+    def test_request_id_cannot_be_reused_for_another_action(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "same-id", 0, 101
+        )
+        with self.assertRaises(CombatOperationConflict):
+            self.service.attack(
+                self.owner_token, 101, "battle-1", "same-id", 0, 9001
+            )
+        self.assertEqual(
+            self.service.get(self.owner_token, 101, "battle-1").revision, 1
+        )
+
+    def test_replay_rejects_duplicate_keys_and_tampered_receipt_fields(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "tampered", 0, 101
+        )
+        valid = json.loads(self.db.execute(
+            "SELECT result_json FROM combat_mutations WHERE request_id='tampered'"
+        ).fetchone()[0])
+
+        invalid_receipts = (
+            '{"battle_id":"battle-1","battle_id":"battle-1"}',
+            json.dumps({
+                **valid,
+                "event": {**valid["event"], "damage": True},
+            }),
+            json.dumps({**valid, "battle_id": "another-battle"}),
+            json.dumps({
+                **valid,
+                "event": {**valid["event"], "actor_id": 9001},
+            }),
+            json.dumps({
+                **valid,
+                "battle": {
+                    **valid["battle"],
+                    "first": [101, 0, 7, 2],
+                },
+            }),
+            json.dumps({
+                **valid,
+                "event": {**valid["event"], "damage": 1_000_000},
+            }),
+        )
+        for raw in invalid_receipts:
+            with self.subTest(receipt=raw[:80]):
+                self.db.execute(
+                    "UPDATE combat_mutations SET result_json=? WHERE request_id=?",
+                    (raw, "tampered"),
+                )
+                with self.assertRaises(CombatStoreError):
+                    self.service.attack(
+                        self.owner_token, 101, "battle-1", "tampered", 0, 101
+                    )
+
+    def test_replay_rejects_oversized_or_non_object_receipt(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "oversized", 0, 101
+        )
+        for raw in ("x" * 4097, "[]", "null", '{"event":{"damage":NaN}}'):
+            with self.subTest(receipt=raw[:20]):
+                self.db.execute(
+                    "UPDATE combat_mutations SET result_json=? WHERE request_id=?",
+                    (raw, "oversized"),
+                )
+                with self.assertRaises(CombatStoreError):
+                    self.service.attack(
+                        self.owner_token, 101, "battle-1", "oversized", 0, 101
+                    )
+
+    def test_stale_revision_and_wrong_turn_do_not_mutate(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "turn-1", 0, 101
+        )
+        before = self.service.get(self.owner_token, 101, "battle-1")
+        with self.assertRaises(CombatRevisionConflict):
+            self.service.attack(
+                self.owner_token, 101, "battle-1", "stale", 0, 9001
+            )
+        with self.assertRaises(ValueError):
+            self.service.attack(
+                self.owner_token, 101, "battle-1", "wrong-turn", 1, 101
+            )
+        self.assertEqual(
+            self.service.get(self.owner_token, 101, "battle-1"), before
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM combat_mutations "
+                "WHERE request_id IN ('stale', 'wrong-turn')"
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_finished_battle_rejects_more_actions(self):
+        battle = Battle(
+            Fighter(101, 1, 10, 0),
+            Fighter(9001, 1, 0, 0),
+            101,
+        )
+        self.service.create(self.owner_token, 101, "terminal", battle)
+        result = self.service.attack(
+            self.owner_token, 101, "terminal", "finish", 0, 101
+        )
+        self.assertEqual(result.event.winner_id, 101)
+        before = self.service.get(self.owner_token, 101, "terminal")
+        with self.assertRaises(ValueError):
+            self.service.attack(
+                self.owner_token, 101, "terminal", "after-finish", 1, 101
+            )
+        self.assertEqual(
+            self.service.get(self.owner_token, 101, "terminal"), before
+        )
+
+    def test_expired_and_revoked_sessions_cannot_replay_or_mutate(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "turn-1", 0, 101
+        )
+        self.now[0] = 5030.0
+        with self.assertRaises(SessionError):
+            self.service.attack(
+                self.owner_token, 101, "battle-1", "turn-1", 0, 101
+            )
+        with self.assertRaises(SessionError):
+            self.service.get(self.owner_token, 101, "battle-1")
+
+        fresh = self.service.sessions.issue(1)
+        self.assertTrue(self.service.sessions.revoke(fresh))
+        with self.assertRaises(SessionError):
+            self.service.attack(fresh, 101, "battle-1", "turn-2", 1, 9001)
+
+    def test_snapshot_and_receipts_survive_reopen(self):
+        self.create_battle()
+        expected = self.service.attack(
+            self.owner_token, 101, "battle-1", "turn-1", 0, 101
+        )
+        self.db.close()
+        reopened = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None
+        )
+        self.addCleanup(reopened.close)
+        service = SqliteAuthorizedCombatService(
+            reopened, ttl_seconds=30, clock=lambda: self.now[0]
+        )
+        self.assertEqual(
+            service.get(self.owner_token, 101, "battle-1"),
+            expected.snapshot,
+        )
+        replay = service.attack(
+            self.owner_token, 101, "battle-1", "turn-1", 0, 101
+        )
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.snapshot, expected.snapshot)
+
+    def test_concurrent_duplicate_action_commits_once(self):
+        self.create_battle()
+        barrier = threading.Barrier(8)
+
+        def apply_once(_):
+            connection = sqlite3.connect(
+                self.path, timeout=10, isolation_level=None
+            )
+            try:
+                service = SqliteAuthorizedCombatService(
+                    connection, ttl_seconds=30, clock=lambda: self.now[0]
+                )
+                barrier.wait(timeout=5)
+                return service.attack(
+                    self.owner_token, 101, "battle-1", "concurrent", 0, 101
+                )
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(apply_once, range(8)))
+        self.assertEqual(sum(not result.replayed for result in results), 1)
+        self.assertEqual(sum(result.replayed for result in results), 7)
+        self.assertTrue(
+            all(result.snapshot == results[0].snapshot for result in results)
+        )
+        self.assertEqual(
+            self.service.get(self.owner_token, 101, "battle-1").revision, 1
+        )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM combat_mutations").fetchone()[0],
+            1,
+        )
+
+    def test_public_identifiers_reject_string_subclasses(self):
+        hostile_battle_id = HostileString("hostile-battle")
+        with self.assertRaises(CombatStoreError):
+            self.service.create(
+                self.owner_token, 101, hostile_battle_id, self.battle()
+            )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM combat_battles").fetchone()[0],
+            0,
+        )
+
+        self.create_battle()
+        with self.assertRaises(CombatStoreError):
+            self.service.get(
+                self.owner_token, 101, HostileString("battle-1")
+            )
+        with self.assertRaises(CombatStoreError):
+            self.service.attack(
+                self.owner_token, 101, "battle-1",
+                HostileString("hostile-request"), 0, 101,
+            )
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM combat_mutations").fetchone()[0],
+            0,
+        )
+
+    def test_receipt_decoder_rejects_string_subclass_before_length_hook(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "receipt", 0, 101
+        )
+        raw = self.db.execute(
+            "SELECT result_json FROM combat_mutations WHERE request_id='receipt'"
+        ).fetchone()[0]
+
+        with self.assertRaises(CombatStoreError):
+            self.service._decode_result(HostileString(raw))
+
+        # Rejection is read-only and the canonical receipt remains replayable.
+        replay = self.service.attack(
+            self.owner_token, 101, "battle-1", "receipt", 0, 101
+        )
+        self.assertTrue(replay.replayed)
+        self.assertEqual(replay.snapshot.revision, 1)
+
+    def test_invalid_identifiers_and_constructor_schema_fail_closed(self):
+        for value in ("", " ", "../battle", "x" * 129, None):
+            with self.subTest(value=value), self.assertRaises(CombatStoreError):
+                self.service.create(self.owner_token, 101, value, self.battle())
+        for value in (True, 0, -1, "101", None):
+            with self.subTest(value=value), self.assertRaises(SessionError):
+                self.service.create(self.owner_token, value, "invalid", self.battle())
+
+        db = sqlite3.connect(":memory:", isolation_level=None)
+        self.addCleanup(db.close)
+        with self.assertRaisesRegex(ValueError, "characters"):
+            SqliteAuthorizedCombatService(db)
+        tables = {
+            row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        self.assertNotIn("durable_sessions", tables)
+        self.assertNotIn("combat_battles", tables)
+        self.assertNotIn("combat_mutations", tables)
+
+
+
+    def test_session_revocation_serializes_with_combat_attack(self):
+        self.create_battle()
+        revoke_started = threading.Event()
+        revoke_done = threading.Event()
+        outcome = {}
+        original_snapshot = self.service._snapshot_from_row
+
+        def revoke():
+            connection = sqlite3.connect(
+                self.path, timeout=10, isolation_level=None
+            )
+            try:
+                sessions = SqliteSessionStore(
+                    connection, ttl_seconds=30, clock=lambda: self.now[0]
+                )
+                revoke_started.set()
+                outcome["revoked"] = sessions.revoke(self.owner_token)
+            except BaseException as exc:
+                outcome["revoke_error"] = exc
+            finally:
+                connection.close()
+                revoke_done.set()
+
+        revoke_thread = threading.Thread(target=revoke)
+
+        def pause_inside_authorized_attack(row):
+            revoke_thread.start()
+            if not revoke_started.wait(5):
+                raise TimeoutError("revocation thread did not start")
+            if revoke_done.wait(0.2):
+                raise AssertionError("session revocation bypassed combat transaction")
+            return original_snapshot(row)
+
+        self.service._snapshot_from_row = pause_inside_authorized_attack
+        mutation = self.service.attack(
+            self.owner_token, 101, "battle-1", "atomic-revoke-combat", 0, 101
+        )
+        self.service._snapshot_from_row = original_snapshot
+        revoke_thread.join(5)
+
+        self.assertFalse(revoke_thread.is_alive())
+        self.assertNotIn("revoke_error", outcome)
+        self.assertTrue(outcome["revoked"])
+        self.assertFalse(mutation.replayed)
+        self.assertEqual(mutation.snapshot.revision, 1)
+        self.assertEqual(
+            self.db.execute(
+                "SELECT revision FROM combat_battles WHERE battle_id='battle-1'"
+            ).fetchone()[0],
+            1,
+        )
+        with self.assertRaises(SessionError):
+            self.service.get(self.owner_token, 101, "battle-1")
+
+    def test_get_rejects_fractional_persisted_snapshot_values(self):
+        self.create_battle()
+        invalid_values = (
+            ("first_hp", 20.5, 20),
+            ("first_attack", 7.5, 7),
+            ("turn", 0.5, 0),
+            ("revision", 0.5, 0),
+        )
+        for column, invalid, original in invalid_values:
+            with self.subTest(column=column):
+                self.db.execute(
+                    f"UPDATE combat_battles SET {column}=? WHERE battle_id=?",
+                    (invalid, "battle-1"),
+                )
+                with self.assertRaises(CombatStoreError):
+                    self.service.get(self.owner_token, 101, "battle-1")
+                self.assertFalse(self.db.in_transaction)
+                self.db.execute(
+                    f"UPDATE combat_battles SET {column}=? WHERE battle_id=?",
+                    (original, "battle-1"),
+                )
+
+    def test_get_rejects_blob_in_persisted_numeric_field(self):
+        self.create_battle()
+        self.db.execute("PRAGMA ignore_check_constraints = ON")
+        try:
+            self.db.execute(
+                "UPDATE combat_battles SET first_defense=? WHERE battle_id=?",
+                (sqlite3.Binary(b"2"), "battle-1"),
+            )
+        finally:
+            self.db.execute("PRAGMA ignore_check_constraints = OFF")
+        with self.assertRaises(CombatStoreError):
+            self.service.get(self.owner_token, 101, "battle-1")
+        self.assertFalse(self.db.in_transaction)
+
+    def test_get_rejects_revision_turn_mismatch(self):
+        self.create_battle()
+        self.db.execute(
+            "UPDATE combat_battles SET revision=1 WHERE battle_id=?",
+            ("battle-1",),
+        )
+        with self.assertRaisesRegex(
+            CombatStoreError, "revision/turn mismatch"
+        ):
+            self.service.get(self.owner_token, 101, "battle-1")
+        self.assertFalse(self.db.in_transaction)
+
+    def test_terminal_snapshot_requires_matching_persisted_winner(self):
+        battle = Battle(
+            Fighter(101, 1, 10, 0),
+            Fighter(9001, 1, 0, 0),
+            101,
+        )
+        self.service.create(self.owner_token, 101, "terminal", battle)
+        result = self.service.attack(
+            self.owner_token, 101, "terminal", "finish-strict", 0, 101
+        )
+        self.assertEqual(result.event.winner_id, 101)
+        self.assertEqual(
+            self.service.get(self.owner_token, 101, "terminal"),
+            result.snapshot,
+        )
+        self.db.execute(
+            "UPDATE combat_battles SET winner_id=9001 WHERE battle_id=?",
+            ("terminal",),
+        )
+        with self.assertRaisesRegex(
+            CombatStoreError, "winner does not match"
+        ):
+            self.service.get(self.owner_token, 101, "terminal")
+        self.assertFalse(self.db.in_transaction)
+
+    def test_non_terminal_snapshot_rejects_unexpected_winner(self):
+        self.create_battle()
+        self.db.execute(
+            "UPDATE combat_battles SET winner_id=9001 WHERE battle_id=?",
+            ("battle-1",),
+        )
+        with self.assertRaisesRegex(
+            CombatStoreError, "winner does not match"
+        ):
+            self.service.get(self.owner_token, 101, "battle-1")
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_reports_contiguous_receipts_and_current_snapshot(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-turn-1", 0, 101
+        )
+        second = self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-turn-2", 1, 9001
+        )
+
+        self.assertEqual(
+            self.service.verify_integrity(),
+            {
+                "battles": 1,
+                "mutations": 2,
+                "verified_transitions": 2,
+                "anchored_battles": 1,
+                "unanchored_battles": 0,
+            },
+        )
+        self.assertEqual(
+            self.service.get(self.owner_token, 101, "battle-1"),
+            second.snapshot,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_replays_first_receipt_from_creation_baseline(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "baseline-first", 0, 101
+        )
+        raw = self.db.execute(
+            "SELECT initial_snapshot_json FROM combat_battles WHERE battle_id=?",
+            ("battle-1",),
+        ).fetchone()[0]
+        baseline = json.loads(raw)
+        baseline["battle"]["second"][3] += 1
+        tampered = json.dumps(baseline, sort_keys=True, separators=(",", ":"))
+        self.db.execute(
+            "UPDATE combat_battles SET initial_snapshot_json=? WHERE battle_id=?",
+            (tampered, "battle-1"),
+        )
+
+        with self.assertRaisesRegex(
+            CombatStoreError, "does not continue previous revision"
+        ):
+            self.service.verify_integrity()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT initial_snapshot_json FROM combat_battles WHERE battle_id=?",
+                ("battle-1",),
+            ).fetchone()[0],
+            tampered,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_rejects_current_revision_zero_snapshot_drift(self):
+        self.create_battle()
+        self.db.execute(
+            "UPDATE combat_battles SET first_hp=? WHERE battle_id=?",
+            (19, "battle-1"),
+        )
+        with self.assertRaisesRegex(
+            CombatStoreError, "does not match creation baseline"
+        ):
+            self.service.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
+    def test_legacy_combat_rows_migrate_without_inventing_a_baseline(self):
+        self.create_battle()
+        self.db.execute("ALTER TABLE combat_battles DROP COLUMN initial_snapshot_json")
+        self.db.commit()
+
+        self.service = SqliteAuthorizedCombatService(
+            self.db, ttl_seconds=30, clock=lambda: self.now[0]
+        )
+        columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(combat_battles)")
+        }
+        self.assertIn("initial_snapshot_json", columns)
+        self.assertIsNone(
+            self.db.execute(
+                "SELECT initial_snapshot_json FROM combat_battles WHERE battle_id=?",
+                ("battle-1",),
+            ).fetchone()[0]
+        )
+        self.assertEqual(
+            self.service.verify_integrity(),
+            {
+                "battles": 1,
+                "mutations": 0,
+                "verified_transitions": 0,
+                "anchored_battles": 0,
+                "unanchored_battles": 1,
+            },
+        )
+
+    def test_verify_integrity_rejects_disconnected_but_valid_receipt_transition(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-chain-first", 0, 101
+        )
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-chain-second", 1, 9001
+        )
+
+        raw = self.db.execute(
+            "SELECT result_json FROM combat_mutations WHERE request_id=?",
+            ("audit-chain-first",),
+        ).fetchone()[0]
+        receipt = json.loads(raw)
+        # The first receipt remains individually valid: changing the target's
+        # attack stat does not affect the first actor's already-recorded hit.
+        # It nevertheless cannot lead to the unchanged second receipt.
+        receipt["battle"]["second"][2] = 4
+        tampered = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+        self.db.execute(
+            "UPDATE combat_mutations SET result_json=? WHERE request_id=?",
+            (tampered, "audit-chain-first"),
+        )
+
+        with self.assertRaisesRegex(
+            CombatStoreError, "does not continue previous revision"
+        ):
+            self.service.verify_integrity()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT result_json FROM combat_mutations WHERE request_id=?",
+                ("audit-chain-first",),
+            ).fetchone()[0],
+            tampered,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_rejects_missing_revision_receipt_without_repairing(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-gap-0", 0, 101
+        )
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-gap-1", 1, 9001
+        )
+        self.db.execute(
+            "DELETE FROM combat_mutations WHERE request_id=?",
+            ("audit-gap-0",),
+        )
+
+        with self.assertRaisesRegex(
+            CombatStoreError, "revision history has a gap or duplicate"
+        ):
+            self.service.verify_integrity()
+
+        self.assertEqual(
+            self.db.execute(
+                "SELECT count(*) FROM combat_mutations"
+            ).fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT revision FROM combat_battles WHERE battle_id=?",
+                ("battle-1",),
+            ).fetchone()[0],
+            2,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_rejects_current_snapshot_not_matching_latest_receipt(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-current", 0, 101
+        )
+        self.db.execute(
+            "UPDATE combat_battles SET first_hp=? WHERE battle_id=?",
+            (19, "battle-1"),
+        )
+
+        with self.assertRaisesRegex(
+            CombatStoreError, "current combat snapshot does not match latest receipt"
+        ):
+            self.service.verify_integrity()
+        self.assertEqual(
+            self.db.execute(
+                "SELECT first_hp FROM combat_battles WHERE battle_id=?",
+                ("battle-1",),
+            ).fetchone()[0],
+            19,
+        )
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_rejects_noncanonical_mutation_payload(self):
+        self.create_battle()
+        self.service.attack(
+            self.owner_token, 101, "battle-1", "audit-payload", 0, 101
+        )
+        self.db.execute(
+            "UPDATE combat_mutations SET payload_json=? WHERE request_id=?",
+            ('[ "battle-1", "1", 0, 101 ]', "audit-payload"),
+        )
+
+        with self.assertRaisesRegex(
+            CombatStoreError, "payload is not canonical"
+        ):
+            self.service.verify_integrity()
+        self.assertFalse(self.db.in_transaction)
+
+    def test_verify_integrity_requires_an_idle_connection(self):
+        self.create_battle()
+        self.db.execute("BEGIN")
+        with self.assertRaisesRegex(ValueError, "active transaction"):
+            self.service.verify_integrity()
+        self.db.rollback()
+        self.assertEqual(
+            self.service.verify_integrity(),
+            {
+                "battles": 1,
+                "mutations": 0,
+                "verified_transitions": 0,
+                "anchored_battles": 1,
+                "unanchored_battles": 0,
+            },
+        )
+
+if __name__ == "__main__":
+    unittest.main()

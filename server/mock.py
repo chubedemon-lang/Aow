@@ -1,0 +1,321 @@
+"""Local-only, deliberately synthetic API to exercise server domain behavior.
+
+This is NOT the original AOW protocol. Do not expose it on a public interface.
+"""
+import argparse
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import sqlite3
+from pathlib import Path
+from server.strict_json_request import read_json_object
+from server.runtime_safety import validate_loopback_bind
+
+
+def initialize(conn):
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS accounts (
+            id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE
+        );
+        CREATE TABLE IF NOT EXISTS characters (
+            id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL UNIQUE,
+            name TEXT NOT NULL, map_id TEXT NOT NULL DEFAULT 'test_map',
+            x INTEGER NOT NULL DEFAULT 0, y INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+        CREATE TABLE IF NOT EXISTS wallets (
+            character_id INTEGER PRIMARY KEY,
+            balance INTEGER NOT NULL DEFAULT 0 CHECK(balance >= 0),
+            FOREIGN KEY(character_id) REFERENCES characters(id)
+        );
+        CREATE TABLE IF NOT EXISTS shop_catalog (
+            item_id TEXT PRIMARY KEY,
+            price INTEGER NOT NULL CHECK(price > 0),
+            enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1))
+        );
+        CREATE TABLE IF NOT EXISTS inventory (
+            character_id INTEGER NOT NULL, item_id TEXT NOT NULL,
+            quantity INTEGER NOT NULL CHECK(quantity >= 0),
+            PRIMARY KEY(character_id, item_id),
+            FOREIGN KEY(character_id) REFERENCES characters(id)
+        );
+    """)
+    conn.commit()
+
+
+def _validate_bounded_text(value, field_name):
+    """Validate a synthetic text field without invoking subclass hooks."""
+    if type(value) is not str or not 1 <= len(value) <= 64:
+        raise ValueError(f"invalid {field_name}")
+    return value
+
+
+def _validate_item_id(value):
+    """Accept only canonical built-in ASCII identifiers for synthetic items."""
+    if (
+        type(value) is not str
+        or not 1 <= len(value) <= 64
+        or not all(ch.isascii() and (ch.isalnum() or ch in "._-") for ch in value)
+    ):
+        raise ValueError("invalid item id")
+    return value
+
+
+class Domain:
+    def __init__(self, database):
+        self.database = str(database)
+        with self.connection() as db:
+            initialize(db)
+
+    def connect(self):
+        db = sqlite3.connect(self.database, timeout=5)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys = ON")
+        return db
+
+    @contextmanager
+    def connection(self):
+        """Open one request-scoped connection and always close it.
+
+        sqlite3.Connection's context manager commits or rolls back transactions,
+        but does not close the connection. Keep transaction semantics while
+        ensuring every domain operation releases its file descriptor.
+        """
+        db = self.connect()
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
+    def create_character(self, username, name):
+        username = _validate_bounded_text(username, "username")
+        name = _validate_bounded_text(name, "character name")
+        with self.connection() as db:
+            db.execute("INSERT OR IGNORE INTO accounts(username) VALUES (?)", (username,))
+            account = db.execute("SELECT id FROM accounts WHERE username=?", (username,)).fetchone()
+            db.execute("INSERT INTO characters(account_id, name) VALUES (?,?)", (account["id"], name))
+            char_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+            return {"id": char_id, "name": name, "map_id": "test_map", "x": 0, "y": 0}
+
+    def get_character(self, character_id):
+        if type(character_id) is not int or character_id < 1:
+            raise ValueError("invalid character id")
+        with self.connection() as db:
+            row = db.execute("SELECT id,name,map_id,x,y FROM characters WHERE id=?", (character_id,)).fetchone()
+            if row is None:
+                raise KeyError("character not found")
+            return dict(row)
+
+    def move(self, character_id, x, y):
+        if type(character_id) is not int or character_id < 1:
+            raise ValueError("invalid character id")
+        if type(x) is not int or type(y) is not int or abs(x) > 10000 or abs(y) > 10000:
+            raise ValueError("invalid coordinates")
+        with self.connection() as db:
+            result = db.execute("UPDATE characters SET x=?, y=? WHERE id=?", (x, y, character_id))
+            if result.rowcount == 0:
+                raise KeyError("character not found")
+            # Read the response snapshot before committing this mutation. A
+            # separate get_character() call could observe a later concurrent move.
+            row = db.execute(
+                "SELECT id,name,map_id,x,y FROM characters WHERE id=?",
+                (character_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError("character not found")
+            return dict(row)
+
+
+    def list_inventory(self, character_id):
+        """List a character's synthetic items; does not represent APK item IDs."""
+        if type(character_id) is not int or character_id < 1:
+            raise ValueError("invalid character id")
+        with self.connection() as db:
+            if db.execute("SELECT 1 FROM characters WHERE id=?", (character_id,)).fetchone() is None:
+                raise KeyError("character not found")
+            rows = db.execute(
+                "SELECT item_id, quantity FROM inventory WHERE character_id=? ORDER BY item_id",
+                (character_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def change_inventory(self, character_id, item_id, delta):
+        """Atomically grant or consume an item in the local synthetic domain."""
+        if type(character_id) is not int or character_id < 1:
+            raise ValueError("invalid character id")
+        item_id = _validate_item_id(item_id)
+        if type(delta) is not int or delta == 0 or abs(delta) > 1_000_000:
+            raise ValueError("invalid quantity change")
+        with self.connection() as db:
+            # Lock before reading to prevent lost updates between concurrent requests.
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM characters WHERE id=?", (character_id,)).fetchone() is None:
+                raise KeyError("character not found")
+            row = db.execute(
+                "SELECT quantity FROM inventory WHERE character_id=? AND item_id=?",
+                (character_id, item_id),
+            ).fetchone()
+            quantity = (row["quantity"] if row is not None else 0) + delta
+            if not 0 <= quantity <= 2_147_483_647:
+                raise ValueError("insufficient quantity or overflow")
+            if quantity == 0:
+                db.execute(
+                    "DELETE FROM inventory WHERE character_id=? AND item_id=?",
+                    (character_id, item_id),
+                )
+            else:
+                db.execute(
+                    """INSERT INTO inventory(character_id, item_id, quantity) VALUES (?, ?, ?)
+                       ON CONFLICT(character_id, item_id)
+                       DO UPDATE SET quantity=excluded.quantity""",
+                    (character_id, item_id, quantity),
+                )
+            return {"item_id": item_id, "quantity": quantity}
+
+
+    def credit_wallet(self, character_id, amount):
+        """Test fixture funding only; never expose as a client-controlled endpoint."""
+        if type(character_id) is not int or character_id < 1:
+            raise ValueError("invalid character id")
+        if type(amount) is not int or not 1 <= amount <= 1_000_000:
+            raise ValueError("invalid credit amount")
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM characters WHERE id=?", (character_id,)).fetchone() is None:
+                raise KeyError("character not found")
+            db.execute("INSERT OR IGNORE INTO wallets(character_id, balance) VALUES (?,0)", (character_id,))
+            result = db.execute(
+                "UPDATE wallets SET balance=balance+? WHERE character_id=? AND balance<=?",
+                (amount, character_id, 2_147_483_647 - amount),
+            )
+            if result.rowcount != 1:
+                raise ValueError("wallet overflow")
+            return db.execute("SELECT balance FROM wallets WHERE character_id=?", (character_id,)).fetchone()[0]
+
+    def set_shop_item(self, item_id, price, enabled=True):
+        """Local operator configuration; no client API is provided."""
+        item_id = _validate_item_id(item_id)
+        if type(price) is not int or not 1 <= price <= 1_000_000:
+            raise ValueError("invalid price")
+        if type(enabled) is not bool:
+            raise ValueError("invalid enabled flag")
+        with self.connection() as db:
+            db.execute(
+                """INSERT INTO shop_catalog(item_id, price, enabled) VALUES (?,?,?)
+                   ON CONFLICT(item_id) DO UPDATE SET price=excluded.price, enabled=excluded.enabled""",
+                (item_id, price, int(enabled)),
+            )
+
+    def buy_item(self, character_id, item_id, count=1):
+        """Synthetic shop purchase: atomically debit wallet and grant inventory."""
+        if type(character_id) is not int or character_id < 1:
+            raise ValueError("invalid character id")
+        item_id = _validate_item_id(item_id)
+        if type(count) is not int or not 1 <= count <= 100:
+            raise ValueError("invalid count")
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM characters WHERE id=?", (character_id,)).fetchone() is None:
+                raise KeyError("character not found")
+            catalog = db.execute(
+                "SELECT price FROM shop_catalog WHERE item_id=? AND enabled=1", (item_id,)
+            ).fetchone()
+            if catalog is None:
+                raise KeyError("item unavailable")
+            total = catalog["price"] * count
+            result = db.execute(
+                "UPDATE wallets SET balance=balance-? WHERE character_id=? AND balance>=?",
+                (total, character_id, total),
+            )
+            if result.rowcount != 1:
+                raise ValueError("insufficient funds")
+            existing = db.execute(
+                "SELECT quantity FROM inventory WHERE character_id=? AND item_id=?",
+                (character_id, item_id),
+            ).fetchone()
+            if existing is not None and existing["quantity"] > 2_147_483_647 - count:
+                raise ValueError("inventory overflow")
+            db.execute(
+                """INSERT INTO inventory(character_id,item_id,quantity) VALUES (?,?,?)
+                   ON CONFLICT(character_id,item_id)
+                   DO UPDATE SET quantity=quantity+excluded.quantity""",
+                (character_id, item_id, count),
+            )
+            balance = db.execute(
+                "SELECT balance FROM wallets WHERE character_id=?", (character_id,)
+            ).fetchone()["balance"]
+            return {"item_id": item_id, "quantity_purchased": count, "total": total, "balance": balance}
+
+
+def make_handler(domain):
+    class Handler(BaseHTTPRequestHandler):
+        def respond(self, status, payload):
+            data = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            if path == "/health":
+                return self.respond(200, {"status": "ok", "protocol": "synthetic-test-only"})
+            parts = path.split("/")
+            if len(parts) == 3 and parts[1] == "characters":
+                try:
+                    if not parts[2].isascii() or not parts[2].isdigit():
+                        return self.respond(404, {"error": "not found"})
+                    character_id = int(parts[2])
+                    return self.respond(200, domain.get_character(character_id))
+                except (ValueError, KeyError):
+                    return self.respond(404, {"error": "not found"})
+            return self.respond(404, {"error": "not found"})
+
+        def do_POST(self):
+            try:
+                payload = read_json_object(self.headers, self.rfile, max_bytes=4096)
+                path = self.path.split("?", 1)[0]
+                if path == "/characters":
+                    return self.respond(201, domain.create_character(payload.get("username"), payload.get("name")))
+                parts = path.split("/")
+                if len(parts) == 4 and parts[1] == "characters" and parts[3] == "move":
+                    if not parts[2].isascii() or not parts[2].isdigit():
+                        return self.respond(404, {"error": "not found"})
+                    character_id = int(parts[2])
+                    return self.respond(200, domain.move(character_id, payload.get("x"), payload.get("y")))
+                return self.respond(404, {"error": "not found"})
+            except (ValueError, TypeError, json.JSONDecodeError):
+                return self.respond(400, {"error": "invalid request"})
+            except (KeyError, sqlite3.IntegrityError):
+                return self.respond(409, {"error": "conflict or missing character"})
+
+    return Handler
+
+
+def serve_forever_and_close(server):
+    """Run the server and always release its listening socket on exit."""
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db", default="aow_mock.sqlite3")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="literal IPv4 loopback address only")
+    parser.add_argument("--port", type=int, default=8765)
+    args = parser.parse_args()
+    host, port = validate_loopback_bind(args.host, args.port)
+    domain = Domain(Path(args.db))
+    server = ThreadingHTTPServer((host, port), make_handler(domain))
+    print(f"Synthetic AOW domain API on http://{host}:{port} (NOT APK compatible)")
+    serve_forever_and_close(server)
+
+
+if __name__ == "__main__":
+    main()
