@@ -291,7 +291,10 @@ def _correlate_field_info_arguments_with_control_flow_paths(
         if type(arguments) is not dict or not arguments:
             raise ValueError("FieldInfo arguments must be a non-empty built-in dict")
         for register, reference in arguments.items():
-            if register not in {f"x{index}" for index in range(8)}:
+            if (
+                type(register) is not str
+                or register not in {f"x{index}" for index in range(8)}
+            ):
                 raise ValueError("FieldInfo argument register is invalid")
             if type(reference) is not dict or set(reference) != {
                 "usage_occurrence_position",
@@ -787,8 +790,13 @@ def inspect_bytes(
             "for uniquely resolved direct calls plus bounded simple control-flow "
             "path-shape comparison for the exact serializer/deserializer pair. "
             "Conditional outcomes remain possible, cycles are not unrolled, and "
-            "truncated windows produce partial comparisons. Path-shape similarity "
-            "does not identify field names or serializer order."
+            "FieldInfo arguments are joined to a path callsite only when the "
+            "relative instruction index and canonical metadata method label both "
+            "match; ambiguous indexes and mismatches remain unassigned. "
+            "Conditional outcomes remain possible, cycles are not unrolled, and "
+            "truncated windows produce partial comparisons. Neither the path "
+            "comparison nor the FieldInfo join identifies field names or "
+            "serializer order."
         ),
     }
 
