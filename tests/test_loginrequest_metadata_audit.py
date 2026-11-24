@@ -35,8 +35,10 @@ def make_metadata(*, duplicate_request=False, invalid_field_range=False,
     fields = [add("version"), add("buildNumber")]
     if duplicate_field_names:
         fields[1] = fields[0]
-    methods = [add("get_Version"), add("serialize"), add(".ctor"),
-               add("deserialize"), add(".ctor")]
+    methods = [
+        add("get_Version"), add("serialize"), add(".ctor"),
+        add("deserialize"), add(".ctor"),
+    ]
 
     string_offset = 0x200
     method_offset = 0x300
@@ -54,26 +56,29 @@ def make_metadata(*, duplicate_request=False, invalid_field_range=False,
     type_count = 4 if duplicate_request else (2 if missing_serializer else 3)
     pair(0xA0, type_offset, type_count * 0x58)
 
-    # Method records: name index at +0 and parameter count at +0x22.
     parameter_counts = (0, 4, 0, 3, 0)
     for i, (name_index, parameter_count) in enumerate(zip(methods, parameter_counts)):
         record = method_offset + i * 0x24
         struct.pack_into("<i", data, record, name_index)
         struct.pack_into("<H", data, record + 0x22, parameter_count)
 
-    # Field records: name index, type index, custom-attribute index.
     for i, name_index in enumerate(fields):
-        struct.pack_into("<iii", data, field_offset + i * 0x0C,
-                         name_index, 100 + i, -1)
+        struct.pack_into(
+            "<iii", data, field_offset + i * 0x0C, name_index, 100 + i, -1
+        )
 
     def type_record(index, name_index, namespace_index, field_start,
                     method_start, method_count, field_count):
         record = type_offset + index * 0x58
         struct.pack_into("<ii", data, record, name_index, namespace_index)
-        struct.pack_into("<i", data, record + 0x20,
-                         99 if invalid_field_range and index == 0 else field_start)
-        struct.pack_into("<i", data, record + 0x24,
-                         99 if invalid_method_range and index == 0 else method_start)
+        struct.pack_into(
+            "<i", data, record + 0x20,
+            99 if invalid_field_range and index == 0 else field_start,
+        )
+        struct.pack_into(
+            "<i", data, record + 0x24,
+            99 if invalid_method_range and index == 0 else method_start,
+        )
         struct.pack_into("<H", data, record + 0x40, method_count)
         struct.pack_into("<H", data, record + 0x44, field_count)
 
@@ -159,8 +164,7 @@ class LoginRequestMetadataAuditTests(unittest.TestCase):
             apk = Path(directory) / "synthetic.apk"
             with zipfile.ZipFile(apk, "w", compression=zipfile.ZIP_STORED) as archive:
                 archive.writestr(
-                    "assets/bin/Data/Managed/Metadata/global-metadata.dat",
-                    metadata,
+                    "assets/bin/Data/Managed/Metadata/global-metadata.dat", metadata
                 )
             digest = hashlib.sha256(apk.read_bytes()).hexdigest()
             report = inspect_apk(apk, digest)
