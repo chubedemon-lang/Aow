@@ -52,6 +52,36 @@ class OccupancyPruneTests(unittest.TestCase):
         self.assertEqual(self.maps.prune(), 1)
         self.assertEqual(self.maps.prune(), 0)
 
+    def test_members_and_epoch_hide_live_session_after_direct_leave(self):
+        self.maps.join("a", 42)
+        self.registry.get("a").leave_map()
+
+        # Reads must not expose a stale live occupant before explicit pruning.
+        self.assertFalse(self.maps.members(42))
+        self.assertIsNone(self.maps.join_epoch("a"))
+        self.assertEqual(self.maps.prune(), 1)
+        self.assertEqual(self.maps.prune(), 0)
+
+    def test_members_hide_live_session_after_direct_rejoin_on_another_map(self):
+        self.maps.join("a", 42)
+        session = self.registry.get("a")
+        session.leave_map()
+        session.join_map(99)
+
+        # The direct registry transition did not reserve occupancy on map 99.
+        self.assertFalse(self.maps.members(42))
+        self.assertFalse(self.maps.members(99))
+        self.assertIsNone(self.maps.join_epoch("a"))
+        self.assertEqual(self.maps.prune(), 1)
+
+    def test_prune_preserves_closed_stale_key_for_diagnostics(self):
+        self.maps.join("a", 42)
+        self.registry.close("a")
+        # Closed entries retain their last-known key until an explicit prune.
+        self.assertEqual(self.maps.members(42), frozenset({"a"}))
+        self.assertEqual(self.maps.prune(), 1)
+        self.assertFalse(self.maps.members(42))
+
 
 if __name__ == "__main__":
     unittest.main()

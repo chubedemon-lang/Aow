@@ -19,6 +19,16 @@ Closing a session removes the reverse lookup. Until prune runs, members()
 retains the last-known key for a closed stale entry, preserving the existing
 diagnostic behavior; join_epoch() returns None for a closed or unknown key.
 
+Membership reads capture each retained Session's current key and immutable
+state snapshot under one registry lock. A live session that leaves a map or
+moves to another map through a registry transition outside MapOccupancy is
+immediately omitted from the old occupancy query, even before prune removes
+the stale index entry. Such a session is not treated as an occupant of its new
+map unless MapOccupancy.join() publishes that membership. Closed stale entries
+remain visible by their last-known key only for diagnostics until prune runs.
+join_epoch() returns an epoch only when the registered session is still in the
+map and is present in the corresponding occupancy index.
+
 The admission sequence is:
 
 1. Hold the occupancy lock and the registry's locked-session context.
@@ -30,9 +40,9 @@ The admission sequence is:
 7. Release the registry lock and then the occupancy lock.
 
 Leave and disconnect also hold the registry lock across the session transition
-and membership removal. Membership queries resolve all current connection
-keys under one registry snapshot and fall back to last-known keys only for
-closed entries awaiting prune. Concurrent callers using the same
+and membership removal. Membership queries resolve current connection keys
+and state snapshots under one registry lock, while falling back to last-known
+keys only for closed entries awaiting prune. Concurrent callers using the same
 MapOccupancy instance therefore observe a serialized capacity decision; two
 simultaneous joins cannot both claim the final slot, and an in-map handoff does
 not orphan an occupant.
@@ -53,6 +63,8 @@ Run:
 
 The concurrency regressions verify that exactly one of twelve contenders
 obtains a map with capacity one, and that a verified handoff during admission
-preserves membership and join epoch under the new connection key. All
-identifiers and map values are synthetic. No AOW packet, map ID, coordinate,
-room capacity, reconnect behavior, or APK behavior is inferred.
+preserves membership and join epoch under the new connection key. Additional
+regressions cover direct registry transitions, stale live-index reads, closed
+stale-key diagnostics, and idempotent pruning. All identifiers and map values
+are synthetic. No AOW packet, map ID, coordinate, room capacity, reconnect
+behavior, or APK behavior is inferred.
