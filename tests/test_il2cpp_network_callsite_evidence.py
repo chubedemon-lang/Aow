@@ -13,6 +13,7 @@ from test_il2cpp_native_method_evidence import make_elf, make_metadata
 from tools.aarch64_call_argument_evidence import summarize_small_argument_constants
 from tools.il2cpp_network_callsite_evidence import (
     CALLSITE_ARGUMENT_TARGET_PREFIXES,
+    _summarize_login_request_path_comparison,
     _metadata_usage_static_values,
     _metadata_usage_static_field_info_values,
     inspect_bytes,
@@ -414,6 +415,22 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         self.assertEqual(report["callsite_summary"], [])
         self.assertEqual(len(report["login_request_callsite_summary"]), 1)
 
+        login_entry = report["login_request_callsite_summary"][0]
+        self.assertEqual(
+            login_entry["control_flow_path_analysis_kind"],
+            "bounded_simple_path_enumeration",
+        )
+        self.assertGreaterEqual(login_entry["control_flow_path_count"], 1)
+        self.assertIsInstance(login_entry["control_flow_paths"], list)
+        self.assertFalse(login_entry["control_flow_paths_truncated"])
+        self.assertEqual(
+            report["login_request_path_comparison"]["comparison_status"],
+            "unpaired_or_ambiguous",
+        )
+        self.assertFalse(
+            report["login_request_path_comparison"]["field_order_inferred"]
+        )
+
         provenance = report["login_request_callsite_summary"][0][
             "field_info_call_argument_provenance"
         ]
@@ -434,6 +451,87 @@ class NetworkCallsiteEvidenceTests(unittest.TestCase):
         self.assertNotIn(hex(encoded), rendered)
         self.assertFalse(report["native_addresses_emitted"])
         self.assertFalse(report["raw_instructions_emitted"])
+
+    def test_login_request_path_comparison_normalizes_primitive_helper_families(self):
+        serializer = {
+            "type": "LoginRequestSTSerializer",
+            "method": "serialize",
+            "entry_window_truncated": False,
+            "control_flow_paths": [{
+                "exit_kind": "return",
+                "helper_callsite_observations": [{
+                    "kind": "direct_call",
+                    "method": "com.geargames.serialization.SimpleSerializer::serializeInt",
+                }],
+            }],
+            "control_flow_path_count": 1,
+            "control_flow_paths_truncated": False,
+            "control_flow_path_analysis_status": "bounded",
+        }
+        deserializer = {
+            "type": "LoginRequestSTDeserializer",
+            "method": "deserialize",
+            "entry_window_truncated": False,
+            "control_flow_paths": [{
+                "exit_kind": "return",
+                "helper_callsite_observations": [{
+                    "kind": "direct_call",
+                    "method": "com.geargames.serialization.SimpleDeserializer::deserializeInt",
+                }],
+            }],
+            "control_flow_path_count": 1,
+            "control_flow_paths_truncated": False,
+            "control_flow_path_analysis_status": "bounded",
+        }
+
+        comparison = _summarize_login_request_path_comparison(
+            [serializer, deserializer]
+        )
+        self.assertEqual(comparison["comparison_status"], "bounded")
+        self.assertEqual(comparison["path_pair_count"], 1)
+        self.assertEqual(comparison["maximum_common_helper_prefix_length"], 1)
+        self.assertFalse(comparison["field_order_inferred"])
+
+    def test_login_request_path_comparison_is_partial_for_truncated_entry_window(self):
+        serializer = {
+            "type": "LoginRequestSTSerializer",
+            "method": "serialize",
+            "entry_window_truncated": True,
+            "control_flow_paths": [],
+            "control_flow_path_count": 0,
+            "control_flow_paths_truncated": True,
+            "control_flow_path_analysis_status": "cfg_truncated",
+        }
+        deserializer = {
+            "type": "LoginRequestSTDeserializer",
+            "method": "deserialize",
+            "entry_window_truncated": False,
+            "control_flow_paths": [],
+            "control_flow_path_count": 0,
+            "control_flow_paths_truncated": False,
+            "control_flow_path_analysis_status": "empty",
+        }
+
+        comparison = _summarize_login_request_path_comparison(
+            [serializer, deserializer]
+        )
+        self.assertEqual(comparison["comparison_status"], "partial")
+        self.assertTrue(comparison["serializer_entry_window_truncated"])
+        self.assertFalse(comparison["field_order_inferred"])
+
+    def test_login_request_path_comparison_rejects_non_boolean_truncation_flags(self):
+        serializer = {
+            "type": "LoginRequestSTSerializer",
+            "method": "serialize",
+            "entry_window_truncated": 0,
+        }
+        deserializer = {
+            "type": "LoginRequestSTDeserializer",
+            "method": "deserialize",
+            "entry_window_truncated": False,
+        }
+        with self.assertRaises(ValueError):
+            _summarize_login_request_path_comparison([serializer, deserializer])
 
     def test_login_request_deserializer_is_included_but_other_login_types_are_not(self):
         for type_name, method_name, expected in (

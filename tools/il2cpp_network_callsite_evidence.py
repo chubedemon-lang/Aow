@@ -62,6 +62,9 @@ from tools.il2cpp_native_method_evidence import (
     _relocated_indirect_call_targets,
     _summarize_named_method_calls,
     _summarize_relocated_indirect_calls,
+    _summarize_control_flow_serializer_helper_blocks,
+    _summarize_control_flow_helper_paths,
+    _summarize_serializer_deserializer_path_alignment,
 )
 
 NETWORK_SUPPORT_METHODS = {
@@ -177,6 +180,49 @@ CALLSITE_ARGUMENT_TARGET_PREFIXES = (
     "ClientStreamBuffer::Write",
     "MessageDispatcher::SafeRegister",
 )
+
+
+def _summarize_login_request_path_comparison(callsite_summary):
+    """Compare only the exact LoginRequest serializer/deserializer CFG paths."""
+    if type(callsite_summary) is not list:
+        raise ValueError("LoginRequest callsite summary must be a built-in list")
+    serializers = []
+    deserializers = []
+    for entry in callsite_summary:
+        if type(entry) is not dict:
+            raise ValueError("LoginRequest callsite entries must be built-in dicts")
+        if entry.get("type") == "LoginRequestSTSerializer" and entry.get("method") == "serialize":
+            serializers.append(entry)
+        elif entry.get("type") == "LoginRequestSTDeserializer" and entry.get("method") == "deserialize":
+            deserializers.append(entry)
+
+    if len(serializers) != 1 or len(deserializers) != 1:
+        return {
+            "comparison_kind": "login_request_bounded_control_flow_path_shape",
+            "comparison_status": "unpaired_or_ambiguous",
+            "serializer_entry_count": len(serializers),
+            "deserializer_entry_count": len(deserializers),
+            "field_order_inferred": False,
+        }
+
+    serializer_truncated = serializers[0].get("entry_window_truncated")
+    deserializer_truncated = deserializers[0].get("entry_window_truncated")
+    if type(serializer_truncated) is not bool or type(deserializer_truncated) is not bool:
+        raise ValueError("LoginRequest entry-window truncation flags must be booleans")
+    comparison = _summarize_serializer_deserializer_path_alignment(
+        serializers[0], deserializers[0]
+    )
+    if serializer_truncated or deserializer_truncated:
+        comparison["comparison_status"] = "partial"
+    return {
+        "comparison_kind": "login_request_bounded_control_flow_path_shape",
+        "serializer_entry_count": 1,
+        "deserializer_entry_count": 1,
+        "serializer_entry_window_truncated": serializer_truncated,
+        "deserializer_entry_window_truncated": deserializer_truncated,
+        **comparison,
+        "field_order_inferred": False,
+    }
 
 
 def inspect_bytes(
@@ -372,6 +418,23 @@ def inspect_bytes(
         all_entrypoint_targets,
     ))
 
+    serializer_helper_prefixes = (
+        "com.geargames.serialization.SimpleSerializer::",
+        "com.geargames.serialization.SimpleDeserializer::",
+    )
+    serializer_helper_targets = {
+        target: [
+            label for label in labels
+            if any(label.startswith(prefix) for prefix in serializer_helper_prefixes)
+        ]
+        for target, labels in method_targets.items()
+        if any(
+            label.startswith(prefix)
+            for label in labels
+            for prefix in serializer_helper_prefixes
+        )
+    }
+
     # Keep absolute relocation targets private to this analysis pass. The
     # downstream summary emits only symbolic provenance classes and relative
     # instruction indexes, never slot or target addresses.
@@ -474,6 +537,16 @@ def inspect_bytes(
         indirect_summary = _summarize_relocated_indirect_calls(
             code, target, relocations, method_targets
         )
+        control_flow_summary = _summarize_control_flow_serializer_helper_blocks(
+            code,
+            target,
+            relocations,
+            serializer_helper_targets,
+            method_targets=method_targets,
+        )
+        control_flow_path_summary = _summarize_control_flow_helper_paths(
+            control_flow_summary
+        )
         login_request_callsite_summary.append({
             "type": method["type"],
             "method": method["method"],
@@ -483,6 +556,8 @@ def inspect_bytes(
             "entry_window_truncated": truncated,
             **named_summary,
             **indirect_summary,
+            **control_flow_summary,
+            **control_flow_path_summary,
             "field_info_call_argument_provenance": (
                 summarize_field_info_call_arguments(
                     code,
@@ -495,6 +570,9 @@ def inspect_bytes(
         })
     login_request_callsite_summary.sort(
         key=lambda item: (item["type"], item["method"], item["image"])
+    )
+    login_request_path_comparison = _summarize_login_request_path_comparison(
+        login_request_callsite_summary
     )
 
     return {
@@ -512,6 +590,7 @@ def inspect_bytes(
         "field_info_usage_cell_addresses_emitted": False,
         "callsite_summary": callsite_summary,
         "login_request_callsite_summary": login_request_callsite_summary,
+        "login_request_path_comparison": login_request_path_comparison,
         "native_addresses_emitted": False,
         "raw_instructions_emitted": False,
         "packet_bytes_emitted": False,
@@ -532,9 +611,12 @@ def inspect_bytes(
             "the optional native-type flag adds only a symbolic Il2CppType "
             "category. Neither result identifies a managed owner or proves that "
             "a selected network method accesses the field. The separate "
-            "LoginRequest summary adds only static FieldInfo-to-argument "
-            "coordinates for uniquely resolved direct calls; it does not "
-            "identify field names or serializer order."
+            "LoginRequest summary adds static FieldInfo-to-argument coordinates "
+            "for uniquely resolved direct calls plus bounded simple control-flow "
+            "path-shape comparison for the exact serializer/deserializer pair. "
+            "Conditional outcomes remain possible, cycles are not unrolled, and "
+            "truncated windows produce partial comparisons. Path-shape similarity "
+            "does not identify field names or serializer order."
         ),
     }
 
