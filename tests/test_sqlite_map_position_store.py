@@ -181,6 +181,35 @@ class SqliteMapPositionStoreTests(unittest.TestCase):
         with self.assertRaises(MapPositionOperationConflict):
             self.store.move("hero", "same-operation-key", 0, 1, 1, 1)
 
+    def test_validated_and_unvalidated_moves_do_not_share_idempotency_receipts(self):
+        self.store.create("hero")
+        self.store.enter("hero", "hero-enter", 0, 1, 0, 0)
+        unvalidated = self.store.move(
+            "hero", "shared-unvalidated", 1, 1, 100, 0
+        )
+        with self.assertRaises(MapPositionOperationConflict):
+            self.store.move_validated(
+                "hero", "shared-unvalidated", 1, 1, 100, 0,
+                max_speed=1, elapsed_seconds=1.0,
+            )
+        self.assertEqual(self.store.get("hero"), unvalidated.snapshot)
+
+        self.store.create("alt")
+        self.store.enter("alt", "alt-enter", 0, 1, 0, 0)
+        validated = self.store.move_validated(
+            "alt", "shared-validated", 1, 1, 1, 0,
+            max_speed=1, elapsed_seconds=1.0,
+        )
+        with self.assertRaises(MapPositionOperationConflict):
+            self.store.move(
+                "alt", "shared-validated", 1, 1, 1, 0
+            )
+        self.assertEqual(self.store.get("alt"), validated.snapshot)
+        self.assertEqual(
+            self.store.verify_integrity(),
+            {"snapshots": 2, "mutations": 4},
+        )
+
     def test_invalid_identifiers_maps_coordinates_and_revisions(self):
         for character_id in ("", " hero", "hero ", "x" * 129, None):
             with self.assertRaises(MapPositionStoreError):
