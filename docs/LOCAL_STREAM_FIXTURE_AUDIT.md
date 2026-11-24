@@ -135,7 +135,8 @@ assertion rather than independent protocol evidence.
 The receive candidate still models only the static four-byte signed
 big-endian count branch and rejects the HTTP marker branch. It does not verify
 the active runtime branch, full outer frame, compression/encryption placement,
-message IDs, handshake, or login. The redacted output includes
+message IDs, handshake, or login. The report still includes stream/chunk counts
+and at most 4,096 candidate frame sizes. The redacted output also includes
 `fixture_sha256` and `fixture_size_bytes` for the exact input JSON bytes,
 separately from `apk_sha256`, which is an asserted client-build fingerprint.
 The fixture digest helps identify the precise private artifact used for a
