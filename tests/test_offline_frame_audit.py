@@ -140,7 +140,7 @@ class OfflineFrameAuditTests(unittest.TestCase):
         spec = FrameSpec(1, "big", max_payload=8)
         with self.assertRaises(FrameDecodeError):
             audit_packet_fixture_frames(
-                fixture(b"\\x03ab"),
+                fixture(b"\x03ab"),
                 expected_source_sha256=SOURCE_SHA256,
                 spec=spec,
                 chunk_size=1,
@@ -150,7 +150,7 @@ class OfflineFrameAuditTests(unittest.TestCase):
         spec = FrameSpec(1, "big", max_payload=2)
         with self.assertRaises(FrameDecodeError):
             audit_packet_fixture_frames(
-                fixture(b"\\x03abc"),
+                fixture(b"\x03abc"),
                 expected_source_sha256=SOURCE_SHA256,
                 spec=spec,
             )
@@ -159,7 +159,7 @@ class OfflineFrameAuditTests(unittest.TestCase):
         spec = FrameSpec(1, "big", max_payload=0, max_frames_per_feed=16)
         with self.assertRaises(OfflineFrameAuditError):
             audit_packet_fixture_frames(
-                fixture(b"\\x00\\x00\\x00"),
+                fixture(b"\x00\x00\x00"),
                 expected_source_sha256=SOURCE_SHA256,
                 spec=spec,
                 chunk_size=1,
