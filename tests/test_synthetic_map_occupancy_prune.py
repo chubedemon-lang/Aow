@@ -1,5 +1,6 @@
 """Local-only occupancy reconciliation regression tests (not APK wire fixtures)."""
 import unittest
+from unittest.mock import patch
 
 from server.synthetic_map_occupancy import MapOccupancy
 from server.synthetic_session_registry import SessionRegistry
@@ -73,6 +74,39 @@ class OccupancyPruneTests(unittest.TestCase):
         self.assertFalse(self.maps.members(99))
         self.assertIsNone(self.maps.join_epoch("a"))
         self.assertEqual(self.maps.prune(), 1)
+
+    def test_prune_uses_atomic_registry_state_snapshot(self):
+        self.maps.join("a", 42)
+        session = self.registry.get("a")
+        session.leave_map()
+
+        # Prune must not combine a session snapshot with a separately acquired
+        # connection key: a transition could occur between those two reads.
+        captured_sessions = []
+        original_reader = self.registry.connection_states_for
+
+        def capture_states(sessions):
+            captured_sessions.append(frozenset(sessions))
+            return original_reader(sessions)
+
+        with patch.object(
+            self.registry,
+            "connection_states_for",
+            side_effect=capture_states,
+        ) as snapshot_reader:
+            with patch.object(
+                self.registry,
+                "connection_id_for",
+                side_effect=AssertionError("prune must use an atomic state snapshot"),
+            ):
+                self.assertEqual(self.maps.prune(), 1)
+
+            snapshot_reader.assert_called_once()
+
+        self.assertEqual(captured_sessions, [frozenset({session})])
+
+        self.assertFalse(self.maps.members(42))
+        self.assertIsNone(self.maps.join_epoch("a"))
 
     def test_prune_preserves_closed_stale_key_for_diagnostics(self):
         self.maps.join("a", 42)

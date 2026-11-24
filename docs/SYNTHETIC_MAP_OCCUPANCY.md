@@ -29,6 +29,8 @@ remain visible by their last-known key only for diagnostics until prune runs.
 join_epoch() returns an epoch only when the registered session is still in the
 map and is present in the corresponding occupancy index.
 
+Pruning resolves all retained handles for each map through one registry-locked batch snapshot. It does not combine separately acquired connection-key and session-state reads that could straddle a transition. A transition occurring after that snapshot may be reconciled by the next prune, so this remains a process-local defensive index rather than a cross-process transaction.
+
 The admission sequence is:
 
 1. Hold the occupancy lock and the registry's locked-session context.
