@@ -224,7 +224,9 @@ class SqliteMapCapacityStoreTests(unittest.TestCase):
 
         with self.assertRaisesRegex(MapCapacityStoreError, "foreign keys are disabled"):
             self.capacity.configure_map(7, 1)
-        self.assertIsNone(self.capacity.capacity(7))
+        self.assertIsNone(self.db.execute(
+            "SELECT capacity FROM map_capacity_limits WHERE map_id=7"
+        ).fetchone())
         self.assertFalse(self.db.in_transaction)
 
         with self.assertRaisesRegex(MapCapacityStoreError, "foreign keys are disabled"):
@@ -236,7 +238,9 @@ class SqliteMapCapacityStoreTests(unittest.TestCase):
 
         with self.assertRaisesRegex(MapCapacityStoreError, "CHECK constraints are disabled"):
             self.capacity.configure_map(7, 1)
-        self.assertIsNone(self.capacity.capacity(7))
+        self.assertIsNone(self.db.execute(
+            "SELECT capacity FROM map_capacity_limits WHERE map_id=7"
+        ).fetchone())
         self.assertFalse(self.db.in_transaction)
 
         with self.assertRaisesRegex(MapCapacityStoreError, "CHECK constraints are disabled"):
@@ -262,6 +266,31 @@ class SqliteMapCapacityStoreTests(unittest.TestCase):
             self.assertTrue(self.db.in_transaction)
         finally:
             self.db.rollback()
+
+
+    def test_read_methods_fail_closed_if_foreign_keys_are_disabled(self):
+        self.capacity.configure_map(7, 1)
+        self.db.execute("PRAGMA foreign_keys = OFF")
+
+        for read in (self.capacity.capacity, self.capacity.members):
+            with self.subTest(read=read.__name__):
+                with self.assertRaisesRegex(
+                    MapCapacityStoreError, "foreign keys are disabled"
+                ):
+                    read(7)
+                self.assertFalse(self.db.in_transaction)
+
+    def test_read_methods_fail_closed_if_check_constraints_are_disabled(self):
+        self.capacity.configure_map(7, 1)
+        self.db.execute("PRAGMA ignore_check_constraints = ON")
+
+        for read in (self.capacity.capacity, self.capacity.members):
+            with self.subTest(read=read.__name__):
+                with self.assertRaisesRegex(
+                    MapCapacityStoreError, "CHECK constraints are disabled"
+                ):
+                    read(7)
+                self.assertFalse(self.db.in_transaction)
 
 
 if __name__ == "__main__":
