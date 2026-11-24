@@ -178,7 +178,8 @@ class SqliteAuthorizedWorldStateService:
             ),
         )
 
-    def leave_and_get_snapshot(        self, token: str, character_id: int, request_id: str,
+    def leave_and_get_snapshot(
+        self, token: str, character_id: int, request_id: str,
         expected_revision: int, map_id: int,
     ) -> AuthorizedWorldMutationSnapshot:
         """Leave a synthetic map and return the world snapshot in one commit."""

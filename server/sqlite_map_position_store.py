@@ -744,7 +744,8 @@ class SqliteMapPositionStore:
         )
 
     def leave(self, character_id: str, request_id: str, expected_revision: int,
-              map_id: int) -> MapPositionMutation:        map_id = self._map_id(map_id)
+              map_id: int) -> MapPositionMutation:
+        map_id = self._map_id(map_id)
 
         def transition(current):
             if current.map_id != map_id:
