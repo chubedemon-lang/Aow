@@ -238,7 +238,9 @@ class SqliteMapCapacityStoreTests(unittest.TestCase):
 
         with self.assertRaisesRegex(MapCapacityStoreError, "CHECK constraints are disabled"):
             self.capacity.configure_map(7, 1)
-        self.assertIsNone(self.capacity.capacity(7))
+        self.assertIsNone(self.db.execute(
+            "SELECT capacity FROM map_capacity_limits WHERE map_id=7"
+        ).fetchone())
         self.assertFalse(self.db.in_transaction)
 
         with self.assertRaisesRegex(MapCapacityStoreError, "CHECK constraints are disabled"):
