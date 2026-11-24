@@ -119,7 +119,9 @@ class SqliteSessionStore:
                 "CREATE INDEX durable_sessions_expiry "
                 "ON durable_sessions(expires_at)"
             )
-            return True
+            # Continue through index and persisted-CHECK validation. Creating
+            # the missing index must not bypass validation of an existing table.
+            index_object = ("index", "durable_sessions")
         if index_object != ("index", "durable_sessions"):
             raise ValueError("incompatible durable session expiry index")
 
