@@ -19,6 +19,7 @@ class OfflineFrameAudit:
     """Payload-free summary of one completely decoded private fixture."""
 
     source_sha256: str
+    fixture_sha256: str
     frame_count: int
     wire_bytes: int
     header_bytes: int
@@ -43,7 +44,7 @@ def audit_packet_fixture_frames(
     The caller must independently establish both the source digest and the
     FrameSpec. The function validates fixture provenance/integrity, decodes
     the entire fixture with bounded incremental input, requires clean EOF,
-    and returns only sizes and SHA-256 digests. Raw bytes are never returned,
+    and returns only sizes, offsets and SHA-256 digests. Raw bytes are never returned,
     logged, or retained in the result.
 
     This is a generic offline audit helper, not an AOW packet decoder. A
@@ -86,6 +87,7 @@ def audit_packet_fixture_frames(
         expected_source_sha256=expected_source_sha256,
         max_bytes=max_fixture_bytes,
     )
+    fixture_sha256 = hashlib.sha256(payload).hexdigest()
     sizes = []
     digests = []
     spans = []
@@ -115,6 +117,7 @@ def audit_packet_fixture_frames(
 
     return OfflineFrameAudit(
         source_sha256=expected_source_sha256,
+        fixture_sha256=fixture_sha256,
         frame_count=len(sizes),
         wire_bytes=len(payload),
         header_bytes=header_bytes,
