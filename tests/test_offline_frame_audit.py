@@ -4,6 +4,7 @@ import unittest
 
 from server.offline_frame_probe import FrameDecodeError, FrameSpec
 from server.offline_frame_audit import (
+    OfflineFrameAudit,
     OfflineFrameAuditError,
     audit_packet_fixture_frames,
 )
@@ -31,6 +32,22 @@ def encode(payloads, spec):
             declared.to_bytes(spec.length_bytes, spec.byteorder) + payload
         )
     return b"".join(frames)
+
+
+def valid_summary(**overrides):
+    values = {
+        "source_sha256": "a" * 64,
+        "fixture_sha256": "b" * 64,
+        "frame_count": 1,
+        "wire_bytes": 3,
+        "header_bytes": 1,
+        "payload_bytes": 2,
+        "payload_sizes": (2,),
+        "payload_sha256": ("c" * 64,),
+        "frame_spans": ((0, 1, 3),),
+    }
+    values.update(overrides)
+    return OfflineFrameAudit(**values)
 
 
 class OfflineFrameAuditTests(unittest.TestCase):
@@ -76,7 +93,6 @@ class OfflineFrameAuditTests(unittest.TestCase):
             result.frame_spans,
             ((0, 2, 2), (2, 4, 5), (5, 7, 9)),
         )
-
 
     def test_frame_spans_are_zero_based_and_end_exclusive_across_fragments(self):
         spec = FrameSpec(1, "big", max_payload=8)
@@ -124,7 +140,7 @@ class OfflineFrameAuditTests(unittest.TestCase):
         spec = FrameSpec(1, "big", max_payload=8)
         with self.assertRaises(FrameDecodeError):
             audit_packet_fixture_frames(
-                fixture(b"\x03ab"),
+                fixture(b"\\x03ab"),
                 expected_source_sha256=SOURCE_SHA256,
                 spec=spec,
                 chunk_size=1,
@@ -134,7 +150,7 @@ class OfflineFrameAuditTests(unittest.TestCase):
         spec = FrameSpec(1, "big", max_payload=2)
         with self.assertRaises(FrameDecodeError):
             audit_packet_fixture_frames(
-                fixture(b"\x03abc"),
+                fixture(b"\\x03abc"),
                 expected_source_sha256=SOURCE_SHA256,
                 spec=spec,
             )
@@ -143,7 +159,7 @@ class OfflineFrameAuditTests(unittest.TestCase):
         spec = FrameSpec(1, "big", max_payload=0, max_frames_per_feed=16)
         with self.assertRaises(OfflineFrameAuditError):
             audit_packet_fixture_frames(
-                fixture(b"\x00\x00\x00"),
+                fixture(b"\\x00\\x00\\x00"),
                 expected_source_sha256=SOURCE_SHA256,
                 spec=spec,
                 chunk_size=1,
@@ -186,6 +202,59 @@ class OfflineFrameAuditTests(unittest.TestCase):
                 expected_source_sha256=SOURCE_SHA256,
                 spec=spec,
             )
+
+    def test_public_summary_rejects_mutable_sequences(self):
+        with self.assertRaisesRegex(TypeError, "payload_sizes"):
+            valid_summary(payload_sizes=[2])
+        with self.assertRaisesRegex(TypeError, "frame_spans"):
+            valid_summary(frame_spans=[[0, 1, 3]])
+
+    def test_public_summary_rejects_noncontiguous_spans(self):
+        with self.assertRaisesRegex(ValueError, "contiguous"):
+            valid_summary(
+                frame_count=2,
+                wire_bytes=5,
+                header_bytes=2,
+                payload_bytes=2,
+                payload_sizes=(1, 1),
+                payload_sha256=("c" * 64, "d" * 64),
+                frame_spans=((0, 1, 2), (3, 4, 5)),
+            )
+
+    def test_public_summary_rejects_inconsistent_aggregate_counts(self):
+        with self.assertRaisesRegex(ValueError, "header byte count"):
+            valid_summary(header_bytes=2)
+        with self.assertRaisesRegex(ValueError, "payload byte count"):
+            valid_summary(payload_bytes=3)
+        with self.assertRaisesRegex(ValueError, "wire byte count"):
+            valid_summary(wire_bytes=4)
+
+    def test_public_summary_rejects_invalid_digest_and_boolean_offsets(self):
+        with self.assertRaisesRegex(ValueError, "fixture_sha256"):
+            valid_summary(fixture_sha256="B" * 64)
+        with self.assertRaisesRegex(ValueError, "frame span offset"):
+            valid_summary(frame_spans=((False, 1, 3),))
+
+    def test_public_summary_requires_consistent_header_width(self):
+        with self.assertRaisesRegex(ValueError, "header widths"):
+            valid_summary(
+                frame_count=2,
+                wire_bytes=6,
+                header_bytes=3,
+                payload_bytes=3,
+                payload_sizes=(1, 2),
+                payload_sha256=("c" * 64, "d" * 64),
+                frame_spans=((0, 1, 2), (2, 4, 6)),
+            )
+
+    def test_public_summary_is_deeply_immutable(self):
+        from dataclasses import FrozenInstanceError
+
+        result = valid_summary()
+        with self.assertRaises(FrozenInstanceError):
+            result.frame_count = 2
+        with self.assertRaises(TypeError):
+            result.payload_sizes[0] = 9
 
 
 if __name__ == "__main__":
