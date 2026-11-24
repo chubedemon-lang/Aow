@@ -155,8 +155,30 @@ class SqliteAuthorizedWorldStateService:
             ),
         )
 
-    def leave_and_get_snapshot(
+    def move_validated_and_get_snapshot(
         self, token: str, character_id: int, request_id: str,
+        expected_revision: int, map_id: int, x: int, y: int, *,
+        max_speed, elapsed_seconds, epsilon=1e-6,
+    ) -> AuthorizedWorldMutationSnapshot:
+        """Apply a caller-configured synthetic speed check and return one snapshot.
+
+        The elapsed interval must be measured server-side with a monotonic
+        clock. It is not a client input, and the configured speed is not an
+        inferred AOW movement rule. Authorization, validation, persistence and
+        the returned world snapshot share the same SQLite transaction.
+        """
+        return self._mutate_map_and_get_snapshot(
+            token,
+            character_id,
+            lambda owned_id: self.positions.move_validated(
+                owned_id, request_id, expected_revision, map_id, x, y,
+                max_speed=max_speed,
+                elapsed_seconds=elapsed_seconds,
+                epsilon=epsilon,
+            ),
+        )
+
+    def leave_and_get_snapshot(        self, token: str, character_id: int, request_id: str,
         expected_revision: int, map_id: int,
     ) -> AuthorizedWorldMutationSnapshot:
         """Leave a synthetic map and return the world snapshot in one commit."""

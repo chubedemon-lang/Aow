@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable
 
+from server.movement_validation import MovementValidator, Position as MovementPosition
 from server.synthetic_map_position import MapPosition, MapPositionError, Position
 
 
@@ -705,9 +706,45 @@ class SqliteMapPositionStore:
             transition,
         )
 
-    def leave(self, character_id: str, request_id: str, expected_revision: int,
-              map_id: int) -> MapPositionMutation:
+    def move_validated(
+        self, character_id: str, request_id: str, expected_revision: int,
+        map_id: int, x: int, y: int, *, max_speed, elapsed_seconds,
+        epsilon=1e-6,
+    ) -> MapPositionMutation:
+        """Apply a speed-limited synthetic move inside the durable write scope.
+
+        max_speed is expressed in caller-defined coordinate units per second.
+        elapsed_seconds must come from a trusted server-side monotonic clock;
+        never accept a client timestamp or client-supplied elapsed interval.
+        Validation runs only for a new transition. An exact idempotent retry
+        returns its original receipt without re-running the policy check, while
+        a reused request ID with a different target still conflicts. This does
+        not define AOW movement physics or speed limits.
+        """
         map_id = self._map_id(map_id)
+        position = self._position(x, y)
+
+        def transition(current):
+            if current.map_id != map_id or current.position is None:
+                raise MapPositionStoreError(
+                    "character is not in the expected map"
+                )
+            validator = MovementValidator(max_speed=max_speed, epsilon=epsilon)
+            validator.validate(
+                MovementPosition(current.position.x, current.position.y),
+                MovementPosition(position.x, position.y),
+                elapsed_seconds,
+            )
+            return current.move(position, expected_revision)
+
+        return self._mutate(
+            character_id, request_id, expected_revision, "move",
+            {"map_id": map_id, "x": position.x, "y": position.y},
+            transition,
+        )
+
+    def leave(self, character_id: str, request_id: str, expected_revision: int,
+              map_id: int) -> MapPositionMutation:        map_id = self._map_id(map_id)
 
         def transition(current):
             if current.map_id != map_id:
