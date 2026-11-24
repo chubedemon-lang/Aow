@@ -279,6 +279,45 @@ class SqliteAuthorizedCharacterService:
             self.db.rollback()
             raise
 
+    def get_with_initial_state(
+        self, token: str, character_id: int
+    ) -> CharacterBootstrapSnapshot:
+        """Read one owned character and its durable player/map snapshots atomically.
+
+        The session check, ownership lookup and all three snapshot reads share
+        one BEGIN IMMEDIATE transaction. Revocation therefore serializes with
+        this bootstrap read. Missing player or map state fails closed; this
+        method never creates or repairs a partial bootstrap.
+        """
+        if type(character_id) is not int or not 1 <= character_id <= 2**63 - 1:
+            raise SessionError("invalid character")
+        player_store, map_store = self._ensure_bootstrap_stores()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            account_id = self.sessions.resolve_in_transaction(token)
+            row = self.db.execute(
+                """SELECT id, name, map_id, x, y FROM characters
+                   WHERE id = ? AND account_id = ?""",
+                (character_id, account_id),
+            ).fetchone()
+            if row is None:
+                raise SessionError("character not owned by session")
+
+            character = self._character(row)
+            player_state = player_store.get(str(character.character_id))
+            map_position = map_store.get(str(character.character_id))
+            result = CharacterBootstrapSnapshot(
+                character=character,
+                player_state=player_state,
+                map_position=map_position,
+            )
+            self.db.commit()
+            return result
+        except BaseException:
+            if self.db.in_transaction:
+                self.db.rollback()
+            raise
+
     def get(self, token: str, character_id: int) -> CharacterSnapshot:
         """Read one owned character; unknown and foreign IDs share one error."""
         if type(character_id) is not int or not 1 <= character_id <= 2**63 - 1:
