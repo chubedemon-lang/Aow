@@ -204,7 +204,7 @@ class SqliteAuthorizedQuestInventoryAwardServiceTests(unittest.TestCase):
         revoke_started = threading.Event()
         revoke_done = threading.Event()
         outcome = {}
-        original_apply = self.service._inventory.apply
+        original_apply = self.service._inventory._apply_quest_award
 
         def paused_apply(*args, **kwargs):
             entered.set()
