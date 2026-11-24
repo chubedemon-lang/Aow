@@ -33,10 +33,18 @@ requires clean EOF, and returns an immutable summary containing only:
   `frame_end` exclusive, so private capture offsets can be correlated without
   exposing payload bytes.
 
-The fixture digest is an integrity identifier, not proof of capture origin or authorization. It never returns, logs, or stores raw frame payloads. A truncated, malformed,
-oversized or over-count fixture raises an error and produces no partial
-summary. The caller-selected fixture-byte, chunk and frame-count limits are
-resource-safety controls, not recovered AOW limits.
+`OfflineFrameAudit` also validates its public constructor. Every digest must
+be canonical lowercase SHA-256; all sequence fields must be exact tuples;
+every frame span must be contiguous, use one supported fixed header width,
+and agree with its payload size; and the aggregate byte counts must reconcile.
+This prevents a caller from constructing a frozen dataclass that contains
+mutable lists or internally contradictory offsets/counts.
+
+The fixture digest is an integrity identifier, not proof of capture origin or
+authorization. The audit never returns, logs, or stores raw frame payloads.
+A truncated, malformed, oversized or over-count fixture raises an error and
+produces no partial summary. The caller-selected fixture-byte, chunk and
+frame-count limits are resource-safety controls, not recovered AOW limits.
 
 An empty fixture is reported as zero frames and receives the standard SHA-256
 digest of the empty byte string. This is a generic byte-stream property, not a
@@ -47,7 +55,9 @@ claim that AOW has an empty packet.
 All tests use invented local byte sequences. They cover fragmentation,
 header-inclusive little-endian framing, empty input, source mismatch,
 truncation, oversized lengths, aggregate frame-count limits, invalid resource
-limits and damaged configuration snapshots.
+limits, damaged configuration snapshots, public-summary constructor
+validation, immutable sequence fields, contiguous offsets, fixed header width,
+digest format and aggregate accounting.
 
 Run:
 
