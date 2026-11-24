@@ -174,7 +174,10 @@ def _read_apk_metadata(path):
     if nofollow is None:
         raise LoginRequestMetadataError("platform lacks no-follow file opening")
     flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
-    descriptor = os.open(path, flags)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise LoginRequestMetadataError("unable to open APK safely") from exc
 
     def identity(info):
         return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
