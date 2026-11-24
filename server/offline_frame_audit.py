@@ -5,9 +5,13 @@ select or infer an AOW wire format and never returns or logs frame payloads.
 """
 from dataclasses import dataclass
 import hashlib
+import re
 
-from server.offline_frame_probe import FrameDecodeError, FrameSpec, LengthFrameDecoder
+from server.offline_frame_probe import FrameSpec, LengthFrameDecoder
 from server.offline_packet_fixture import validate_packet_fixture
+
+
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class OfflineFrameAuditError(ValueError):
@@ -16,7 +20,7 @@ class OfflineFrameAuditError(ValueError):
 
 @dataclass(frozen=True)
 class OfflineFrameAudit:
-    """Payload-free summary of one completely decoded private fixture."""
+    """Deeply immutable, internally consistent summary of one decoded fixture."""
 
     source_sha256: str
     fixture_sha256: str
@@ -28,6 +32,78 @@ class OfflineFrameAudit:
     payload_sha256: tuple[str, ...]
     # (frame_start, payload_start, frame_end), zero-based/end-exclusive.
     frame_spans: tuple[tuple[int, int, int], ...]
+
+    def __post_init__(self):
+        """Validate the public constructor, not only the factory path.
+
+        frozen dataclasses can still contain mutable values when constructed
+        directly. Require exact tuples and prove that every reported offset,
+        size and aggregate is mutually consistent before an instance exists.
+        """
+        for name in ("source_sha256", "fixture_sha256"):
+            value = getattr(self, name)
+            if type(value) is not str or not _SHA256.fullmatch(value):
+                raise ValueError(f"invalid {name}")
+
+        for name in ("frame_count", "wire_bytes", "header_bytes", "payload_bytes"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"invalid {name}")
+
+        for name in ("payload_sizes", "payload_sha256", "frame_spans"):
+            if type(getattr(self, name)) is not tuple:
+                raise TypeError(f"{name} must be an exact tuple")
+
+        if not (
+            self.frame_count == len(self.payload_sizes)
+            == len(self.payload_sha256) == len(self.frame_spans)
+        ):
+            raise ValueError("frame summary counts do not match")
+
+        if any(type(size) is not int or size < 0 for size in self.payload_sizes):
+            raise ValueError("invalid payload size")
+        if any(
+            type(digest) is not str or not _SHA256.fullmatch(digest)
+            for digest in self.payload_sha256
+        ):
+            raise ValueError("invalid payload SHA-256")
+
+        previous_end = 0
+        header_width = None
+        calculated_header_bytes = 0
+        calculated_payload_bytes = 0
+        for index, (span, payload_size) in enumerate(
+            zip(self.frame_spans, self.payload_sizes)
+        ):
+            if type(span) is not tuple or len(span) != 3:
+                raise TypeError("each frame span must be an exact three-item tuple")
+            frame_start, payload_start, frame_end = span
+            if any(type(offset) is not int or offset < 0 for offset in span):
+                raise ValueError("invalid frame span offset")
+            width = payload_start - frame_start
+            if width not in (1, 2, 4):
+                raise ValueError("invalid frame header span")
+            if header_width is None:
+                header_width = width
+            elif width != header_width:
+                raise ValueError("inconsistent frame header widths")
+            if frame_start != previous_end or frame_end < payload_start:
+                raise ValueError("frame spans are not contiguous and ordered")
+            if frame_end - payload_start != payload_size:
+                raise ValueError("frame span does not match payload size")
+
+            calculated_header_bytes += width
+            calculated_payload_bytes += payload_size
+            previous_end = frame_end
+
+        if self.wire_bytes != previous_end:
+            raise ValueError("wire byte count does not match final frame offset")
+        if self.header_bytes != calculated_header_bytes:
+            raise ValueError("header byte count does not match frame spans")
+        if self.payload_bytes != calculated_payload_bytes:
+            raise ValueError("payload byte count does not match payload sizes")
+        if self.wire_bytes != self.header_bytes + self.payload_bytes:
+            raise ValueError("wire byte accounting mismatch")
 
 
 def audit_packet_fixture_frames(
