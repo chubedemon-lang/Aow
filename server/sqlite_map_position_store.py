@@ -516,7 +516,7 @@ class SqliteMapPositionStore:
                     map_id = self._map_id(payload["map_id"])
                     position = self._position(payload["x"], payload["y"])
                     expected = current.enter(map_id, position)
-                elif operation == "move":
+                elif operation in ("move", "move_validated"):
                     if set(payload) != {"operation", "map_id", "x", "y"}:
                         raise MapPositionStoreError("invalid move mutation payload")
                     map_id = self._map_id(payload["map_id"])
@@ -716,9 +716,11 @@ class SqliteMapPositionStore:
         max_speed is expressed in caller-defined coordinate units per second.
         elapsed_seconds must come from a trusted server-side monotonic clock;
         never accept a client timestamp or client-supplied elapsed interval.
-        Validation runs only for a new transition. An exact idempotent retry
-        returns its original receipt without re-running the policy check, while
-        a reused request ID with a different target still conflicts. This does
+        Validation runs only for a new transition. Its durable operation kind is
+        distinct from ordinary moves, so a receipt created by the unvalidated
+        path cannot satisfy a validated request (or vice versa). An exact retry
+        of the same validated request returns its original receipt without
+        re-running the policy check. This does
         not define AOW movement physics or speed limits.
         """
         map_id = self._map_id(map_id)
@@ -738,7 +740,7 @@ class SqliteMapPositionStore:
             return current.move(position, expected_revision)
 
         return self._mutate(
-            character_id, request_id, expected_revision, "move",
+            character_id, request_id, expected_revision, "move_validated",
             {"map_id": map_id, "x": position.x, "y": position.y},
             transition,
         )
