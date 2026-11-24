@@ -351,6 +351,7 @@ class SqliteMapCapacityStore:
     def capacity(self, map_id: int):
         map_id = self._map_id(map_id)
         with self._lock:
+            self._validate_connection_constraints()
             row = self.db.execute(
                 "SELECT capacity FROM map_capacity_limits WHERE map_id=?",
                 (map_id,),
@@ -364,6 +365,7 @@ class SqliteMapCapacityStore:
     def members(self, map_id: int):
         map_id = self._map_id(map_id)
         with self._lock:
+            self._validate_connection_constraints()
             return frozenset(
                 self._character_id(row[0]) for row in self.db.execute(
                     "SELECT character_id FROM map_capacity_members "
