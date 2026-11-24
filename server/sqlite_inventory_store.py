@@ -16,6 +16,7 @@ _MAX_REVISION = 2**63 - 1
 _MAX_BATCH = 4096
 _MAX_RECEIPT_JSON_BYTES = 512 * 1024
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_QUEST_AWARD_MUTATION_ID_PATTERN = re.compile(r"^quest-[0-9a-f]{64}$")
 
 _INVENTORY_SNAPSHOT_COLUMNS = {
     "character_id": ("TEXT", 0, 1, None),
@@ -777,6 +778,32 @@ class SqliteInventoryStore:
 
     def apply(self, character_id: str, request_id: str, expected_revision: int,
               changes) -> InventoryMutation:
+        """Apply a caller-supplied inventory mutation once.
+
+        Quest-award receipts use a reserved deterministic request-ID shape.
+        Ordinary callers cannot create that shape, so the quest audit can
+        distinguish its own receipts without misclassifying arbitrary IDs
+        that merely use the quest prefix.
+        """
+        return self._apply(
+            character_id, request_id, expected_revision, changes,
+            allow_quest_award=False,
+        )
+
+    def _apply_quest_award(self, character_id: str, request_id: str,
+                           expected_revision: int, changes) -> InventoryMutation:
+        """Apply one mutation in the reserved namespace for the quest store."""
+        request_id = self._request_id(request_id)
+        if not _QUEST_AWARD_MUTATION_ID_PATTERN.fullmatch(request_id):
+            raise InventoryStoreError("invalid quest award mutation identifier")
+        return self._apply(
+            character_id, request_id, expected_revision, changes,
+            allow_quest_award=True,
+        )
+
+    def _apply(self, character_id: str, request_id: str,
+               expected_revision: int, changes, *,
+               allow_quest_award: bool) -> InventoryMutation:
         """Apply signed item deltas once and return the committed snapshot.
 
         Duplicate item IDs are aggregated before validation. An exact retry
@@ -785,6 +812,9 @@ class SqliteInventoryStore:
         """
         character_id = self._character_id(character_id)
         request_id = self._request_id(request_id)
+        if (_QUEST_AWARD_MUTATION_ID_PATTERN.fullmatch(request_id)
+                and not allow_quest_award):
+            raise InventoryStoreError("reserved inventory request identifier")
         if (type(expected_revision) is not int
                 or not 0 <= expected_revision < _MAX_REVISION):
             raise InventoryStoreError("invalid expected revision")

@@ -18,9 +18,15 @@ claim.
   invalid item rows, non-canonical item order, and identity/revision mismatch
   are rejected as receipt corruption.
 - A second request for the same character/quest/item is rejected.
+- The linked inventory mutation uses the exact reserved ID shape
+  `quest-` plus 64 lowercase hexadecimal characters. The public inventory
+  mutation API rejects that exact shape; ordinary IDs that only start with
+  `quest-` are not considered quest receipts by this audit.
 
 The trusted caller must validate quest completion and authorize character
-ownership before invoking this store. Never expose arbitrary reward grants as
+ownership before invoking this store. The quest store alone may write the
+reserved inventory mutation ID shape through the inventory store's internal
+entry point; arbitrary inventory callers cannot claim that namespace. Never expose arbitrary reward grants as
 a public route or accept untrusted client-supplied reward quantities.
 
 Quest IDs, item IDs, quantities and award semantics here are synthetic

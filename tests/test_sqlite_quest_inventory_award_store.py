@@ -149,6 +149,28 @@ class SqliteQuestInventoryAwardStoreTests(unittest.TestCase):
 
 
 
+    def test_integrity_ignores_ordinary_quest_prefixed_inventory_receipts(self):
+        self.inventory.apply(
+            "hero", "quest-manual-operation", 0, [("potion", 1)]
+        )
+        self.awards.grant_once(
+            "hero", "award-request", 1, 42, "gem", 2
+        )
+        self.assertEqual(
+            self.awards.verify_integrity(),
+            {"awards": 1, "linked_inventory_mutations": 1},
+        )
+
+    def test_integrity_rejects_orphan_reserved_quest_mutation(self):
+        mutation_id = self.awards._mutation_id("orphan-award")
+        self.inventory._apply_quest_award(
+            "hero", mutation_id, 0, [("potion", 1)]
+        )
+        with self.assertRaisesRegex(
+            QuestInventoryAwardError, "unpaired reserved quest inventory mutation"
+        ):
+            self.awards.verify_integrity()
+
     def _drop_award_table(self):
         self.db.execute("DROP TABLE quest_inventory_awards")
 
