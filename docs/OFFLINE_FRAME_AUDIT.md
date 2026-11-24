@@ -27,7 +27,10 @@ requires clean EOF, and returns an immutable summary containing only:
 
 - source SHA-256;
 - frame count and total wire/header/payload byte counts;
-- per-frame payload sizes and SHA-256 digests.
+- per-frame payload sizes and SHA-256 digests;
+- zero-based frame spans `(frame_start, payload_start, frame_end)`, with
+  `frame_end` exclusive, so private capture offsets can be correlated without
+  exposing payload bytes.
 
 It never returns, logs, or stores raw frame payloads. A truncated, malformed,
 oversized or over-count fixture raises an error and produces no partial

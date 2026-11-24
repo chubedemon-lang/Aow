@@ -25,6 +25,8 @@ class OfflineFrameAudit:
     payload_bytes: int
     payload_sizes: tuple[int, ...]
     payload_sha256: tuple[str, ...]
+    # (frame_start, payload_start, frame_end), zero-based/end-exclusive.
+    frame_spans: tuple[tuple[int, int, int], ...]
 
 
 def audit_packet_fixture_frames(
@@ -86,6 +88,8 @@ def audit_packet_fixture_frames(
     )
     sizes = []
     digests = []
+    spans = []
+    next_frame_offset = 0
     for offset in range(0, len(payload), chunk_size):
         frames = decoder.feed(payload[offset:offset + chunk_size])
         if len(sizes) + len(frames) > max_frames:
@@ -93,12 +97,20 @@ def audit_packet_fixture_frames(
         for frame in frames:
             sizes.append(len(frame))
             digests.append(hashlib.sha256(frame).hexdigest())
+            frame_start = next_frame_offset
+            payload_start = frame_start + validated_spec.length_bytes
+            frame_end = payload_start + len(frame)
+            spans.append((frame_start, payload_start, frame_end))
+            next_frame_offset = frame_end
 
     # A partial prefix/body is an error; no partial summary escapes this call.
     decoder.finish()
     payload_bytes = sum(sizes)
     header_bytes = len(sizes) * validated_spec.length_bytes
-    if header_bytes + payload_bytes != len(payload):
+    if (
+        header_bytes + payload_bytes != len(payload)
+        or next_frame_offset != len(payload)
+    ):
         raise OfflineFrameAuditError("decoded frame accounting mismatch")
 
     return OfflineFrameAudit(
@@ -109,4 +121,5 @@ def audit_packet_fixture_frames(
         payload_bytes=payload_bytes,
         payload_sizes=tuple(sizes),
         payload_sha256=tuple(digests),
+        frame_spans=tuple(spans),
     )

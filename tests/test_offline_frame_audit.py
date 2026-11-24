@@ -49,6 +49,7 @@ class OfflineFrameAuditTests(unittest.TestCase):
         self.assertEqual(result.header_bytes, 4)
         self.assertEqual(result.payload_bytes, 9)
         self.assertEqual(result.payload_sizes, (5, 4))
+        self.assertEqual(result.frame_spans, ((0, 2, 7), (7, 9, 13)))
         self.assertEqual(
             result.payload_sha256,
             (hashlib.sha256(b"alpha").hexdigest(),
@@ -70,6 +71,26 @@ class OfflineFrameAuditTests(unittest.TestCase):
         self.assertEqual(result.payload_bytes, 3)
         self.assertEqual(result.wire_bytes, 9)
         self.assertEqual(result.payload_sizes, (0, 1, 2))
+        self.assertEqual(
+            result.frame_spans,
+            ((0, 2, 2), (2, 4, 5), (5, 7, 9)),
+        )
+
+
+    def test_frame_spans_are_zero_based_and_end_exclusive_across_fragments(self):
+        spec = FrameSpec(1, "big", max_payload=8)
+        wire = encode((b"", b"a", b"bc"), spec)
+        result = audit_packet_fixture_frames(
+            fixture(wire),
+            expected_source_sha256=SOURCE_SHA256,
+            spec=spec,
+            chunk_size=1,
+        )
+        self.assertEqual(
+            result.frame_spans,
+            ((0, 1, 1), (1, 2, 3), (3, 4, 6)),
+        )
+        self.assertEqual(result.frame_spans[-1][2], result.wire_bytes)
 
     def test_empty_fixture_produces_empty_complete_summary(self):
         spec = FrameSpec(4, "big")
@@ -84,6 +105,7 @@ class OfflineFrameAuditTests(unittest.TestCase):
         )
         self.assertEqual(result.payload_sizes, ())
         self.assertEqual(result.payload_sha256, ())
+        self.assertEqual(result.frame_spans, ())
 
     def test_rejects_fixture_from_different_source_before_decoding(self):
         with self.assertRaisesRegex(ValueError, "does not match"):
