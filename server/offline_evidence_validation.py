@@ -68,6 +68,11 @@ _PRIVATE_KEY = re.compile(
 )
 _PERCENT_ESCAPE = re.compile(r"%[0-9a-f]{2}", re.IGNORECASE)
 
+# Unicode DNS names can bypass the ASCII hostname expression.
+_UNICODE_HOST_CANDIDATE = re.compile(
+    r"(?<![\w-])(?:[\w-]+[.\u3002\uff0e\uff61])+[\w-]+(?![\w-])", re.UNICODE
+)
+
 
 class EvidenceError(ValueError):
     pass
@@ -91,8 +96,27 @@ def _contains_network_locator(value):
         or "@" in value
     ):
         return True
-    for match in _HOSTNAME.finditer(value):
-        suffix = match.group(0).rsplit(".", 1)[-1].split(":", 1)[0].lower()
+    candidates = [match.group(0) for match in _HOSTNAME.finditer(value)]
+    # IDNA maps Unicode labels and Unicode dot separators to ASCII.
+    for match in _UNICODE_HOST_CANDIDATE.finditer(value):
+        try:
+            candidates.append(match.group(0).encode("idna").decode("ascii"))
+        except UnicodeError:
+            continue
+    for candidate in candidates:
+        # IDNA output may contain xn-- labels, which the deliberately
+        # conservative ASCII prose detector does not accept as a final TLD.
+        # Validate DNS label syntax separately, then preserve known local
+        # filename suffixes (for example docs/PROTOCOL.md).
+        labels = candidate.rstrip(".").split(".")
+        if len(labels) < 2 or any(
+            not label
+            or len(label) > 63
+            or re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) is None
+            for label in labels
+        ):
+            continue
+        suffix = labels[-1].lower()
         if suffix not in _LOCAL_FILE_SUFFIXES:
             return True
     return False

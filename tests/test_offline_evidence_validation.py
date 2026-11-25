@@ -160,6 +160,25 @@ class EvidenceValidationTests(unittest.TestCase):
                     with self.assertRaises(EvidenceError):
                         validate_record({**self.valid, field: value})
 
+    def test_rejects_unicode_idn_hostnames(self):
+        examples = (
+            "例え.テスト",
+            "сайт.рф",
+            "service。例え。テスト",
+        )
+        for field in ("source", "observation"):
+            for value in examples:
+                with self.subTest(field=field, value=value):
+                    with self.assertRaises(EvidenceError):
+                        validate_record({**self.valid, field: value})
+
+    def test_accepts_unicode_prose_without_a_dotted_hostname(self):
+        for value in ("phân tích APK ngoại tuyến", "đã kiểm tra dữ liệu cục bộ"):
+            with self.subTest(value=value):
+                self.assertEqual(validate_record({
+                    **self.valid, "source": value
+                }).source, value)
+
     def test_rejects_sensitive_values_with_escapes_remaining_after_decode_limit(self):
         examples = (
             "../private/capture.pcap",
