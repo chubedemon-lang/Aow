@@ -149,6 +149,20 @@ class EvidenceLedgerTests(unittest.TestCase):
             protocol_ready([{"topic": "login"}])
 
 
+    def test_readiness_revalidates_frozen_records_at_trust_boundary(self):
+        invalid_topic = self.record(
+            "transport", EvidenceStatus.VERIFIED_END_TO_END,
+            "authorized_local_test",
+        )
+        object.__setattr__(invalid_topic, "topic", "unrecognized")
+        with self.assertRaisesRegex(ValueError, "invalid evidence record"):
+            protocol_ready([invalid_topic])
+
+        forged_status = self.record()
+        object.__setattr__(forged_status, "status", EvidenceStatus.VERIFIED_END_TO_END)
+        with self.assertRaisesRegex(ValueError, "invalid evidence record"):
+            protocol_ready([forged_status])
+
     def test_rejects_records_list_subclass_before_iteration(self):
         class HostileList(list):
             def __iter__(self):
