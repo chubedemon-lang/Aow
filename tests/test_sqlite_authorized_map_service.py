@@ -8,6 +8,7 @@ import unittest
 from server.sessions import SessionError
 from server.sqlite_authorized_map_service import SqliteAuthorizedMapService
 from server.sqlite_map_position_store import MapPositionAlreadyExists
+from server.sqlite_map_capacity_store import MapCapacityExceeded
 from server.synthetic_map_position import MapPosition, Position
 from server.sqlite_session_store import SqliteSessionStore
 
@@ -225,6 +226,41 @@ class SqliteAuthorizedMapServiceTests(unittest.TestCase):
         self.assertEqual(self.service.positions.get("101"), MapPosition(1, Position(2, 3), 2))
         with self.assertRaises(SessionError):
             self.service.get_position(self.owner_token, 101)
+
+
+    def test_capacity_rejection_rolls_back_position_and_receipt_atomically(self):
+        self.service.configure_map_capacity(7, 1)
+        self.service.create_position(self.owner_token, 101)
+        self.service.create_position(self.other_token, 202)
+
+        accepted = self.service.enter(
+            self.owner_token, 101, "capacity-first-enter", 0, 7, 1, 2
+        )
+        self.assertEqual(accepted.snapshot, MapPosition(7, Position(1, 2), 1))
+
+        with self.assertRaises(MapCapacityExceeded):
+            self.service.enter(
+                self.other_token, 202, "capacity-rejected-enter", 0, 7, 3, 4
+            )
+
+        # A rejected admission must leave position, receipt, and occupancy
+        # at the exact pre-request state.
+        self.assertEqual(
+            self.service.get_position(self.other_token, 202),
+            MapPosition(),
+        )
+        self.assertIsNone(self.db.execute(
+            "SELECT request_id FROM map_position_mutations WHERE request_id=?",
+            ("capacity-rejected-enter",),
+        ).fetchone())
+        self.assertEqual(
+            self.service.capacities.members(7),
+            frozenset({"101"}),
+        )
+        self.assertEqual(
+            self.service.capacities.verify_integrity(),
+            {"members": 1, "configured_maps": 1},
+        )
 
 
 if __name__ == "__main__":
