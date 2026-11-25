@@ -263,5 +263,28 @@ class SqliteAuthorizedMapServiceTests(unittest.TestCase):
         )
 
 
+    def test_startup_capacity_configuration_rolls_back_as_a_batch(self):
+        # Constructor configuration is one caller-owned transaction: if a
+        # later map entry is invalid, earlier entries must not persist.
+        with self.assertRaisesRegex(ValueError, "invalid map capacity"):
+            SqliteAuthorizedMapService(
+                self.db,
+                ttl_seconds=30,
+                clock=lambda: self.now[0],
+                map_capacities={7: 2, 8: 0},
+            )
+
+        self.assertFalse(self.db.in_transaction)
+        self.assertIsNone(self.db.execute(
+            "SELECT capacity FROM map_capacity_limits WHERE map_id=7"
+        ).fetchone())
+        self.assertIsNone(self.db.execute(
+            "SELECT capacity FROM map_capacity_limits WHERE map_id=8"
+        ).fetchone())
+        self.assertEqual(self.service.capacities.members(7), frozenset())
+        self.assertEqual(self.service.capacities.members(8), frozenset())
+
+
+
 if __name__ == "__main__":
     unittest.main()
