@@ -132,6 +132,23 @@ class EvidenceRecord:
                 raise ValueError("end-to-end requires a test_run_sha256")
 
 
+def _validated_record_copy(record):
+    """Reconstruct a record at the trust boundary; frozen dataclasses are bypassable."""
+    if type(record) is not EvidenceRecord:
+        raise TypeError("records must be exact EvidenceRecord instances")
+    try:
+        return EvidenceRecord(
+            apk_sha256=record.apk_sha256,
+            topic=record.topic,
+            status=record.status,
+            reference=record.reference,
+            method=record.method,
+            test_run_sha256=record.test_run_sha256,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("records contain an invalid evidence record") from exc
+
+
 def protocol_ready(records, required=("transport", "framing", "serialization",
                                       "handshake", "login")):
     """Require all topics from one authorized run of ONE APK.
@@ -151,6 +168,11 @@ def protocol_ready(records, required=("transport", "framing", "serialization",
     required_snapshot = tuple(required)
     if any(type(record) is not EvidenceRecord for record in record_snapshot):
         raise TypeError("records must be exact EvidenceRecord instances")
+    # frozen=True prevents ordinary assignment, not object.__setattr__. Rebuild
+    # each exact record so mutated fields cannot bypass constructor validation.
+    record_snapshot = tuple(
+        _validated_record_copy(record) for record in record_snapshot
+    )
     if not required_snapshot or any(
         type(topic) is not str or topic not in _ALLOWED_TOPICS
         for topic in required_snapshot
