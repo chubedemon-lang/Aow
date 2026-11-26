@@ -1617,5 +1617,56 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
             )
 
 
+    def test_schema_v4_inherits_relative_timing_upper_bound(self):
+        server_stream = frame(b"server")
+        client_stream = b"client"
+        valid_events = [
+            {
+                "direction": "client_to_server",
+                "offset": 0,
+                "length": len(client_stream),
+                "elapsed_ns": 0,
+                "operation": "send",
+            },
+            {
+                "direction": "server_to_client",
+                "offset": 0,
+                "length": len(server_stream),
+                "elapsed_ns": MAX_CAPTURE_ELAPSED_NS,
+                "operation": "receive",
+            },
+        ]
+        result = self.audit(
+            fixture_bytes(
+                [server_stream],
+                [client_stream],
+                schema_version=4,
+                io_events=valid_events,
+                observer_role="client",
+            )
+        )
+        self.assertEqual(
+            result["exchange_order"]["timing"]["event_span_ns"],
+            MAX_CAPTURE_ELAPSED_NS,
+        )
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
+
+        over_limit_events = [
+            valid_events[0],
+            dict(valid_events[1], elapsed_ns=MAX_CAPTURE_ELAPSED_NS + 1),
+        ]
+        with self.assertRaisesRegex(FixtureAuditError, "elapsed_ns must be"):
+            self.audit(
+                fixture_bytes(
+                    [server_stream],
+                    [client_stream],
+                    schema_version=4,
+                    io_events=over_limit_events,
+                    observer_role="client",
+                )
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
