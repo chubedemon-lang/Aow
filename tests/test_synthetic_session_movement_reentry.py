@@ -1,6 +1,7 @@
-"""Regression: a same-map re-entry is a new synthetic movement epoch.
+"""Regression tests for synthetic movement session ownership.
 
-This tests local lifecycle invalidation only; it does not define AOW map semantics.
+These tests cover local lifecycle isolation only; they do not define AOW
+movement packets, map semantics, or client compatibility.
 """
 import unittest
 
@@ -10,12 +11,16 @@ from server.synthetic_session_movement import SessionMovement
 
 
 class SameMapReentryTests(unittest.TestCase):
-    def test_leave_and_reenter_same_map_revokes_previous_actor(self):
+    @staticmethod
+    def _in_map(player_id, map_id):
         session = SyntheticSession()
         session.authenticate()
-        session.select_character("player_1")
-        session.join_map("map_1")
+        session.select_character(player_id)
+        session.join_map(map_id)
+        return session
 
+    def test_leave_and_reenter_same_map_revokes_previous_actor(self):
+        session = self._in_map("player_1", "map_1")
         movement = SessionMovement()
         old_actor = movement.spawn(session, Position(0, 0), 5)
 
@@ -33,6 +38,26 @@ class SameMapReentryTests(unittest.TestCase):
         self.assertEqual(
             movement.move(session, 1, Position(11, 10)),
             Position(11, 10),
+        )
+
+    def test_foreign_session_cannot_revoke_or_take_over_actor(self):
+        owner = self._in_map("player_1", "map_1")
+        foreign = self._in_map("player_2", "map_1")
+        movement = SessionMovement()
+        actor = movement.spawn(owner, Position(0, 0), 5)
+
+        with self.assertRaises(MovementError):
+            movement.sync(foreign)
+        with self.assertRaises(MovementError):
+            movement.move(foreign, 1, Position(1, 0))
+        with self.assertRaises(MovementError):
+            movement.spawn(foreign, Position(20, 20), 5)
+
+        self.assertIs(movement.actor, actor)
+        self.assertFalse(actor.closed)
+        self.assertEqual(
+            movement.move(owner, 1, Position(1, 0)),
+            Position(1, 0),
         )
 
 
