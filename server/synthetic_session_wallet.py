@@ -16,7 +16,7 @@ class SessionWallet:
         self._balance = None
 
     @property
-       def balance(self):
+    def balance(self):
         return self._balance
 
     def sync(self, session):
