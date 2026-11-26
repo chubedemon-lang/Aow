@@ -7,27 +7,33 @@ from server.synthetic_movement import MovementError, MovementState, Position
 
 
 class SessionMovement:
-    """Bind a synthetic actor's movement to one session lifecycle revision."""
+    """Bind a synthetic actor to one exact session and lifecycle revision."""
 
     def __init__(self):
         self._actor = None
         self._map = None
+        self._session = None
         self._revision = None
 
     @property
     def actor(self):
         return self._actor
 
+    def _revoke(self):
+        if self._actor is not None:
+            self._actor.close()
+        self._actor = None
+        self._map = None
+        self._session = None
+        self._revision = None
+
     def sync(self, session):
         snapshot = session.snapshot
-        if (snapshot.state is not SessionState.IN_MAP
+        if (session is not self._session
+                or snapshot.state is not SessionState.IN_MAP
                 or snapshot.map_id != self._map
                 or session.revision != self._revision):
-            if self._actor is not None:
-                self._actor.close()
-            self._actor = None
-            self._map = None
-            self._revision = None
+            self._revoke()
         return self._actor
 
     def spawn(self, session, start, max_step):
@@ -40,12 +46,14 @@ class SessionMovement:
         actor = MovementState(0, start, max_step)
         self._actor = actor
         self._map = snapshot.map_id
+        self._session = session
         self._revision = session.revision
         return actor
 
     def move(self, session, tick, target):
         snapshot = session.snapshot
-        if (snapshot.state is not SessionState.IN_MAP
+        if (session is not self._session
+                or snapshot.state is not SessionState.IN_MAP
                 or snapshot.map_id != self._map
                 or session.revision != self._revision):
             self.sync(session)
