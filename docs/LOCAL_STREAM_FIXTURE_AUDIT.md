@@ -124,12 +124,12 @@ receive-length candidate. By default, the `client_to_server` direction is only s
 because Sender/Receiver symmetry has not been established. An explicit
 operator-selected generic length hypothesis can be tested separately, as
 described below; it is never treated as proof of sender symmetry. Schemas
-`2` and `3` validate
+`2`, `3`, and `4` validate
 that ordered I/O ranges cover both directional streams exactly once. Schema
-`3` additionally validates relative monotonic timing and reports only an
-aggregate span and maximum gap. Schema `1` reports that cross-direction order
-was not recorded. No schema allows the audit to interpret handshake or login
-messages, and schema `2`/`3` event order remains an unauthenticated operator
+`3` and schema `4` additionally validate relative monotonic timing and report
+only an aggregate span and maximum gap. Schema `1` reports that cross-direction
+order was not recorded. No schema allows the audit to interpret handshake or login
+messages, and schema `2`/`3`/`4` event order remains an unauthenticated operator
 assertion rather than independent protocol evidence.
 
 The receive candidate still models only the static four-byte signed
