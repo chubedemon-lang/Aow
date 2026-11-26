@@ -16,12 +16,12 @@ class SessionWallet:
         self._balance = None
 
     @property
-    def balance(self):
+       def balance(self):
         return self._balance
 
     def sync(self, session):
         snapshot = session.snapshot
-        if (session is not self._session or snapshot is not self._epoch
+        if (session is not self._session or session.revision != self._epoch
                 or snapshot.state not in (SessionState.CHARACTER_READY, SessionState.IN_MAP)):
             self._session = None
             self._epoch = None
@@ -36,7 +36,7 @@ class SessionWallet:
             raise WalletError("already initialized")
         if type(initial) is not int or not 0 <= initial <= self.maximum:
             raise WalletError("invalid initial balance")
-        self._session, self._epoch, self._balance = session, session.snapshot, initial
+        self._session, self._epoch, self._balance = session, session.revision, initial
         return self._balance
 
     def _check(self, session, amount):
