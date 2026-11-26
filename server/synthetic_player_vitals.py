@@ -15,11 +15,11 @@ class Vitals:
 
 
 class SessionVitals:
-    """Immutable snapshots; bind to one character-ready session epoch."""
+    """Immutable snapshots; bind to one character-ready session revision."""
 
     def __init__(self):
         self._session = None
-        self._snapshot = None
+        self._revision = None
         self._vitals = None
 
     @property
@@ -28,10 +28,10 @@ class SessionVitals:
 
     def sync(self, session):
         snapshot = session.snapshot
-        if (session is not self._session or snapshot is not self._snapshot
+        if (session is not self._session or session.revision != self._revision
                 or snapshot.state not in (SessionState.CHARACTER_READY, SessionState.IN_MAP)):
             self._session = None
-            self._snapshot = None
+            self._revision = None
             self._vitals = None
         return self._vitals
 
@@ -45,7 +45,7 @@ class SessionVitals:
         if type(max_hp) is not int or not 1 <= max_hp <= 1_000_000:
             raise PlayerVitalsError("invalid max hp")
         self._session = session
-        self._snapshot = snapshot
+        self._revision = session.revision
         self._vitals = Vitals(max_hp, max_hp)
         return self._vitals
 
