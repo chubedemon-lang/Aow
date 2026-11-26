@@ -233,5 +233,34 @@ class ReceiverLengthCandidateTests(unittest.TestCase):
         self.assertEqual(reader.available, 8)
 
 
+    def test_zero_length_candidate_payload_is_a_complete_four_byte_frame(self):
+        reader = make_four_byte_length_candidate_reader(
+            max_payload_bytes=32,
+            max_buffer_bytes=64,
+            http_marker_value=SYNTHETIC_HTTP_MARKER,
+        )
+        empty_frame = candidate_frame(b"")
+        self.assertEqual(empty_frame, b"\x00\x00\x00\x00")
+        reader.feed(empty_frame)
+        self.assertEqual(reader.read_frame(), empty_frame)
+        self.assertEqual(reader.available, 0)
+
+    def test_adjacent_zero_length_frames_are_drained_individually(self):
+        reader = make_four_byte_length_candidate_reader(
+            max_payload_bytes=32,
+            max_buffer_bytes=64,
+            http_marker_value=SYNTHETIC_HTTP_MARKER,
+        )
+        empty_frame = candidate_frame(b"")
+        following = candidate_frame(b"next")
+        reader.feed(empty_frame + empty_frame + following)
+        self.assertEqual(reader.read_frame(), empty_frame)
+        self.assertEqual(reader.read_frame(), empty_frame)
+        self.assertEqual(reader.read_frame(), following)
+        self.assertIsNone(reader.read_frame())
+        self.assertEqual(reader.available, 0)
+
+
+
 if __name__ == "__main__":
     unittest.main()
