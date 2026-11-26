@@ -40,25 +40,24 @@ class SameMapReentryTests(unittest.TestCase):
             Position(11, 10),
         )
 
-    def test_foreign_session_cannot_revoke_or_take_over_actor(self):
+    def test_foreign_sync_revokes_stale_actor_before_rebinding(self):
         owner = self._in_map("player_1", "map_1")
         foreign = self._in_map("player_2", "map_1")
         movement = SessionMovement()
-        actor = movement.spawn(owner, Position(0, 0), 5)
+        old_actor = movement.spawn(owner, Position(0, 0), 5)
 
-        with self.assertRaises(MovementError):
-            movement.sync(foreign)
-        with self.assertRaises(MovementError):
-            movement.move(foreign, 1, Position(1, 0))
-        with self.assertRaises(MovementError):
-            movement.spawn(foreign, Position(20, 20), 5)
+        self.assertIsNone(movement.sync(foreign))
+        self.assertTrue(old_actor.closed)
+        self.assertIsNone(movement.actor)
 
-        self.assertIs(movement.actor, actor)
-        self.assertFalse(actor.closed)
+        new_actor = movement.spawn(foreign, Position(20, 20), 5)
+        self.assertIsNot(new_actor, old_actor)
         self.assertEqual(
-            movement.move(owner, 1, Position(1, 0)),
-            Position(1, 0),
+            movement.move(foreign, 1, Position(21, 20)),
+            Position(21, 20),
         )
+        with self.assertRaises(MovementError):
+            movement.move(owner, 1, Position(1, 0))
 
 
 if __name__ == "__main__":
