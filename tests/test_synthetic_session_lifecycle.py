@@ -105,6 +105,22 @@ class SessionLifecycleTests(unittest.TestCase):
                 action()
         self.assertEqual(s.snapshot.state, SessionState.CLOSED)
 
+    def test_mutating_returned_snapshot_cannot_change_session(self):
+        s = SyntheticSession()
+        s.authenticate()
+        s.select_character("player_1")
+        s.join_map("map_1")
+
+        exposed = s.snapshot
+        object.__setattr__(exposed, "state", SessionState.CLOSED)
+        object.__setattr__(exposed, "player_id", "attacker")
+        object.__setattr__(exposed, "map_id", "other_map")
+
+        self.assertEqual(s.snapshot.state, SessionState.IN_MAP)
+        self.assertEqual(s.snapshot.player_id, "player_1")
+        self.assertEqual(s.snapshot.map_id, "map_1")
+        self.assertEqual(s.leave_map().state, SessionState.CHARACTER_READY)
+
 
 if __name__ == "__main__":
     unittest.main()
