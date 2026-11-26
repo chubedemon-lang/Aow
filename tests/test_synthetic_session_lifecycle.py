@@ -122,5 +122,29 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertEqual(s.leave_map().state, SessionState.CHARACTER_READY)
 
 
+    def test_transition_return_values_are_detached(self):
+        s = SyntheticSession()
+
+        returned = s.authenticate()
+        object.__setattr__(returned, "state", SessionState.CLOSED)
+        self.assertEqual(s.snapshot.state, SessionState.AUTHENTICATED)
+
+        returned = s.select_character("player_1")
+        object.__setattr__(returned, "player_id", "attacker")
+        self.assertEqual(s.snapshot.player_id, "player_1")
+
+        returned = s.join_map("map_1")
+        object.__setattr__(returned, "map_id", "other_map")
+        self.assertEqual(s.snapshot.map_id, "map_1")
+
+        returned = s.leave_map()
+        object.__setattr__(returned, "state", SessionState.CLOSED)
+        self.assertEqual(s.snapshot.state, SessionState.CHARACTER_READY)
+
+        returned = s.close()
+        object.__setattr__(returned, "state", SessionState.CONNECTED)
+        self.assertEqual(s.snapshot.state, SessionState.CLOSED)
+
+
 if __name__ == "__main__":
     unittest.main()
