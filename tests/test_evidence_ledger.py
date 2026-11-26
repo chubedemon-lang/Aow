@@ -234,5 +234,23 @@ class EvidenceLedgerTests(unittest.TestCase):
                 EvidenceRecord(*values)
 
 
+    def test_readiness_rejects_mutated_or_missing_digest_fields(self):
+        malformed_digest = self.record(
+            "transport", EvidenceStatus.VERIFIED_END_TO_END,
+            "authorized_local_test",
+        )
+        object.__setattr__(malformed_digest, "test_run_sha256", "not-a-digest")
+        with self.assertRaisesRegex(ValueError, "invalid evidence record"):
+            protocol_ready([malformed_digest])
+
+        missing_field = self.record(
+            "framing", EvidenceStatus.VERIFIED_END_TO_END,
+            "authorized_local_test",
+        )
+        object.__delattr__(missing_field, "test_run_sha256")
+        with self.assertRaisesRegex(ValueError, "invalid evidence record"):
+            protocol_ready([missing_field])
+
+
 if __name__ == "__main__":
     unittest.main()
