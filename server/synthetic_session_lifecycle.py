@@ -26,14 +26,23 @@ class SessionSnapshot:
 
 
 class SyntheticSession:
-    """Fail-closed, idempotent close; all other transitions strictly ordered."""
+    """Fail-closed lifecycle with detached snapshots and monotonic revision."""
 
     def __init__(self):
         self._snapshot = SessionSnapshot(SessionState.CONNECTED)
+        self._revision = 0
 
     @property
     def snapshot(self):
-        return self._snapshot
+        # Return a detached value; frozen dataclasses can be bypassed with
+        # object.__setattr__, so never expose the authoritative instance.
+        current = self._snapshot
+        return SessionSnapshot(current.state, current.player_id, current.map_id)
+
+    @property
+    def revision(self):
+        """Monotonic synthetic lifecycle epoch for bound local resources."""
+        return self._revision
 
     def _require(self, expected):
         if self._snapshot.state is not expected:
@@ -41,8 +50,6 @@ class SyntheticSession:
 
     @staticmethod
     def _identifier(value):
-        # Exact built-in strings only: a str subclass can override __len__ or
-        # iteration hooks and must be rejected before any such hook executes.
         if type(value) is not str or not 1 <= len(value) <= 128:
             raise SessionTransitionError("invalid identifier")
         if not all(c.isascii() and (c.isalnum() or c in "_-") for c in value):
@@ -52,25 +59,31 @@ class SyntheticSession:
     def authenticate(self):
         self._require(SessionState.CONNECTED)
         self._snapshot = SessionSnapshot(SessionState.AUTHENTICATED)
-        return self._snapshot
+        self._revision += 1
+        return self.snapshot
 
     def select_character(self, player_id):
         self._require(SessionState.AUTHENTICATED)
         player_id = self._identifier(player_id)
         self._snapshot = SessionSnapshot(SessionState.CHARACTER_READY, player_id)
-        return self._snapshot
+        self._revision += 1
+        return self.snapshot
 
     def join_map(self, map_id):
         self._require(SessionState.CHARACTER_READY)
         map_id = self._identifier(map_id)
         self._snapshot = SessionSnapshot(SessionState.IN_MAP, self._snapshot.player_id, map_id)
-        return self._snapshot
+        self._revision += 1
+        return self.snapshot
 
     def leave_map(self):
         self._require(SessionState.IN_MAP)
         self._snapshot = SessionSnapshot(SessionState.CHARACTER_READY, self._snapshot.player_id)
-        return self._snapshot
+        self._revision += 1
+        return self.snapshot
 
     def close(self):
-        self._snapshot = SessionSnapshot(SessionState.CLOSED)
-        return self._snapshot
+        if self._snapshot.state is not SessionState.CLOSED:
+            self._snapshot = SessionSnapshot(SessionState.CLOSED)
+            self._revision += 1
+        return self.snapshot

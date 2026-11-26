@@ -29,7 +29,7 @@ class SessionQuests:
         definitions = {}
         for quest in quests:
             if (not isinstance(quest, Quest)
-                    or not isinstance(quest.quest_id, str)
+                    or type(quest.quest_id) is not str
                     or not 1 <= len(quest.quest_id) <= 128
                     or not all(c.isascii() and (c.isalnum() or c in "_-")
                                for c in quest.quest_id)
@@ -51,7 +51,7 @@ class SessionQuests:
 
     def sync(self, session):
         snapshot = session.snapshot
-        if (session is not self._session or snapshot is not self._epoch
+        if (session is not self._session or session.revision != self._epoch
                 or snapshot.state not in (SessionState.CHARACTER_READY,
                                           SessionState.IN_MAP)):
             self._session = self._epoch = self._counts = None
@@ -63,7 +63,7 @@ class SessionQuests:
             raise QuestError("character not ready")
         if self._counts is not None:
             raise QuestError("already initialized")
-        self._session, self._epoch = session, session.snapshot
+        self._session, self._epoch = session, session.revision
         self._counts = {quest_id: 0 for quest_id in self._definitions}
         return self.progress
 
@@ -71,7 +71,7 @@ class SessionQuests:
         self.sync(session)
         if self._counts is None:
             raise QuestError("quests not initialized")
-        if (not isinstance(quest_id, str) or quest_id not in self._definitions
+        if (type(quest_id) is not str or quest_id not in self._definitions
                 or type(amount) is not int or not 1 <= amount <= 1_000_000):
             raise QuestError("invalid quest update")
         target = self._definitions[quest_id]

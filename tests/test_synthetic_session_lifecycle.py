@@ -105,6 +105,71 @@ class SessionLifecycleTests(unittest.TestCase):
                 action()
         self.assertEqual(s.snapshot.state, SessionState.CLOSED)
 
+    def test_mutating_returned_snapshot_cannot_change_session(self):
+        s = SyntheticSession()
+        s.authenticate()
+        s.select_character("player_1")
+        s.join_map("map_1")
+
+        exposed = s.snapshot
+        object.__setattr__(exposed, "state", SessionState.CLOSED)
+        object.__setattr__(exposed, "player_id", "attacker")
+        object.__setattr__(exposed, "map_id", "other_map")
+
+        self.assertEqual(s.snapshot.state, SessionState.IN_MAP)
+        self.assertEqual(s.snapshot.player_id, "player_1")
+        self.assertEqual(s.snapshot.map_id, "map_1")
+        self.assertEqual(s.leave_map().state, SessionState.CHARACTER_READY)
+
+    def test_transition_return_values_are_detached(self):
+        s = SyntheticSession()
+
+        returned = s.authenticate()
+        object.__setattr__(returned, "state", SessionState.CLOSED)
+        self.assertEqual(s.snapshot.state, SessionState.AUTHENTICATED)
+
+        returned = s.select_character("player_1")
+        object.__setattr__(returned, "player_id", "attacker")
+        self.assertEqual(s.snapshot.player_id, "player_1")
+
+        returned = s.join_map("map_1")
+        object.__setattr__(returned, "map_id", "other_map")
+        self.assertEqual(s.snapshot.map_id, "map_1")
+
+        returned = s.leave_map()
+        object.__setattr__(returned, "state", SessionState.CLOSED)
+        self.assertEqual(s.snapshot.state, SessionState.CHARACTER_READY)
+
+        returned = s.close()
+        object.__setattr__(returned, "state", SessionState.CONNECTED)
+        self.assertEqual(s.snapshot.state, SessionState.CLOSED)
+
+    def test_revision_changes_only_on_successful_lifecycle_transitions(self):
+        s = SyntheticSession()
+        self.assertEqual(s.revision, 0)
+        _ = s.snapshot
+        _ = s.snapshot
+        self.assertEqual(s.revision, 0)
+
+        s.authenticate()
+        self.assertEqual(s.revision, 1)
+        s.select_character("player_1")
+        self.assertEqual(s.revision, 2)
+        s.join_map("map_1")
+        self.assertEqual(s.revision, 3)
+        s.leave_map()
+        self.assertEqual(s.revision, 4)
+
+        # Authentication is not a valid transition from CHARACTER_READY.
+        with self.assertRaises(SessionTransitionError):
+            s.authenticate()
+        self.assertEqual(s.revision, 4)
+
+        s.close()
+        self.assertEqual(s.revision, 5)
+        s.close()
+        self.assertEqual(s.revision, 5)
+
 
 if __name__ == "__main__":
     unittest.main()
