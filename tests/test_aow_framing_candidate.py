@@ -240,7 +240,7 @@ class ReceiverLengthCandidateTests(unittest.TestCase):
             http_marker_value=SYNTHETIC_HTTP_MARKER,
         )
         empty_frame = candidate_frame(b"")
-        self.assertEqual(empty_frame, b"\\x00\\x00\\x00\\x00")
+        self.assertEqual(empty_frame, b"\x00\x00\x00\x00")
         reader.feed(empty_frame)
         self.assertEqual(reader.read_frame(), empty_frame)
         self.assertEqual(reader.available, 0)
