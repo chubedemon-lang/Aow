@@ -2,13 +2,16 @@
 from dataclasses import dataclass
 from server.synthetic_session_lifecycle import SessionState
 
+
 class InventoryError(ValueError):
     pass
+
 
 @dataclass(frozen=True)
 class Stack:
     item_id: str
     quantity: int
+
 
 class SessionInventory:
     def __init__(self, capacity=32, max_stack=999):
@@ -26,7 +29,7 @@ class SessionInventory:
 
     def sync(self, session):
         snapshot = session.snapshot
-        if (session is not self._session or snapshot is not self._epoch
+        if (session is not self._session or session.revision != self._epoch
                 or snapshot.state not in (SessionState.CHARACTER_READY, SessionState.IN_MAP)):
             self._session = self._epoch = self._items = None
         return self.items
@@ -37,14 +40,14 @@ class SessionInventory:
             raise InventoryError("character not ready")
         if self._items is not None:
             raise InventoryError("already initialized")
-        self._session, self._epoch, self._items = session, session.snapshot, {}
+        self._session, self._epoch, self._items = session, session.revision, {}
         return self.items
 
     def _check(self, session, item_id, quantity):
         self.sync(session)
         if self._items is None:
             raise InventoryError("inventory not initialized")
-        if (not isinstance(item_id, str) or not 1 <= len(item_id) <= 128
+        if (type(item_id) is not str or not 1 <= len(item_id) <= 128
                 or not all(c.isascii() and (c.isalnum() or c in "_-") for c in item_id)):
             raise InventoryError("invalid item id")
         if type(quantity) is not int or not 1 <= quantity <= self.max_stack:
