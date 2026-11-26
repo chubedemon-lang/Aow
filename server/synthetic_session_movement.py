@@ -7,7 +7,7 @@ from server.synthetic_movement import MovementError, MovementState, Position
 
 
 class SessionMovement:
-    """Bind a synthetic actor to one exact session and lifecycle revision."""
+    """Bind one synthetic actor to its exact session and lifecycle revision."""
 
     def __init__(self):
         self._actor = None
@@ -28,9 +28,14 @@ class SessionMovement:
         self._revision = None
 
     def sync(self, session):
+        # A foreign session must not revoke or replace the current owner's
+        # actor. This object owns one actor; callers need a separate instance
+        # per session rather than allowing cross-session takeover.
+        if self._actor is not None and session is not self._session:
+            raise MovementError("movement belongs to another session")
+
         snapshot = session.snapshot
-        if (session is not self._session
-                or snapshot.state is not SessionState.IN_MAP
+        if (snapshot.state is not SessionState.IN_MAP
                 or snapshot.map_id != self._map
                 or session.revision != self._revision):
             self._revoke()
