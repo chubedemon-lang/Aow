@@ -146,5 +146,31 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertEqual(s.snapshot.state, SessionState.CLOSED)
 
 
+    def test_revision_changes_only_on_successful_lifecycle_transitions(self):
+        s = SyntheticSession()
+        self.assertEqual(s.revision, 0)
+        _ = s.snapshot
+        _ = s.snapshot
+        self.assertEqual(s.revision, 0)
+
+        s.authenticate()
+        self.assertEqual(s.revision, 1)
+        s.select_character("player_1")
+        self.assertEqual(s.revision, 2)
+        s.join_map("map_1")
+        self.assertEqual(s.revision, 3)
+        s.leave_map()
+        self.assertEqual(s.revision, 4)
+
+        with self.assertRaises(SessionTransitionError):
+            s.join_map("invalid-order")
+        self.assertEqual(s.revision, 4)
+
+        s.close()
+        self.assertEqual(s.revision, 5)
+        s.close()
+        self.assertEqual(s.revision, 5)
+
+
 if __name__ == "__main__":
     unittest.main()
