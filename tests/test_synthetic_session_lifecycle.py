@@ -121,7 +121,6 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertEqual(s.snapshot.map_id, "map_1")
         self.assertEqual(s.leave_map().state, SessionState.CHARACTER_READY)
 
-
     def test_transition_return_values_are_detached(self):
         s = SyntheticSession()
 
@@ -145,7 +144,6 @@ class SessionLifecycleTests(unittest.TestCase):
         object.__setattr__(returned, "state", SessionState.CONNECTED)
         self.assertEqual(s.snapshot.state, SessionState.CLOSED)
 
-
     def test_revision_changes_only_on_successful_lifecycle_transitions(self):
         s = SyntheticSession()
         self.assertEqual(s.revision, 0)
@@ -162,8 +160,9 @@ class SessionLifecycleTests(unittest.TestCase):
         s.leave_map()
         self.assertEqual(s.revision, 4)
 
+        # Authentication is not a valid transition from CHARACTER_READY.
         with self.assertRaises(SessionTransitionError):
-            s.join_map("invalid-order")
+            s.authenticate()
         self.assertEqual(s.revision, 4)
 
         s.close()
