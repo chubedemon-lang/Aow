@@ -33,7 +33,11 @@ class SyntheticSession:
 
     @property
     def snapshot(self):
-        return self._snapshot
+        # Return a detached immutable value. frozen=True prevents ordinary
+        # assignment, but callers can bypass it with object.__setattr__.
+        # Never expose the lifecycle's authoritative snapshot by reference.
+        current = self._snapshot
+        return SessionSnapshot(current.state, current.player_id, current.map_id)
 
     def _require(self, expected):
         if self._snapshot.state is not expected:
@@ -52,25 +56,25 @@ class SyntheticSession:
     def authenticate(self):
         self._require(SessionState.CONNECTED)
         self._snapshot = SessionSnapshot(SessionState.AUTHENTICATED)
-        return self._snapshot
+        return self.snapshot
 
     def select_character(self, player_id):
         self._require(SessionState.AUTHENTICATED)
         player_id = self._identifier(player_id)
         self._snapshot = SessionSnapshot(SessionState.CHARACTER_READY, player_id)
-        return self._snapshot
+        return self.snapshot
 
     def join_map(self, map_id):
         self._require(SessionState.CHARACTER_READY)
         map_id = self._identifier(map_id)
         self._snapshot = SessionSnapshot(SessionState.IN_MAP, self._snapshot.player_id, map_id)
-        return self._snapshot
+        return self.snapshot
 
     def leave_map(self):
         self._require(SessionState.IN_MAP)
         self._snapshot = SessionSnapshot(SessionState.CHARACTER_READY, self._snapshot.player_id)
-        return self._snapshot
+        return self.snapshot
 
     def close(self):
         self._snapshot = SessionSnapshot(SessionState.CLOSED)
-        return self._snapshot
+        return self.snapshot
