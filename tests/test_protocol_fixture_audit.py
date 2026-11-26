@@ -1582,5 +1582,40 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertFalse(client["packet_boundaries_verified"])
 
 
+    def test_schema_v4_rejects_server_observer_direction_mismatch(self):
+        server_stream = frame(b"server")
+        client_stream = b"client"
+        # For a server observer, server_to_client must be send and
+        # client_to_server must be receive. Reverse one operation deliberately.
+        events = [
+            {
+                "direction": "server_to_client",
+                "offset": 0,
+                "length": len(server_stream),
+                "elapsed_ns": 0,
+                "operation": "receive",
+            },
+            {
+                "direction": "client_to_server",
+                "offset": 0,
+                "length": len(client_stream),
+                "elapsed_ns": 1,
+                "operation": "send",
+            },
+        ]
+        with self.assertRaisesRegex(
+            FixtureAuditError, "does not match observer role"
+        ):
+            self.audit(
+                fixture_bytes(
+                    [server_stream],
+                    [client_stream],
+                    schema_version=4,
+                    io_events=events,
+                    observer_role="server",
+                )
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
