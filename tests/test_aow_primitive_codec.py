@@ -262,5 +262,20 @@ class AowPrimitiveCodecTests(unittest.TestCase):
         self.assertEqual(AowPrimitiveWriter(max_payload_bytes=0).to_bytes(), b"")
 
 
+    def test_writer_to_bytes_returns_immutable_independent_snapshot(self):
+        writer = AowPrimitiveWriter()
+        writer.write_int(0x01020304)
+        snapshot = writer.to_bytes()
+
+        self.assertIs(type(snapshot), bytes)
+        self.assertEqual(snapshot, bytes.fromhex("01020304"))
+        with self.assertRaises(TypeError):
+            snapshot[0] = 0xFF
+
+        writer.write_byte(0x05)
+        self.assertEqual(snapshot, bytes.fromhex("01020304"))
+        self.assertEqual(writer.to_bytes(), bytes.fromhex("0102030405"))
+
+
 if __name__ == "__main__":
     unittest.main()
