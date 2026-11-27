@@ -278,9 +278,9 @@ class AowPrimitiveCodecTests(unittest.TestCase):
 
 
     def test_truncated_string_prefix_restores_its_start_offset(self):
-        for payload in (b"", b"\\x00"):
+        for payload in (b"", bytes.fromhex("00")):
             with self.subTest(payload=payload):
-                reader = AowPrimitiveReader(b"\\xaa" + payload)
+                reader = AowPrimitiveReader(bytes.fromhex("aa") + payload)
                 self.assertEqual(reader.read_byte(), 0xAA)
                 before = reader.offset
                 with self.assertRaises(EOFError):
