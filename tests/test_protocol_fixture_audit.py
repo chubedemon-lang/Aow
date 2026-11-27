@@ -1444,9 +1444,14 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         )
         order = result["exchange_order"]
         self.assertEqual(order["observer_role_asserted"], "server")
+        self.assertEqual(order["operation_semantics"], "operator_asserted_unverified")
         self.assertEqual(order["send_event_count"], 2)
         self.assertEqual(order["receive_event_count"], 2)
         self.assertEqual(order["timing"]["event_span_ns"], 8)
+        self.assertFalse(result["authorization_independently_verified"])
+        self.assertFalse(result["sender_symmetry_verified"])
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
 
     def test_schema_v4_rejects_operation_direction_mismatch(self):
         server_stream = frame(b"server")
