@@ -87,6 +87,7 @@ on:
       - 'tools/protocol_fixture_audit.py'
       - 'tests/test_protocol_fixture_audit.py'
       - 'tests/test_protocol_fixture_audit_schema4_hypotheses.py'
+      - 'tests/test_protocol_fixture_json_guard_boundaries.py'
       - 'docs/LOCAL_STREAM_FIXTURE_AUDIT.md'
       - 'docs/TRANSPORT_EVIDENCE_GATE.md'
       - 'docs/PROTOCOL.md'
