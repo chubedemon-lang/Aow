@@ -86,6 +86,7 @@ on:
       - 'tests/test_offline_evidence_validation.py'
       - 'tools/protocol_fixture_audit.py'
       - 'tests/test_protocol_fixture_audit.py'
+      - 'tests/test_protocol_fixture_audit_schema4_hypotheses.py'
       - 'docs/LOCAL_STREAM_FIXTURE_AUDIT.md'
       - 'docs/TRANSPORT_EVIDENCE_GATE.md'
       - 'docs/PROTOCOL.md'
