@@ -1668,5 +1668,73 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
             )
 
 
+    def test_server_io_observation_boundaries_are_not_assumed_to_be_frame_boundaries(self):
+        first = frame(b"A")
+        second = frame(b"BC")
+        server_stream = first + second
+        client_stream = b"\\x10\\x20"
+        document = {
+            "schema_version": 4,
+            "apk_sha256": APK_SHA256,
+            "client_unchanged": True,
+            "capture_kind": "authorized_local_runtime",
+            "observer_role": "server",
+            "streams": {
+                "server_to_client": [server_stream.hex()],
+                "client_to_server": [client_stream.hex()],
+            },
+            "io_events": [
+                {
+                    "direction": "server_to_client",
+                    "offset": 0,
+                    "length": 2,
+                    "elapsed_ns": 0,
+                    "operation": "send",
+                },
+                {
+                    "direction": "client_to_server",
+                    "offset": 0,
+                    "length": 1,
+                    "elapsed_ns": 1,
+                    "operation": "receive",
+                },
+                {
+                    "direction": "server_to_client",
+                    "offset": 2,
+                    "length": len(server_stream) - 2,
+                    "elapsed_ns": 2,
+                    "operation": "send",
+                },
+                {
+                    "direction": "client_to_server",
+                    "offset": 1,
+                    "length": 1,
+                    "elapsed_ns": 3,
+                    "operation": "receive",
+                },
+            ],
+        }
+
+        result = self.audit(
+            json.dumps(document, separators=(",", ":")).encode("utf-8")
+        )
+        alignment = result["server_to_client_candidate_io_alignment"]
+        self.assertEqual(
+            alignment["status"], "unverified_candidate_io_boundary_correlation"
+        )
+        self.assertEqual(alignment["candidate_frame_boundary_count"], 2)
+        self.assertEqual(alignment["server_to_client_io_event_boundary_count"], 2)
+        self.assertEqual(
+            alignment["candidate_frame_boundaries_aligned_with_io_event_ends"], 1
+        )
+        self.assertEqual(
+            alignment["candidate_frame_boundaries_not_aligned_with_io_event_ends"], 1
+        )
+        self.assertFalse(alignment["absolute_offsets_emitted"])
+        self.assertFalse(alignment["packet_boundaries_verified"])
+        self.assertFalse(result["wire_contract_verified"])
+        self.assertFalse(result["apk_compatible"])
+
+
 if __name__ == "__main__":
     unittest.main()
