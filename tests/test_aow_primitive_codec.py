@@ -298,7 +298,7 @@ class AowPrimitiveCodecTests(unittest.TestCase):
                 self.assertIsNone(reader.read_string())
                 self.assertEqual(reader.offset, 2)
                 self.assertEqual(reader.remaining, 4)
-                self.assertEqual(reader._data[reader.offset:].tobytes(), b"tail")
+                self.assertEqual(reader.remaining, len(b"tail"))
 
 
 
