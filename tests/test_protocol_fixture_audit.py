@@ -1672,7 +1672,7 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         first = frame(b"A")
         second = frame(b"BC")
         server_stream = first + second
-        client_stream = b"\\x10\\x20"
+        client_stream = bytes((16, 32))
         document = {
             "schema_version": 4,
             "apk_sha256": APK_SHA256,
