@@ -1718,7 +1718,7 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         result = self.audit(
             json.dumps(document, separators=(",", ":")).encode("utf-8")
         )
-        alignment = result["server_to_client_candidate_io_alignment"]
+        alignment = result["receive_candidate_io_alignment"]
         self.assertEqual(
             alignment["status"], "unverified_candidate_io_boundary_correlation"
         )
