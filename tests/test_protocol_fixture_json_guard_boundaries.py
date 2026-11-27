@@ -5,6 +5,7 @@ responsible for full JSON grammar and schema validation.
 """
 import json
 import unittest
+from unittest.mock import patch
 
 from tools.protocol_fixture_audit import (
     MAX_JSON_NESTING,
@@ -45,9 +46,7 @@ class FixtureJsonGuardBoundaryTests(unittest.TestCase):
         # Array + four primitive values = five JSON tokens.
         _validate_json_nesting("[-1,true,false,null]")
         with self.assertRaisesRegex(FixtureAuditError, "token count"):
-            with unittest.mock.patch(
-                "tools.protocol_fixture_audit.MAX_JSON_TOKENS", 4
-            ):
+            with patch("tools.protocol_fixture_audit.MAX_JSON_TOKENS", 4):
                 _validate_json_nesting("[-1,true,false,null]")
 
 
