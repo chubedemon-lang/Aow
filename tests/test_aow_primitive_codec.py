@@ -290,5 +290,17 @@ class AowPrimitiveCodecTests(unittest.TestCase):
 
 
 
+
+    def test_reader_treats_high_bit_string_lengths_as_null_and_consumes_prefix_only(self):
+        for length in (0x8000, 0xFFFF):
+            with self.subTest(length=length):
+                reader = AowPrimitiveReader(length.to_bytes(2, "big") + b"tail")
+                self.assertIsNone(reader.read_string())
+                self.assertEqual(reader.offset, 2)
+                self.assertEqual(reader.remaining, 4)
+                self.assertEqual(reader._data[reader.offset:].tobytes(), b"tail")
+
+
+
 if __name__ == "__main__":
     unittest.main()
