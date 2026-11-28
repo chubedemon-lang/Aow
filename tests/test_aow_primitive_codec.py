@@ -302,5 +302,19 @@ class AowPrimitiveCodecTests(unittest.TestCase):
 
 
 
+    def test_all_high_bit_string_lengths_are_null_prefixes(self):
+        # Exhaust the complete 16-bit high-bit range. These are primitive
+        # sentinel semantics only; this does not infer packet boundaries.
+        tail = bytes.fromhex("cafe")
+        for length in range(0x8000, 0x10000):
+            with self.subTest(length=length):
+                reader = AowPrimitiveReader(length.to_bytes(2, "big") + tail)
+                self.assertIsNone(reader.read_string())
+                self.assertEqual(reader.offset, 2)
+                self.assertEqual(reader.remaining, len(tail))
+                self.assertEqual(reader.read_char(), 0xCAFE)
+                reader.require_consumed()
+
+
 if __name__ == "__main__":
     unittest.main()
