@@ -1393,6 +1393,30 @@ class ProtocolFixtureAuditTests(unittest.TestCase):
         self.assertIn('"apk_compatible": false', serialized)
 
 
+    def test_cli_rejects_conflicting_client_length_hypothesis_modes_cleanly(self):
+        payload = b"private-client-fixture"
+        client_stream = frame(payload)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private-fixture.json"
+            path.write_bytes(
+                fixture_bytes([frame(b"server")], [client_stream])
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main([
+                    "--fixture", str(path),
+                    "--apk-sha256", APK_SHA256,
+                    "--client-to-server-length-offset", "0",
+                    "--client-to-server-test-both-length-offsets",
+                ])
+        self.assertEqual(code, 2)
+        serialized = output.getvalue()
+        self.assertIn('"status": "rejected"', serialized)
+        self.assertIn("select one client-to-server offset", serialized)
+        self.assertNotIn(payload.hex(), serialized)
+        self.assertNotIn(client_stream.hex(), serialized)
+
+
     def test_schema_v4_client_operations_match_stream_directions_and_are_redacted(self):
         server_stream = frame(b"server")
         client_stream = b"client-data"
