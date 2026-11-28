@@ -322,7 +322,7 @@ class AowPrimitiveCodecTests(unittest.TestCase):
         tail = bytes.fromhex("cafe")
         for length in range(0x8000, 0x10000):
             with self.subTest(length=length):
-                reader = AowPrimitiveReader(b"\\xaa" + length.to_bytes(2, "big") + tail)
+                reader = AowPrimitiveReader(bytes.fromhex("aa") + length.to_bytes(2, "big") + tail)
                 self.assertEqual(reader.read_byte(), 0xAA)
                 self.assertIsNone(reader.read_string())
                 self.assertEqual(reader.offset, 3)
