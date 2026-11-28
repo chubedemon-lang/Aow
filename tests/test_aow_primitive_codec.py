@@ -291,6 +291,20 @@ class AowPrimitiveCodecTests(unittest.TestCase):
 
 
 
+    def test_every_single_byte_string_prefix_truncation_rolls_back(self):
+        # A 16-bit prefix cannot be consumed from a one-byte tail, regardless
+        # of the first byte value. Verify rollback after a nonzero origin.
+        for first_byte in range(256):
+            with self.subTest(first_byte=first_byte):
+                reader = AowPrimitiveReader(bytes.fromhex("aa") + bytes((first_byte,)))
+                self.assertEqual(reader.read_byte(), 0xAA)
+                before = reader.offset
+                with self.assertRaises(EOFError):
+                    reader.read_string()
+                self.assertEqual(reader.offset, before)
+                self.assertEqual(reader.remaining, 1)
+
+
     def test_reader_treats_high_bit_string_lengths_as_null_and_consumes_prefix_only(self):
         for length in (0x8000, 0xFFFF):
             with self.subTest(length=length):
