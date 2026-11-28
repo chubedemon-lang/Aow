@@ -361,5 +361,20 @@ class AowPrimitiveCodecTests(unittest.TestCase):
                 self.assertEqual(reader.remaining, 2 + available_body_bytes)
 
 
+    def test_every_bmp_code_unit_round_trips_in_bounded_chunks(self):
+        # Exercise every 16-bit code point, including isolated surrogate code
+        # points. This verifies the codec's documented surrogatepass behavior
+        # without exceeding its per-string 0x7fff-code-unit limit.
+        all_bmp = "".join(chr(code_point) for code_point in range(0x10000))
+        chunk_size = 0x7FFF
+        for start in range(0, len(all_bmp), chunk_size):
+            chunk = all_bmp[start:start + chunk_size]
+            with self.subTest(start=start, code_units=len(chunk)):
+                encoded = AowPrimitiveWriter().write_string(chunk).to_bytes()
+                reader = AowPrimitiveReader(encoded)
+                self.assertEqual(reader.read_string(), chunk)
+                reader.require_consumed()
+
+
 if __name__ == "__main__":
     unittest.main()
