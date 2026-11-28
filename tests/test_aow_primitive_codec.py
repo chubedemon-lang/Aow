@@ -316,5 +316,20 @@ class AowPrimitiveCodecTests(unittest.TestCase):
                 reader.require_consumed()
 
 
+    def test_high_bit_sentinel_preserves_nonzero_reader_origin(self):
+        # A preceding primitive ensures sentinel handling is relative to the
+        # current cursor, not accidentally anchored at the start of the buffer.
+        tail = bytes.fromhex("cafe")
+        for length in range(0x8000, 0x10000):
+            with self.subTest(length=length):
+                reader = AowPrimitiveReader(bytes.fromhex("aa") + length.to_bytes(2, "big") + tail)
+                self.assertEqual(reader.read_byte(), 0xAA)
+                self.assertIsNone(reader.read_string())
+                self.assertEqual(reader.offset, 3)
+                self.assertEqual(reader.remaining, len(tail))
+                self.assertEqual(reader.read_char(), 0xCAFE)
+                reader.require_consumed()
+
+
 if __name__ == "__main__":
     unittest.main()
