@@ -331,5 +331,21 @@ class AowPrimitiveCodecTests(unittest.TestCase):
                 reader.require_consumed()
 
 
+    def test_every_truncated_string_body_prefix_restores_its_start_offset(self):
+        # A two-code-unit string has a four-byte UTF-16 body. Exercise every
+        # incomplete body length after a nonzero reader origin.
+        complete = bytes.fromhex("aa000241424344")
+        for available_body_bytes in range(4):
+            with self.subTest(available_body_bytes=available_body_bytes):
+                payload = complete[:3 + available_body_bytes]
+                reader = AowPrimitiveReader(payload)
+                self.assertEqual(reader.read_byte(), 0xAA)
+                before = reader.offset
+                with self.assertRaises(EOFError):
+                    reader.read_string()
+                self.assertEqual(reader.offset, before)
+                self.assertEqual(reader.remaining, 2 + available_body_bytes)
+
+
 if __name__ == "__main__":
     unittest.main()
